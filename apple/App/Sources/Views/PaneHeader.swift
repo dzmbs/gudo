@@ -37,13 +37,12 @@ struct PaneHeader: View {
     @GestureState private var isDragging = false
 
     var body: some View {
-        let state = model.paneStatus.state(of: id.description)
+        let state = model.agentState(ofPane: id, onGroup: workspace.groupId)
         let program = model.programIdentity(ofPane: id, onGroup: workspace.groupId)
         let window = workspace.window(of: id)
         let accounts = program.isShell ? nil : model.accountBook(onGroup: workspace.groupId)
         HStack(spacing: DS.Space.row) {
-            ProgramMark(program, size: 12)
-                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
+            ProgramTile(program, state: state)
             // Shells keep their own word ("zsh"); programs their display name.
             Text(program.isShell ? workspace.programName(of: id) : program.displayName)
                 .font(.caption.weight(isFocused ? .semibold : .regular))
@@ -65,11 +64,9 @@ struct PaneHeader: View {
                 HostChip(group: group, emphasized: isFocused)
             }
             if let state, state != .idle {
-                StatusIndicator(state, size: 10)
-                Text(state.title)
-                    .font(.caption)
-                    .foregroundStyle(state.color)
+                StatePill(state)
                     .layoutPriority(1)
+                    .motionTransition(.pill(anchor: .leading))
                 // The program's own words ("Which framework? · 40%"): they take the squeeze.
                 if let detail = model.paneStatus.detail(of: id.description) {
                     Text(verbatim: detail)

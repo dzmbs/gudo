@@ -901,7 +901,7 @@ private struct DragChip: View {
     var body: some View {
         let program = model.programIdentity(ofPane: pane, onGroup: workspace.groupId)
         HStack(spacing: DS.Space.row) {
-            ProgramMark(program, size: 12)
+            ProgramTile(program)
             Text(program.isShell ? workspace.programName(of: pane) : program.displayName)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
@@ -953,13 +953,13 @@ private struct TrayChip: View {
     var body: some View {
         let pane = chip.panes[0]
         let program = model.programIdentity(ofPane: pane, onGroup: workspace.groupId)
-        let state = chip.panes.lazy.compactMap { model.paneStatus.state(of: $0.description) }.first
+        let state = AgentState.mostUrgent(chip.panes.compactMap { model.agentState(ofPane: $0, onGroup: workspace.groupId) })
         Button {
             withAnimation(DS.Motion.structural) { workspace.apply(.focus(pane)) }
             TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
         } label: {
             HStack(spacing: DS.Space.row) {
-                ProgramMark(program, size: 12)
+                ProgramTile(program, state: state)
                 Text(program.isShell ? workspace.programName(of: pane) : program.displayName)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(DS.Palette.text)
@@ -971,10 +971,7 @@ private struct TrayChip: View {
                         .foregroundStyle(DS.Palette.textTertiary)
                 }
                 Spacer(minLength: 0)
-                if let state, state != .idle {
-                    StatusIndicator(state, size: 10)
-                        .help(state.title)
-                }
+                if let state { StatePill(state) }
             }
             .padding(.horizontal, DS.Space.m)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

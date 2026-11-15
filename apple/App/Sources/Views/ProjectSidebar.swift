@@ -703,8 +703,8 @@ private struct ProjectHeader: View {
                     .font(SidebarFont.number)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .contentTransition(.numericText())
-                if let badge = SidebarTabIcon.badge(for: model.mostUrgentState(inProject: project)) {
-                    Circle().fill(badge).frame(width: 7, height: 7).motionTransition(.pill())
+                if let state = model.mostUrgentState(inProject: project) {
+                    StateMark(state).motionTransition(.pill())
                 }
             }
             Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }

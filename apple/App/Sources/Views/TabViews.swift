@@ -477,7 +477,7 @@ private struct HostAgentsBadge: View {
     var body: some View {
         if let agents = aggregateAgentState {
             HoverPopover(isPresented: $showsAgents) {
-                AgentGlyph(state: agents)
+                StateMark(agents)
                     .frame(minWidth: 22, minHeight: 22)
                     .contentShape(.rect)
             } content: {
@@ -491,7 +491,7 @@ private struct HostAgentsBadge: View {
 
     private var aggregateAgentState: AgentState? {
         let states = group.tabs.flatMap(\.root.panes).compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
-        return states.filter { $0 != .idle && $0 != .unknown }.min { AgentGlyph.priority($0) < AgentGlyph.priority($1) }
+        return AgentState.mostUrgent(states.filter { $0 != .idle && $0 != .unknown })
     }
 }
 
@@ -539,87 +539,22 @@ private struct HostAgentsPopover: View {
     }
 }
 
-/// An agent's activity glyph; idle shows nothing. Drawn in a fixed slot so rows never jump.
-struct AgentGlyph: View {
-    let state: AgentState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 14 pt at the default size, growing with Dynamic Type so the glyph never clips.
-    @ScaledMetric(relativeTo: .caption) private var slot: CGFloat = 14
-
-    static func priority(_ state: AgentState) -> Int {
-        switch state {
-        case .blocked: 0
-        case .error: 1
-        case .done: 2
-        case .working: 3
-        case .idle, .unknown: 4
-        }
-    }
-
-    var body: some View {
-        Group {
-            switch state {
-            case .working:
-                if reduceMotion {
-                    Image(systemName: "circle.dotted").foregroundStyle(DS.Palette.textSecondary)
-                } else {
-                    ProgressView().controlSize(.mini)
-                }
-            case .blocked:
-                Image(systemName: "questionmark.circle.fill").foregroundStyle(DS.Palette.attention)
-            case .done:
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(DS.Palette.done)
-            case .error:
-                Image(systemName: "xmark.circle.fill").foregroundStyle(DS.Palette.error)
-            case .idle, .unknown:
-                EmptyView()
-            }
-        }
-        .font(.caption)
-        .frame(width: slot, height: slot)
-        .accessibilityLabel(label)
-    }
-
-    private var label: String {
-        switch state {
-        case .working: "Working"
-        case .blocked: "Needs input"
-        case .done: "Done"
-        case .error: "Failed"
-        case .idle, .unknown: ""
-        }
-    }
-}
-
-/// The slot leading a tab's name: the program's mark, replaced by the agent glyph while an
-/// unfocused tab has something to say. Every row has the slot, so titles line up across rows.
+/// The slot leading a tab's name in the strip: the program's tile, its agent's quiet state a dot
+/// on the tile (what needs you is a pill after the title). Every chip has the slot, so titles
+/// line up.
 struct TabLeadingMark: View {
     let program: ProgramIdentity
-    /// The agent state to show instead, nil on the focused tab or when nothing reports.
     let state: AgentState?
     /// A browser tab's page icon, shown instead of the program's mark.
     var favicon: Image?
+    var isSelected = false
 
     var body: some View {
-        ZStack {
-            if let state, state != .idle, state != .unknown {
-                AgentGlyph(state: state)
-                    .motionTransition(.fade)
-            } else if let favicon {
-                Favicon(image: favicon, size: ProgramMark.rowSlot - 2)
-                    .motionTransition(.fade)
-            } else {
-                ProgramMark(program)
-                    .foregroundStyle(.primary)
-                    .motionTransition(.fade)
-            }
-        }
-        .frame(width: ProgramMark.rowSlot, height: ProgramMark.rowSlot)
-        // One baseline whatever the slot holds (a spinner reports its own), so the row's number
-        // and title stay on the same line in every state.
-        .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
-        .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 3 }
-        .animation(DS.Motion.micro, value: state)
+        TabTile(program: program, state: state, favicon: favicon, size: ProgramTile.rowSize, isSelected: isSelected)
+            .frame(width: ProgramMark.rowSlot, height: ProgramMark.rowSlot)
+            // One baseline whatever the slot holds, so the chip's title stays on the same line.
+            .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+            .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 3 }
     }
 
     /// The row's spoken label: name, then the agent's state or the program, then the host.
@@ -629,62 +564,37 @@ struct TabLeadingMark: View {
     }
 }
 
-/// A sidebar row's program glyph, its agent's state a badge on the glyph's corner, so the state
-/// never takes the title's room and every row's title starts at the same place.
+/// A sidebar row's program tile, its agent's quiet state a dot on the tile's corner (what needs
+/// you is a pill after the title), so the state never takes the title's room and every row's
+/// title starts at the same place.
 struct SidebarTabIcon: View {
     let program: ProgramIdentity
     let state: AgentState?
     var favicon: Image?
+    var isSelected = false
 
     var body: some View {
-        let size = SidebarFont.icon
-        let badge = Self.badge(for: state)
-        let dot = size * 0.42
-        let gap = size * 0.1
-        // The dot's centre, on the glyph's bottom trailing corner.
-        let centre = CGPoint(x: size - dot / 2 + size * 0.08, y: size - dot / 2 + size * 0.08)
-        ZStack {
-            if let favicon {
-                Favicon(image: favicon, size: size * 0.88)
-            } else {
-                ProgramMark(program, size: size * 0.88)
-                    .foregroundStyle(DS.Palette.textSecondary)
-            }
-        }
-        .frame(width: size, height: size)
-        // A gap cut around the dot, so it reads on any row: a card, a selected row, the sidebar.
-        .mask {
-            Rectangle()
-                .overlay {
-                    if badge != nil {
-                        Circle()
-                            .frame(width: dot + gap * 2, height: dot + gap * 2)
-                            .position(centre)
-                            .blendMode(.destinationOut)
-                    }
-                }
-                .compositingGroup()
-        }
-        .overlay(alignment: .topLeading) {
-            if let badge {
-                Circle()
-                    .fill(badge)
-                    .frame(width: dot, height: dot)
-                    .position(centre)
-                    .motionTransition(.pill())
-            }
-        }
-        .animation(DS.Motion.micro, value: state)
-        .accessibilityHidden(true)
+        TabTile(program: program, state: state, favicon: favicon, size: SidebarFont.icon, isSelected: isSelected)
+            .accessibilityHidden(true)
     }
+}
 
-    static func badge(for state: AgentState?) -> ChromeStyle? {
-        switch state {
-        case .working: DS.Palette.working
-        case .blocked: DS.Palette.attention
-        case .done: DS.Palette.done
-        case .error: DS.Palette.error
-        case .idle, .unknown, nil: nil
+/// A tab's tile: its program's mark, or a browser tab's page icon, with the quiet state's dot.
+private struct TabTile: View {
+    let program: ProgramIdentity
+    let state: AgentState?
+    let favicon: Image?
+    let size: CGFloat
+    let isSelected: Bool
+
+    var body: some View {
+        if let favicon {
+            TileArtwork(size: size, isSelected: isSelected) { glyphSize, _ in
+                Favicon(image: favicon, size: glyphSize)
+            }
+            .stateDot(state, tileSize: size)
+        } else {
+            ProgramTile(program, size: size, isSelected: isSelected, state: state)
         }
     }
 }
@@ -763,6 +673,7 @@ struct PaneTreeRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 0)
+                if let state { StatePill(state) }
             }
             // One level in: the pane's icon sits under its tab's title.
             .padding(.leading, SidebarFont.icon + DS.Space.gap10 + DS.Space.xs)
@@ -902,8 +813,7 @@ struct TabRow: View {
         let _ = ChromeRenders.note("tab-row \(ref.hostId)/\(ref.tab.rawValue)")
         #endif
         let isActive = model.destination == .terminal && model.currentTab == ref
-        let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
-        let state = states.min { $0.urgency < $1.urgency }
+        let state = AgentState.mostUrgent(tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) })
         let program = model.programIdentity(of: tab, onGroup: group.id)
         let title = workspace?.title(of: tab, agentName: program.kind == .agent ? program.displayName : nil) ?? tab.title ?? "Shell"
         let context = workspace?.context(of: tab)
@@ -919,7 +829,8 @@ struct TabRow: View {
             model.clickTab(ref, modifiers: ClickModifiers.current)
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
-                SidebarTabIcon(program: program, state: state)
+                SidebarTabIcon(program: program, state: state, isSelected: isActive && !model.isSelectingTabs)
+                    .attentionWhenBlocked(state, isVisible: isActive)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
                         Text(title)
@@ -948,6 +859,9 @@ struct TabRow: View {
                 }
                 .animation(DS.Motion.standard, value: status != nil || informative != nil || running != nil)
                 Spacer(minLength: DS.Space.xs)
+                if let state, state.statusMark == .pill {
+                    StatePill(state).motionTransition(.pill(anchor: .trailing))
+                }
                 if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
                 if model.isSelectingTabs {
@@ -977,7 +891,7 @@ struct TabRow: View {
         .simultaneousGesture(TapGesture(count: 2).onEnded { perform(.rename) })
         #endif
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: group.name))
+        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: state, host: group.name))
         .accessibilityValue([worktree.map(TabGitBadges.accessibilityValue) ?? "", running.map { "Running: \($0.command ?? "a command")" } ?? context ?? "", TabPresence.value(workspace, tab.root.panes)]
             .filter { !$0.isEmpty }.joined(separator: "; "))
         .accessibilityAddTraits(isActive || model.isInMultipleSelection(ref) ? [.isButton, .isSelected] : .isButton)
@@ -1265,8 +1179,7 @@ struct CompactTerminalView: View {
         } label: {
             HStack(spacing: DS.Space.row) {
                 if let tab = workspace.session.activeTab {
-                    ProgramMark(model.programIdentity(of: tab, onGroup: workspace.groupId))
-                        .foregroundStyle(.primary)
+                    ProgramTile(model.programIdentity(of: tab, onGroup: workspace.groupId))
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     Text(model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? (workspace.canOpenTabs ? "No Tabs" : Brand.name))
@@ -1324,13 +1237,13 @@ struct CompactTerminalView: View {
         }
         guard let tab = model.groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab }) else { return Image(systemName: "terminal") }
         if let state = switcherAgentState(tab, ref: ref) {
-            return Image(systemName: state == .blocked ? "questionmark.circle.fill" : state == .error ? "xmark.circle.fill" : state == .done ? "checkmark.circle.fill" : "circle.dotted")
+            return Image(systemName: state.symbol)
         }
         return model.programIdentity(of: tab, onGroup: ref.hostId).image
     }
 
     private func switcherAgentState(_ tab: Tab, ref: TabRef) -> AgentState? {
-        let state = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: ref.hostId) }.min { $0.urgency < $1.urgency }
+        let state = AgentState.mostUrgent(tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: ref.hostId) })
         return state == .idle || state == .unknown ? nil : state
     }
 

@@ -1,26 +1,37 @@
 import SwiftUI
 
 /// A state that needs you, as a compact pill: "Needs you", "Failed". The words carry it without
-/// colour; nothing for the quiet states, which are a dot on the program's tile.
+/// colour; where there is no room for them (a narrow tab chip) its symbol does, `!` or `✕`.
+/// Nothing for the quiet states, which are a dot on the program's tile.
 public struct StatePill: View {
     let state: AgentState
+    let isCompact: Bool
 
-    public init(_ state: AgentState) {
+    public init(_ state: AgentState, isCompact: Bool = false) {
         self.state = state
+        self.isCompact = isCompact
     }
 
     public var body: some View {
         if state.statusMark == .pill {
-            Text(state.pillTitle)
-                .font(DS.Font.badge)
-                .foregroundStyle(state.color)
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, DS.Space.badgeH)
-                .padding(.vertical, DS.Space.badgeV)
-                .background(DS.Palette.container(state.color), in: .rounded(DS.Radius.chip))
-                .accessibilityElement()
-                .accessibilityLabel(state.title)
+            Group {
+                if isCompact {
+                    Image(systemName: state == .blocked ? "exclamationmark" : "xmark")
+                        .fontWeight(.bold)
+                        .imageScale(.small)
+                } else {
+                    Text(state.pillTitle)
+                }
+            }
+            .font(DS.Font.badge)
+            .foregroundStyle(state.color)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, isCompact ? DS.Space.xs : DS.Space.badgeH)
+            .padding(.vertical, DS.Space.badgeV)
+            .background(DS.Palette.container(state.color), in: .rounded(DS.Radius.chip))
+            .accessibilityElement()
+            .accessibilityLabel(state.title)
         }
     }
 }
@@ -57,6 +68,23 @@ public struct StateDot: View {
 
     /// An idle ring stays a ring at every size: a little under a quarter of the dot, a point at least.
     static func ringWidth(_ diameter: CGFloat) -> CGFloat { max(1, (diameter / 4.5).rounded()) }
+}
+
+/// A state with no tile to sit on (a host's or a collapsed project's header): its pill, else its dot.
+public struct StateMark: View {
+    let state: AgentState
+
+    public init(_ state: AgentState) {
+        self.state = state
+    }
+
+    public var body: some View {
+        switch state.statusMark {
+        case .pill: StatePill(state)
+        case .dot: StateDot(state)
+        case nil: EmptyView()
+        }
+    }
 }
 
 public extension View {

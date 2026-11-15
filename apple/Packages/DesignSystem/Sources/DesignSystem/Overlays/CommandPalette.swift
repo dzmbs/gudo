@@ -228,6 +228,9 @@ public struct CommandPalette: View {
                     }
                 }
                 Spacer(minLength: DS.Space.s)
+                if command.program != nil, let state = command.state {
+                    StatePill(state)
+                }
                 if let badge = command.badge {
                     Text(badge)
                         .font(DS.Font.badge)
@@ -251,19 +254,11 @@ public struct CommandPalette: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    /// The program's mark (its agent's state as a badge), a status glyph, or a symbol.
+    /// The program's tile (its agent's quiet state a dot on it; what needs you is a pill after the
+    /// title), a status glyph, or a symbol.
     @ViewBuilder private func icon(_ command: PaletteCommand) -> some View {
         if let program = command.program {
-            ProgramMark(program, size: Self.iconSize)
-                .foregroundStyle(DS.Palette.text)
-                .overlay(alignment: .bottomTrailing) {
-                    if let state = command.state, state != .idle, state != .unknown {
-                        StatusIndicator(state, size: 8)
-                            .padding(1.5)
-                            .background(DS.Palette.raised, in: .circle)
-                            .offset(x: 4, y: 4)
-                    }
-                }
+            ProgramTile(program, size: Self.iconSize, state: command.state)
         } else if let state = command.state {
             StatusIndicator(state, size: 12)
         } else if let image = command.systemImage {

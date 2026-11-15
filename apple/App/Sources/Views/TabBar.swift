@@ -182,8 +182,7 @@ private struct TabChip: View {
         let _ = ChromeRenders.note("tab-chip")
         #endif
         let workspace = model.workspace(ofGroup: group.id)
-        let states = tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) }
-        let state = states.min { $0.urgency < $1.urgency }
+        let state = AgentState.mostUrgent(tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) })
         let title = workspace?.title(of: tab) ?? tab.title ?? "Shell"
         let program = model.programIdentity(of: tab, onGroup: group.id)
         ZStack {
@@ -199,7 +198,8 @@ private struct TabChip: View {
             }
 
             HStack(spacing: DS.Space.row) {
-                TabLeadingMark(program: program, state: isActive ? nil : state)
+                TabLeadingMark(program: program, state: state, isSelected: isActive)
+                    .attentionWhenBlocked(state, isVisible: isActive)
                 VStack(spacing: 0) {
                     Text(title)
                         .lineLimit(1)
@@ -211,6 +211,15 @@ private struct TabChip: View {
                             .foregroundStyle(DS.Palette.textTertiary)
                             .lineLimit(1)
                     }
+                }
+                .layoutPriority(1)
+                if let state, state.statusMark == .pill {
+                    // The words where the title leaves room for them, else the symbol.
+                    ViewThatFits(in: .horizontal) {
+                        StatePill(state)
+                        StatePill(state, isCompact: true)
+                    }
+                    .motionTransition(.pill(anchor: .leading))
                 }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
             }
@@ -283,7 +292,7 @@ private struct TabChip: View {
         }
         .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: isActive ? nil : state, host: nil))
+        .accessibilityLabel(TabLeadingMark.label(title: title, program: program, state: state, host: nil))
         .accessibilityValue(TabPresence.value(workspace, tab.root.panes))
         .accessibilityAddTraits(isActive ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("tabbar-\(ref)")

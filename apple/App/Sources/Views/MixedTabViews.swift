@@ -438,14 +438,14 @@ struct MixedTabRow: View {
         let isActive = model.destination == .terminal && model.currentTab == ref
         let title = model.title(ofMixedTab: tab)
         let program = model.programIdentity(ofMixedTab: tab)
-        let state = tab.leaves.compactMap { tab.members[$0] }
-            .compactMap { model.agentState(ofPane: $0.pane, onGroup: $0.hostId) }
-            .min { $0.urgency < $1.urgency }
+        let state = AgentState.mostUrgent(tab.leaves.compactMap { tab.members[$0] }
+            .compactMap { model.agentState(ofPane: $0.pane, onGroup: $0.hostId) })
         Button {
             withAnimation(DS.Motion.standard) { model.focus(ref) }
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
-                SidebarTabIcon(program: program, state: state, favicon: model.favicon(ofMixedTab: tab))
+                SidebarTabIcon(program: program, state: state, favicon: model.favicon(ofMixedTab: tab), isSelected: isActive)
+                    .attentionWhenBlocked(state, isVisible: isActive)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title)
                         .font(SidebarFont.title)
@@ -456,6 +456,9 @@ struct MixedTabRow: View {
                     MixedHostsLine(tab: tab)
                 }
                 Spacer(minLength: DS.Space.xs)
+                if let state, state.statusMark == .pill {
+                    StatePill(state).motionTransition(.pill(anchor: .trailing))
+                }
                 TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
             }
             .sidebarRow(selected: isActive)
@@ -525,13 +528,9 @@ struct MixedTabChip: View {
             VStack(spacing: 0) {
                 HStack(spacing: DS.Space.xs) {
                     if tab.isEditorOnly {
-                        ProgramMark(.vscode, size: 12)
+                        TabLeadingMark(program: .vscode, state: nil, isSelected: isActive)
                     } else if tab.isBrowserOnly {
-                        if let favicon = model.favicon(ofMixedTab: tab) {
-                            Favicon(image: favicon, size: 12)
-                        } else {
-                            ProgramMark(.browser, size: 12)
-                        }
+                        TabLeadingMark(program: .browser, state: nil, favicon: model.favicon(ofMixedTab: tab), isSelected: isActive)
                     }
                     Text(model.title(ofMixedTab: tab))
                         .lineLimit(1)
@@ -698,8 +697,7 @@ private struct ColumnHeader: View {
     var body: some View {
         let (title, host, program) = describe()
         HStack(spacing: DS.Space.row) {
-            ProgramMark(program, size: 12)
-                .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
+            ProgramTile(program)
             Text(title)
                 .font(.caption.weight(isActive ? .semibold : .regular))
                 .foregroundStyle(isActive ? DS.Palette.text : DS.Palette.textSecondary)
