@@ -248,6 +248,7 @@ struct SidebarTabList: View {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
                     .environment(\.groupedRowPosition, Self.position(of: item, in: items))
+                    .motionTransition(.row)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }
                     // A row the list stops showing keeps no frame: the pinned header reads only rows on screen.
                     .onDisappear { geometry.frames[item.id] = nil }

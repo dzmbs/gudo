@@ -216,7 +216,8 @@ private struct ToastHost: ViewModifier {
                     Banner(toast) { center.dismiss() }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                         .padding(.horizontal, DS.Space.l)
-                        .padding(.bottom, ToastCenter.bottomInset(
+                        .padding(.bottom, bottomInset)
+                        .offset(y: bottomInset - ToastCenter.bottomInset(
                             base: bottomInset, banner: size, in: host, avoiding: Array(center.obstacles.values)))
                         .animation(DS.Motion.standard, value: center.obstacles.count)
                         .motionTransition(.toast(from: .bottom))
