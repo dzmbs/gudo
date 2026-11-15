@@ -49,6 +49,7 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
 | `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | every interaction state through `ControlState` (below): rows, tabs, the selected tab pill, bar, quiet and form buttons, lit toggles |
+| `tile` | the ink at the selected level (10 %) over the row under it | a program mark's tile (`ProgramTile`); a selected row's tile inverts to `text` with the mark in `base` |
 | `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | one-physical-pixel lines (`Hairline`, `hairlineBorder`), the sidebar edge, tab strip rule |
 | `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
 | `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
@@ -196,7 +197,9 @@ Under Reduce Motion every named transition only fades, and a highlight that woul
 rows (the switchers) or a banner settling back after a drag changes in place
 (`ChromeAccessibility.travel`). `attentionCue(trigger:)` is the one beat
 that draws the eye to something that changed (it grows to 1.08 on `micro` and settles back on
-`standard`); it does nothing under Reduce Motion.
+`standard`); it does nothing under Reduce Motion. A tab whose agent turns blocked while the tab is
+out of sight plays it once on its mark, in the sidebar and the strip
+(`attentionWhenBlocked(_:isVisible:)`); it never takes focus.
 
 | Timing | Value | Use |
 |---|---|---|
@@ -300,7 +303,9 @@ own stroke or shadow (`StyleLintTests`).
 
 | Component | File | Notes / reference |
 |---|---|---|
-| `StatusIndicator`, `Spinner`, `StatusPill`, `CountBadge`, `AgentState` | `Components/AgentStatus.swift` | OSC 7501 states: idle ring, working spinner, blocked `!`, done ✓, error ✕, no contact dashed ring. Shape carries meaning, not only color. |
+| `StatusIndicator`, `Spinner`, `StatusPill`, `CountBadge`, `AgentState` | `Components/AgentStatus.swift` | OSC 7501 states: idle ring, working spinner, blocked `!`, done ✓, error ✕, no contact dashed ring. Shape carries meaning, not only color. `AgentState.mostUrgent` orders blocked, failed, working, done, no contact, idle |
+| `StatePill`, `StateDot`, `StateMark`, `.stateDot(_:tileSize:)`, `.attentionWhenBlocked(_:isVisible:)` | `Components/StatusMarks.swift` | the state language (Program marks and status, below) |
+| `ProgramMark`, `ProgramTile`, `TileArtwork`, `ProgramTileTint`, `ProgramCatalog` | `Programs/` | a program's mark, its tile, the tint setting, and process names to programs |
 | `ListRow`, `SectionTitle`, `EmptyState`, `Hairline` | `Components/Rows.swift` | dense rows with fixed leading slot; empty states (glyph `title` large, 12, `title3` semibold + `subheadline` 4 apart, then the next step); one-physical-pixel lines |
 | `.rounded(_:)`, `hairlineBorder(_:style:)` | `Tokens/Shapes.swift` | the one continuous rounded rectangle; a one-physical-pixel edge inside any shape |
 | `HoverPopover`, `hoverPopoverFrame()` | `Components/HoverPopover.swift` | opens on pointer hover, closes 150 ms after the pointer leaves anchor and popover, tap toggles, a medium sheet on iPhone; system padding, 260-480 × ≤ 400 |
@@ -328,6 +333,37 @@ own stroke or shadow (`StyleLintTests`).
 | `CommandPalette`, `PaletteCommand`, `FuzzyMatch` | `Overlays/CommandPalette.swift` | Ghostty `CommandPaletteView` with sections |
 | `ConnectionState`, `ConnectionDot`, `connectionOverlay` | `Overlays/ConnectionOverlay.swift` | health in words; never blank |
 | `TerminalTheme`, `ThemeCatalog` (463 themes), `TerminalPreferences` | `Terminal/` | Ghostty theme files and config keys |
+
+## Program marks and status
+
+One language for who runs in a tab and what it is doing, the same in the sidebar, the tab strip,
+pane headers and the palette.
+
+- **Tiles.** A program's mark sits on a small tile (`ProgramTile`): the `tile` fill, a hairline
+  edge, a one-pixel `edge` light along its top, continuous corners (`chip` up to 20 pt, `field`
+  above). The mark on it is unchanged: an official logo as its owner publishes it, else our own
+  glyph (`ProgramCatalog.glyphs`: pi's π, opencode, Amp; simple drawings, not those programs'
+  artwork) or the kind's SF Symbol in the ink. A selected row or chip inverts the tile: `text`
+  fill with the mark in `base` (a light tile and a dark mark on a dark theme, the reverse on a
+  light one), logos taking the variant made for the tile's lightness. Settings ▸ Appearance ▸
+  Program Marks: Original (neutral tile, symbols in the muted ink), Monochrome (symbols in the full
+  ink) and Accent (`accentDim` tile, symbols in the accent; selected: `accent` with `onAccent`).
+  Marks stay legible on every tile in every tint over all themes (`ChromeContrastTests`).
+- **Most urgent first.** A tab shows its panes' most urgent state, a collapsed project or a host
+  its tabs': blocked, failed, working, done, idle (`AgentState.mostUrgent`).
+- **Dot or pill.** Idle, working and done are a dot cut into the tile's bottom trailing corner (a
+  gap around it, so it reads on any row): idle a ring in `textSecondary`, working in `working`,
+  done in `done`. Blocked and failed are a compact pill after the title instead, "Needs you" and
+  "Failed" in the state colour on its container (radius `chip`); in a narrow strip chip it keeps
+  its symbol, `!` or `✕`. With Differentiate Without Colour the dot grows a little and done
+  carries a check, so ring, disc and check read by shape alone; the pills are words.
+- **Attention.** A tab turning blocked out of sight plays `attentionCue` once on its tile; nothing
+  under Reduce Motion, and never focus.
+- **Elsewhere.** Agent notifications carry the tile as their picture (`NotificationMark`, drawn in
+  the chrome's colours). On the Mac, Settings ▸ Notifications ▸ Agents in the Menu Bar (off by
+  default) shows the most urgent state's symbol in the menu bar and lists the agents that need
+  you, most urgent and longest waiting first; choosing one opens its pane. Menus that take only
+  an image (the iPhone tab switcher) show the state's `AgentState.symbol`.
 
 ## Brand
 
@@ -420,7 +456,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   host in the order it was opened. Group header: `server.rack`
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font
   (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
-  host's aggregate agent glyph, a state glyph **only when not live** (§3.3: reconnecting
+  host's most urgent agent state (its dot or pill), a state glyph **only when not live** (§3.3: reconnecting
   `arrow.triangle.2.circlepath` amber, offline `wifi.slash`, can't connect
   `exclamationmark.triangle.fill` red, a mini spinner after 1 s while dialling; each labelled with
   its copy), and + "New Terminal" (quiet until hover on the Mac, always on touch). No dots, no
@@ -431,11 +467,10 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   (§3.5); the terminal area shows the welcome view with New Terminal ⌘T, never a void.
 - One row per tab: its number across all hosts (tertiary, monospaced), a leading slot (16 pt on
   the Mac, 18 on touch), the tab's name (one weight; a path keeps its end). The slot
-  holds the focused pane's program mark (14 / 16 pt: the official logo, unmodified, where one ships (`ProgramCatalog.logos`; the logo owner's dark variant in dark),
-  else a neutral SF Symbol per kind at 0.6 opacity),
-  replaced by the agent glyph on unfocused tabs (§3.4: working = mini spinner, needs input =
-  amber `questionmark.circle.fill`, done = `checkmark.circle.fill`, failed = `xmark.circle.fill`);
-  every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
+  holds the focused pane's program tile (Program marks and status: the official logo,
+  unmodified, where one ships, else our glyph or a neutral SF Symbol per kind), with the tab's
+  most urgent quiet state as a dot on it and "Needs you" or "Failed" as a pill at the row's
+  trailing edge; the selected row's tile inverts. Every row has the slot so titles align. The live context in SF Mono underneath, under the title, ⌘N on the Mac (⌘1-8 index the
   unified list; numbers do not change when a group collapses or a host goes down). Selection is a
   10 % fill of the theme's ink with radius 8 (hover 5 %), never the accent. Drag to reorder or group; context
   menu Rename / Close / New Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap); the host's agent
@@ -475,7 +510,8 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 ### Tab strip (horizontal tabs): Ghostty native tabs
 
 Equal-width tabs across the row; centered title led by the same slot as the sidebar
-(program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned only while ⌘ is held;
+(the program tile with its state dot, inverted on the selected tab; a pill after the title for
+what needs you); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill, `Surface.selection`
@@ -498,9 +534,9 @@ tabs to reorder.
   its edge (the pane's own corner radius), the accent at two pixels under Increase Contrast,
   fading in and out on `micro`. `pane-inactive-fade` sets how an unfocused pane recedes: Dim (the
   default, Ghostty's whole-pane dim), Dim Header Only, or None. Off and Dim are as Ghostty.
-- Pane header (only in splits, 24 pt, on the terminal background): program mark (12 pt),
-  program's display name, its account ("· ● Work", only when that agent has more than one account
-  on the host), status glyph and state word in its color, an "At Limit" mark in the attention colour
+- Pane header (only in splits, 24 pt, on the terminal background): program tile with its state
+  dot, program's display name, its account ("· ● Work", only when that agent has more than one account
+  on the host), "Needs you" or "Failed" as a pill and the program's own words, an "At Limit" mark in the attention colour
   whose menu offers a new tab under another signed-in account, and the pane menu (… on
   hover/focus on the Mac; at 0.6 on touch, where there is no hover). Tap focuses.
 - Shell commands (OSC 133, daemon panes): a gutter stripe per command (red when
@@ -943,7 +979,7 @@ results and, on the Mac, under the label while ⌥ is held (never a permanent se
 card in its own background with its name in its foreground, a prompt in its colours and four 12 pt
 swatches (red, green, blue, yellow), the selected card ringed in the accent; the setting row
 shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Sidebar Text
-Size, Toasts (where they appear). Panes: each choice a small card drawn in SwiftUI in the user's
+Size, Toasts (where they appear), Program Marks (Original, Monochrome, Accent). Panes: each choice a small card drawn in SwiftUI in the user's
 own theme (two panes, the left one active, prompt lines in its ANSI colours), live as the other
 settings change: Compact / Comfortable, then Dim / Dim Header Only / None for inactive panes,
 then the Ring Around the Active Pane toggle; the chosen card ringed in the accent with a ✓ by its
@@ -952,7 +988,7 @@ Follow Light and Dark Mode (Ghostty's `theme = light:X,dark:Y`): a light and a d
 theme, each from the same picker; the system's appearance writes `theme` (`Views/ThemePair.swift`).
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
-from the real profiles). Notifications. Agents: Accounts (each host's Claude Code and Codex sign-ins; per agent a grouped list of rows with the account's colour dot in the project palette, its name, a quiet Default capsule, who it is signed in as on the second line, "Not signed in" in the attention colour, its tightest limit trailing in `meta`; actions in the context menu, Add … Account opens a name-and-colour sheet; APP-ARCHITECTURE §27), Agent Tools. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
+from the real profiles). Notifications (on the Mac also Agents in the Menu Bar, off by default). Agents: Accounts (each host's Claude Code and Codex sign-ins; per agent a grouped list of rows with the account's colour dot in the project palette, its name, a quiet Default capsule, who it is signed in as on the second line, "Not signed in" in the attention colour, its tightest limit trailing in `meta`; actions in the context menu, Add … Account opens a name-and-colour sheet; APP-ARCHITECTURE §27), Agent Tools. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
 top, the pane's title once in the titlebar, a grouped form beside it, min 720 × 480); iOS: one grouped form. Both on the
 theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).
