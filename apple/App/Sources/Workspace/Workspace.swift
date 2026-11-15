@@ -58,6 +58,7 @@ final class Workspace {
     private(set) var failures: [PaneId: String] = [:]
     /// The tab whose rename prompt is showing.
     var renamingTab: TabId?
+    @ObservationIgnored let tabHandoff = TabHandoff()
     /// Each pane's terminal grid, for the resize overlay.
     private(set) var grids: [PaneId: GridSize] = [:]
     /// Transient per-pane states drawn over the terminal (Ghostty's surface overlays).
@@ -405,11 +406,18 @@ final class Workspace {
         return summary
     }
 
-    /// The live line under a tab's name: the drawing in a focused canvas pane, else what its
-    /// agent (or a program's own report) says it is doing, else the program running in the
-    /// focused pane, else the program's own title (OSC 0/2), else the git checkout as
-    /// `repo:branch`, else the directory.
+    /// The live line under a tab's name: what the focused pane is doing (`liveContext(of:)`), else
+    /// how many panes the tab has.
     func context(of tab: Tab) -> String? {
+        if let live = liveContext(of: tab) { return live }
+        let count = tab.root.panes.count
+        return count > 1 ? "\(count) panes" : nil
+    }
+
+    /// The drawing in a focused canvas pane, else what its agent (or a program's own report)
+    /// says it is doing, else the program running in the focused pane, else the program's own
+    /// title (OSC 0/2), else the git checkout as `repo:branch`, else the directory.
+    func liveContext(of tab: Tab) -> String? {
         let paneId = tab.focused
         if let drawing = canvasTitles[paneId] { return drawing }
         let name = title(of: tab)
@@ -433,8 +441,7 @@ final class Workspace {
         if let shellTitle = pane(paneId)?.title, !shellTitle.isEmpty, shellTitle != name { return shellTitle }
         if !isRemote, let directory = absoluteDirectory(of: tab), let repo = GitContext.repoBranch(at: directory) { return repo }
         if let directory = directory(of: tab), directory != name { return directory }
-        let count = tab.root.panes.count
-        return count > 1 ? "\(count) panes" : nil
+        return nil
     }
 
     /// Gives every unnamed tab a friendly name, once. On a daemon the rename goes to the host, so

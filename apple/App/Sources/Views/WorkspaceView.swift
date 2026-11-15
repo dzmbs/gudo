@@ -457,10 +457,14 @@ private struct DetailColumn: View {
         .chromeBackground(DS.Palette.base)
     }
 
+    private var showsStrip: Bool {
+        !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages
+    }
+
     private var title: String {
         switch model.destination {
         case .terminal:
-            model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.session.activeTab.map(workspace.title(of:)) ?? Brand.name
+            model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.shownTab.map(workspace.title(of:)) ?? Brand.name
         case .inbox: Destination.inbox.title
         case .hosts: "Hosts"
         }
@@ -474,10 +478,20 @@ private struct DetailColumn: View {
             if mixed.isBrowserOnly { return hosts.isEmpty ? "Browser" : "Browser · \(hosts)" }
             return mixed.isEditorOnly ? "VS Code · \(hosts)" : hosts
         }
-        guard let tab = workspace.session.activeTab else { return "" }
-        let title = workspace.title(of: tab)
+        guard let tab = workspace.shownTab else { return "" }
+        let subtitle = workspace.windowSubtitle(of: tab)
+        guard workspace.showsSavedWorkspace, !model.connection.isFailure else { return subtitle }
+        return subtitle.isEmpty ? "Connecting…" : "\(subtitle) · Connecting…"
+    }
+}
+
+extension Workspace {
+    /// Under the window's title: what the tab is doing when that says something the title does
+    /// not, then the split state, each once.
+    func windowSubtitle(of tab: Tab) -> String {
+        let title = title(of: tab)
         var parts: [String] = []
-        if let context = workspace.context(of: tab)?.trimmingCharacters(in: .whitespaces),
+        if let context = liveContext(of: tab)?.trimmingCharacters(in: .whitespaces),
            !context.isEmpty, context != "~", context != title
         {
             parts.append(context)
@@ -485,14 +499,50 @@ private struct DetailColumn: View {
         if tab.root.panes.count > 1 {
             parts.append(tab.zoomed == nil ? "\(tab.root.panes.count) panes" : "Zoomed")
         }
-        if workspace.showsSavedWorkspace, !model.connection.isFailure { parts.append("Connecting…") }
         return parts.joined(separator: " · ")
     }
 }
 
+#if os(macOS)
+/// The tab's name and, after it in the secondary ink, what it is doing: one line in the toolbar
+/// row, so the band is as short as the title bar allows. Receded with the window.
+private struct WindowTitleLine: View {
+    let title: String
+    let subtitle: String
+    @Environment(\.appearsActive) private var appearsActive
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+            Text(title)
+                .font(DS.Font.rowTitleEmphasis)
+                .foregroundStyle(appearsActive ? DS.Palette.text : DS.Palette.textSecondary)
+                .layoutPriority(1)
+            if !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(appearsActive ? DS.Palette.textSecondary : DS.Palette.textTertiary)
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(maxWidth: Self.maxWidth, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .help(subtitle.isEmpty ? title : "\(title) · \(subtitle)")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityIdentifier("window-title")
+    }
+
+    /// Long contexts end in an ellipsis before they reach the trailing controls.
+    static let maxWidth: CGFloat = 520
+}
+#endif
+
 /// The window toolbar, identical with the sidebar shown or hidden.
 private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
+    let title: String?
+    let subtitle: String
     @Environment(WindowModel.self) private var model
     #if os(macOS)
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
@@ -656,7 +706,7 @@ struct ActiveTabView: View {
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
 
-    @State private var handoff = TabHandoff()
+    private var handoff: TabHandoff { workspace.tabHandoff }
 
     var body: some View {
         Group {

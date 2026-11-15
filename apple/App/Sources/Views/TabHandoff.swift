@@ -51,6 +51,12 @@ final class TabHandoff {
 }
 
 extension Workspace {
+    /// The tab on screen: the selected one once it has drawn, so the window's title changes
+    /// with its content.
+    var shownTab: Tab? {
+        tabHandoff.shown.flatMap { shown in session.tabs.first { $0.id == shown } } ?? session.activeTab
+    }
+
     /// Every pane `tab` shows has presented a frame of its screen, or failed to start.
     func hasPresentedScreens(of tabId: TabId, focusedPaneOnly: Bool) -> Bool {
         guard let tab = session.tabs.first(where: { $0.id == tabId }) else { return true }
