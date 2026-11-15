@@ -358,8 +358,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             measured.removeAll(keepingCapacity: false)
             document = NativeListLayout()
         }
-        let changed = updateRows(in: frame, resetting: resets)
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
+        let changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
         let appended = keptOrder == documentRowIDs.count ? frame.rows[documentRowIDs.count...].map(\.id) : nil
         current = frame
         if changesOrder || needsRestyle { rebuildDocument(keeping: needsRestyle ? nil : keptOrder, changed: changed) }
@@ -410,7 +410,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         clock?.isPaused = !isActive
     }
 
-    private func updateRows(in frame: TimelineFrame, resetting: Bool) -> [ChatRowID] {
+    /// `keptOrder`: how many leading rows kept their order, or nil when the order did not change.
+    private func updateRows(in frame: TimelineFrame, resetting: Bool, keptOrder: Int?) -> [ChatRowID] {
         let usesDelta = !resetting && frame.parentRevision == current.revision && frame.changedRows != nil
         let candidates = usesDelta ? frame.changedRows ?? [] : frame.rows
         var changed = previousExpanded.symmetricDifference(expanded)
@@ -422,8 +423,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             }
             rows[row.id] = row
         }
-        var previous: ChatRow?
-        for row in frame.rows {
+        // A row's spacing follows the row above it: only rows from the first change on can move.
+        let firstChanged = keptOrder.map { max(0, $0 - 1) }
+            ?? candidates.lazy.compactMap { self.document.indices[$0.id.storageKey] }.min()
+            ?? frame.rows.count
+        let start = min(firstChanged, frame.rows.count)
+        var previous: ChatRow? = start > 0 ? frame.rows[start - 1] : nil
+        for row in frame.rows[start...] {
             let spacing = ChatRowSpacing.top(of: row, below: previous)
             if topSpacings[row.id] != spacing {
                 topSpacings[row.id] = spacing
