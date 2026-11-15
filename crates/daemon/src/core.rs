@@ -3215,7 +3215,10 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
                 tracing::info!(pane = %entry.pane.id, %session_id, ?kind, "agent session found");
                 core.ws.accounts.pin(kind, &session_id, &account);
                 agent.session_id = Some(session_id);
+                drop(record);
                 core.mark_dirty();
+                // Chat waits on this pane's events: it shows the session now, not at the next write.
+                core.emit(Event::PaneMeta(entry.pane.id));
             }
         }
         busy.store(false, Ordering::Release);

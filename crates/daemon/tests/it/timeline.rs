@@ -703,3 +703,77 @@ async fn a_full_history_viewer_receives_the_same_window_as_the_owner() {
     drop(guest);
     harness.shutdown().await;
 }
+
+/// A Claude Code typed into a shell has no hooks: its session is found from the transcript it
+/// writes, and Chat must follow as soon as it is, not only after Claude's next write.
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_follows_a_hand_started_claude_once_its_session_is_found() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = home.canonicalize().unwrap();
+    std::os::unix::fs::symlink("/bin/sleep", home.join("claude")).unwrap();
+    let config_home = home.clone();
+    let daemon = start_with(&root.path().join("state"), move |config| {
+        config
+            .pane_env
+            .push(("HOME".into(), config_home.to_string_lossy().into_owned()));
+        config.fs_allow.push(config_home);
+    })
+    .await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = owner.attach_and_follow().await;
+    owner.type_line(
+        pane,
+        &format!(
+            "printf '\\033]7;file://localhost{}\\007'; {} 120",
+            home.display(),
+            home.join("claude").display()
+        ),
+    );
+    owner
+        .until("agent tracked", |owner| {
+            owner
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+    let (listener, mut events) = WorkspaceEventQueue::channel();
+    owner.client.set_workspace_listener(listener);
+    let snapshot = owner.client.timeline_watch(pane).await.unwrap();
+    assert!(snapshot.items.is_empty());
+    assert!(snapshot.session.native_session.is_empty());
+
+    let project: String = home
+        .to_string_lossy()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let transcript = home
+        .join(".claude/projects")
+        .join(project)
+        .join(format!("{SESSION}.jsonl"));
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let mut file = std::fs::File::create(&transcript).unwrap();
+    for line in FIXTURE.lines() {
+        writeln!(file, "{line}").unwrap();
+    }
+    drop(file);
+    let update = next_update(&mut events, |update| {
+        update.operations.iter().any(|operation| {
+            matches!(operation, TimelineOp::Snapshot(snapshot)
+                if snapshot.session.native_session == SESSION && !snapshot.items.is_empty())
+        })
+    })
+    .await;
+    assert_eq!(update.pane_id, pane);
+    drop(owner);
+    daemon.shutdown().await;
+}
