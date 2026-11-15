@@ -668,6 +668,29 @@ struct PaneSlot: View {
 }
 
 /// Split / zoom / search / close for one pane, shared by the pane header and the toolbar.
+/// Where a browser opens from a pane: beside it, below it, or in a tab of its own.
+struct BrowserPlacementItems: View {
+    let workspace: Workspace
+    let model: WindowModel
+    let pane: PaneId
+    let act: (() -> Void) -> Void
+
+    var body: some View {
+        Button("Browser Right", systemImage: "globe") {
+            act { model.openBrowser(besidePane: pane, onGroup: workspace.groupId) }
+        }
+        .accessibilityIdentifier("browser-right")
+        Button("Browser Below", systemImage: "globe") {
+            act { model.openBrowser(besidePane: pane, onGroup: workspace.groupId, axis: .vertical) }
+        }
+        .accessibilityIdentifier("browser-below")
+        Button("Browser Tab", systemImage: "globe") {
+            act { model.openBrowserTab(fromPane: pane, onGroup: workspace.groupId) }
+        }
+        .accessibilityIdentifier("browser-tab")
+    }
+}
+
 struct PaneMenuItems: View {
     let workspace: Workspace
     let model: WindowModel
@@ -679,6 +702,9 @@ struct PaneMenuItems: View {
         // Through the window's actions, so a mixed tab splits and closes on the pane's own host.
         Button("Split Right", systemImage: "rectangle.split.2x1") { focusThen { WorkspaceAction.splitRight.perform(on: workspace, window: model) } }
         Button("Split Down", systemImage: "rectangle.split.1x2") { focusThen { WorkspaceAction.splitDown.perform(on: workspace, window: model) } }
+        if let target = pane ?? workspace.focusedPane {
+            BrowserPlacementItems(workspace: workspace, model: model, pane: target, act: focusThen)
+        }
         Button("Split with Host…", systemImage: "rectangle.split.2x1.fill") {
             focusThen { WorkspaceAction.splitWithHost.perform(on: workspace, window: model) }
         }
@@ -694,14 +720,6 @@ struct PaneMenuItems: View {
         Divider()
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.showSearch() } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
-        if let target = pane ?? workspace.focusedPane {
-            Button(WorkspaceAction.newBrowserTab.title, systemImage: "globe") {
-                focusThen { model.openBrowserTab(fromPane: target, onGroup: workspace.groupId) }
-            }
-            Button(WorkspaceAction.openBrowserBeside.title, systemImage: "rectangle.split.2x1") {
-                focusThen { model.openBrowser(besidePane: target, onGroup: workspace.groupId) }
-            }
-        }
         Button("Share Session…", systemImage: "person.crop.circle.badge.plus") { model.sheet = .invite }
         Divider()
         Button("Close Pane", systemImage: "xmark", role: .destructive) {

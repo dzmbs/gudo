@@ -96,6 +96,18 @@ final class SplitWebLeavesTests: XCTestCase {
         XCTAssertNotNil(mixed.focusedBrowser)
     }
 
+    func testBrowserBelowStacksThePageUnderThePane() async throws {
+        let workspace = try XCTUnwrap(model.workspace)
+        let pane = try XCTUnwrap(workspace.focusedPane)
+        model.openBrowser(besidePane: pane, onGroup: workspace.groupId, axis: .vertical)
+        let mixed = try XCTUnwrap(model.activeMixed)
+        guard case .split(let axis, let ratio, _, _) = mixed.layout.root else { return XCTFail("one split") }
+        XCTAssertEqual(axis, .vertical)
+        XCTAssertEqual(ratio, 0.5)
+        XCTAssertEqual(mixed.members.values.map(\.pane), [pane])
+        XCTAssertEqual(mixed.browsers.count, 1)
+    }
+
     func testPagesTakeTheChosenAppearance() async throws {
         defer { UserDefaults.standard.removeObject(forKey: BrowserAppearance.key) }
         let html = "<style>@media (prefers-color-scheme: dark) { body { background: black } }</style><p>Page"

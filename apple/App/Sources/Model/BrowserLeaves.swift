@@ -45,18 +45,18 @@ extension WindowModel {
 
     /// Opens a page in the pane's tab, which comes forward.
     @discardableResult
-    func openBrowser(_ url: URL, beside pane: HostPane) -> BrowserMember {
+    func openBrowser(_ url: URL, beside pane: HostPane, axis: Axis = .horizontal) -> BrowserMember {
         let member = BrowserMember(hostId: pane.hostId == HostGroups.localId ? nil : pane.hostId, url: url.absoluteString)
         destination = .terminal
         if sheet == .browser { sheet = nil }
         if let tab = composites.tab(containing: pane), let leaf = tab.leaf(for: pane) {
             composites.apply(.focus(leaf), to: tab.id)
-            composites.addBrowser(member, to: tab.id)
+            composites.addBrowser(member, to: tab.id, axis: axis)
             focusMixedTab(tab.id)
         } else if let hostWorkspace = workspace(ofGroup: pane.hostId), var tab = hostWorkspace.session.tab(containing: pane.pane) {
             tab.focused = pane.pane
             noteLeavingTab()
-            let id = composites.addBrowser(member, besideHost: pane.hostId, tab: tab)
+            let id = composites.addBrowser(member, besideHost: pane.hostId, tab: tab, axis: axis)
             if pairedTab == TabRef(hostId: pane.hostId, tab: tab.id) { pairedTab = nil }
             activeMixedTab = id
             syncMixedFocus()
@@ -92,10 +92,10 @@ extension WindowModel {
     }
 
     /// A page beside the pane: the dev server the pane runs, else the start page.
-    func openBrowser(besidePane pane: PaneId, onGroup groupId: String) {
+    func openBrowser(besidePane pane: PaneId, onGroup groupId: String, axis: Axis = .horizontal) {
         let server = devServer(ofPane: pane, onGroup: groupId)
         guard opensToolsAsLeaves else { return showBrowserSheet(on: server) }
-        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane))
+        openBrowser(server.map(DevServerRouting.pageURL) ?? URL(string: "about:blank")!, beside: HostPane(hostId: groupId, pane: pane), axis: axis)
     }
 
     private func openStartPage(hostId: String?) {
@@ -113,16 +113,16 @@ extension WindowModel {
         }
     }
 
-    func openBrowserBesideFocusedPane() {
+    func openBrowserBesideFocusedPane(axis: Axis = .horizontal) {
         guard destination == .terminal else { return }
         if let mixed = activeMixed {
             if let member = mixed.focusedMember {
-                openBrowser(besidePane: member.pane, onGroup: member.hostId)
+                openBrowser(besidePane: member.pane, onGroup: member.hostId, axis: axis)
             } else {
                 openBrowser(URL(string: "about:blank")!, hostId: mixed.focusedBrowser?.hostId, placement: .split)
             }
         } else if let workspace, let pane = workspace.focusedPane {
-            openBrowser(besidePane: pane, onGroup: workspace.groupId)
+            openBrowser(besidePane: pane, onGroup: workspace.groupId, axis: axis)
         }
     }
 
@@ -183,6 +183,9 @@ extension WindowModel {
             }),
             ("browser-split", WorkspaceAction.openBrowserBeside.title, "rectangle.split.2x1", WorkspaceAction.openBrowserBeside.shortcut.symbols, { [weak self] in
                 self?.openBrowserBesideFocusedPane()
+            }),
+            ("browser-below", "Open Browser Below", "rectangle.split.1x2", nil, { [weak self] in
+                self?.openBrowserBesideFocusedPane(axis: .vertical)
             }),
         ]
     }
