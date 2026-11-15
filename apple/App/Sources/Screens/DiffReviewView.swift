@@ -31,6 +31,7 @@ struct DiffReviewView: View {
     @State private var composingText = ""
     @State private var isSending = false
     @State private var renderDocument: DiffRenderDocument?
+    @State private var lineSelection: DiffLineSelection?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.chrome) private var chrome
@@ -57,14 +58,70 @@ struct DiffReviewView: View {
                 }
                 .help("Layout: automatic, unified or side by side")
                 .menuIndicator(.hidden)
+                copyMenu
                 Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }
                     .help("Reload (⌘R)")
                     .toolShortcut("r")
             }
             .background(theme.background.ignoresSafeArea())
             .safeAreaInset(edge: .bottom, spacing: 0) { reviewBar }
+            .background { copyShortcut }
             .task { await load() }
             .onChange(of: scope) { Task { await loadFiles() } }
+    }
+
+    // MARK: Copy
+
+    private var selectedFile: DiffFile? {
+        guard let lineSelection else { return nil }
+        return files?.first { $0.id == lineSelection.fileId }
+    }
+
+    private var selectedLineCount: Int {
+        guard let lineSelection, let selectedFile else { return 0 }
+        return lineSelection.lines(in: selectedFile).count
+    }
+
+    private var copyMenu: some View {
+        Menu("Copy", systemImage: "doc.on.doc") {
+            Button(selectedLineCount > 1 ? "Copy \(selectedLineCount) Lines" : "Copy Selected Line", systemImage: "doc.on.doc") {
+                copySelectedLines()
+            }
+            .disabled(selectedLineCount == 0)
+            Button("Copy Diff", systemImage: "plusminus") { DiffPasteboard.copy(UnifiedDiff.text(files ?? [])) }
+                .disabled(files?.isEmpty ?? true)
+        }
+        .menuIndicator(.hidden)
+        .help("Copy the picked lines or the whole diff")
+        .accessibilityIdentifier("diff-copy")
+    }
+
+    /// ⌘C while lines are picked and no note is being written.
+    @ViewBuilder private var copyShortcut: some View {
+        if selectedLineCount > 0, composing == nil {
+            Button("Copy Lines", action: copySelectedLines)
+                .toolShortcut("c")
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func copySelectedLines() {
+        guard let lineSelection, let selectedFile else { return }
+        DiffPasteboard.copy(lineSelection.text(in: selectedFile))
+    }
+
+    private func pick(_ line: DiffLine, in file: DiffFile, side: DiffLineSelection.Side?) {
+        #if os(macOS)
+        let extending = NSEvent.modifierFlags.contains(.shift)
+        #else
+        if lineSelection?.contains(line, fileId: file.id, side: side) == true, lineSelection?.lineIds.count ?? 0 > 1 {
+            lineSelection = nil
+            return
+        }
+        let extending = true
+        #endif
+        lineSelection = DiffLineSelection.picking(line, fileId: file.id, side: side, extending: extending, current: lineSelection)
     }
 
     private var isSplit: Bool {
@@ -187,7 +244,10 @@ struct DiffReviewView: View {
                 let file = document.input.files[index]
                 DiffLineContent(file: file, left: left, right: right, split: document.input.split,
                     lineHeight: document.input.lineHeight, columnWidth: (document.input.width - 1) / 2,
-                    onTapLine: { line, oldSide in beginNote(file, line, oldSide: oldSide) })
+                    onTapLine: { line, oldSide in beginNote(file, line, oldSide: oldSide) },
+                    selection: lineSelection?.fileId == file.id ? lineSelection : nil,
+                    onPickLine: { line, side in pick(line, in: file, side: side) },
+                    copySelection: copySelectedLines)
             }
         case let .note(note):
             NoteCard(note: note) { notes.removeAll { $0.id == note.id } }
@@ -395,6 +455,7 @@ struct DiffReviewView: View {
         do {
             let loaded = try await source.files(scope)
             withAnimation(DS.Motion.standard) { files = loaded }
+            if let picked = lineSelection, !loaded.contains(where: { $0.id == picked.fileId }) { lineSelection = nil }
         } catch {
             files = nil
             problem = ToolProblem(error)
@@ -459,6 +520,7 @@ struct DiffFileHeader: View {
         .overlay(alignment: .top) { theme.splitDivider.frame(height: 1) }
         .contextMenu {
             Button("Copy Path", systemImage: "doc.on.doc") { DiffPasteboard.copy(file.path) }
+            Button("Copy Diff", systemImage: "plusminus") { DiffPasteboard.copy(UnifiedDiff.text(file)) }
         }
         .accessibilityLabel("\(file.path), \(file.additions) additions, \(file.deletions) deletions")
         .accessibilityHint(isCollapsed ? "Expands the file" : "Collapses the file")
@@ -557,11 +619,15 @@ struct DiffLineContent: View {
     var lineHeight: CGFloat = 18
     var columnWidth: CGFloat?
     var onTapLine: ((DiffLine, Bool) -> Void)? = nil
+    var selection: DiffLineSelection? = nil
+    var onPickLine: ((DiffLine, DiffLineSelection.Side?) -> Void)? = nil
+    var copySelection: () -> Void = {}
 
     @Environment(\.terminalTheme) private var theme
     @Environment(\.nativeListHorizontalOffset) private var horizontalOffset
 
     static let numberWidth: CGFloat = 40
+    static let pickHelp = "Select this line. ⇧-click another number to select through it."
 
     var body: some View {
         Group {
@@ -581,9 +647,15 @@ struct DiffLineContent: View {
     }
 
     private func unifiedRow(_ line: DiffLine) -> some View {
-        HStack(spacing: 0) {
-            number(line.oldNumber)
-            number(line.newNumber)
+        let isPicked = selection?.contains(line, fileId: file.id, side: nil) == true
+        return HStack(spacing: 0) {
+            Group {
+                number(line.oldNumber)
+                number(line.newNumber)
+            }
+            .contentShape(.rect)
+            .onTapGesture { onPickLine?(line, nil) }
+            .help(Self.pickHelp)
             mark(line.kind)
             Text(verbatim: line.text.isEmpty ? " " : DisplayLine.capped(line.text))
                 .font(DS.Font.literal)
@@ -595,9 +667,10 @@ struct DiffLineContent: View {
         .frame(height: lineHeight)
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(fill(line.kind))
+        .background(DS.Palette.selection.opacity(isPicked ? 1 : 0))
         .contentShape(.rect)
         .onTapGesture { onTapLine?(line, line.kind == .removed) }
-        .contextMenu { lineMenu(line, oldSide: line.kind == .removed) }
+        .contextMenu { lineMenu(line, oldSide: line.kind == .removed, picked: isPicked) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibility(line))
         .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
@@ -608,8 +681,13 @@ struct DiffLineContent: View {
     @ViewBuilder private func side(_ line: DiffLine?, oldSide: Bool) -> some View {
         if let line {
             let kind: DiffLine.Kind = line.kind == .context ? .context : (oldSide ? .removed : .added)
+            let side: DiffLineSelection.Side = oldSide ? .old : .new
+            let isPicked = selection?.contains(line, fileId: file.id, side: side) == true
             HStack(alignment: .top, spacing: 0) {
                 number(oldSide ? line.oldNumber : line.newNumber)
+                    .contentShape(.rect)
+                    .onTapGesture { onPickLine?(line, side) }
+                    .help(Self.pickHelp)
                 mark(kind)
                 Text(verbatim: line.text.isEmpty ? " " : DisplayLine.capped(line.text))
                     .font(DS.Font.literal)
@@ -624,9 +702,10 @@ struct DiffLineContent: View {
             .frame(width: columnWidth, height: lineHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(fill(kind))
+            .background(DS.Palette.selection.opacity(isPicked ? 1 : 0))
             .contentShape(.rect)
             .onTapGesture { onTapLine?(line, oldSide) }
-            .contextMenu { lineMenu(line, oldSide: oldSide) }
+            .contextMenu { lineMenu(line, oldSide: oldSide, picked: isPicked) }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibility(line))
             .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
@@ -638,9 +717,12 @@ struct DiffLineContent: View {
         }
     }
 
-    @ViewBuilder private func lineMenu(_ line: DiffLine, oldSide: Bool) -> some View {
+    @ViewBuilder private func lineMenu(_ line: DiffLine, oldSide: Bool, picked: Bool) -> some View {
         if let onTapLine {
             Button("Add Note", systemImage: "text.bubble") { onTapLine(line, oldSide) }
+        }
+        if picked, let count = selection.map({ $0.lines(in: file).count }), count > 1 {
+            Button("Copy \(count) Lines", systemImage: "doc.on.doc", action: copySelection)
         }
         Button("Copy Line", systemImage: "doc.on.doc") { DiffPasteboard.copy(line.text) }
         if let number = oldSide ? line.oldNumber : line.newNumber {
