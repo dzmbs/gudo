@@ -486,7 +486,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   width (the strip scrolls to the new one) until the pointer leaves the strip or the window
   resizes; a close under the pointer keeps the width the same way. The selected chip has its
   own fill (no sliding pill); only the two chips involved change. A tab's terminal replaces
-  the shown one once it has drawn its screen (at most 300 ms), never a blank terminal.
+  the shown one once it has drawn its screen at its own grid (at most 300 ms), never a blank
+  terminal, a grid at the size it started at or the blank a resize leaves before the program
+  redraws (`TerminalSurface.presentsSettledOutput`).
 - Tab strip: a single-host window shows no host; with tabs from several hosts, each tab gets the
   host's name as a second line (`meta`, `.tertiary`).
 - iPhone: the bar shows the tab's title with the host's name as a second line (state glyph after

@@ -48,8 +48,10 @@ public final class TerminalSurface {
     public var onFrameRendered: (() -> Void)?
     /// The current layer shows a presented frame (reset when `releaseGPUResources` replaces it).
     public private(set) var hasPresentedFrame = false
-    /// The frame on the current layer was drawn after output arrived, not from an empty grid.
-    public private(set) var hasPresentedOutput = false
+    /// The last frame on the current layer shows what the program wrote at the grid it is drawn
+    /// at: not an empty grid, the screen it printed at an older size, or the blank a resize
+    /// leaves until the program redraws.
+    public private(set) var presentsSettledOutput = false
     public private(set) var grid: Grid?
     /// The cursor cell in view points as of the last rendered frame (IME candidate window
     /// placement); nil when the cursor is hidden or scrolled out of the viewport.
@@ -456,6 +458,7 @@ public final class TerminalSurface {
         guard changed else { return }
         if !sizeFollowsStream {
             terminal.resize(cols: newGrid.cols, rows: newGrid.rows, cellWidth: newGrid.cellWidth, cellHeight: newGrid.cellHeight)
+            resizeOutputMark.store(outputSerial.load(ordering: .acquiring), ordering: .releasing)
         } else if hadGrid {
             awaitStreamResize()
         }
@@ -522,6 +525,8 @@ public final class TerminalSurface {
     /// The view's size in pixels while in motion (the drawable keeps the last frame's).
     private var motionPixelSize = CGSize.zero
     private nonisolated let outputSerial = Atomic<UInt64>(0)
+    /// `outputSerial` when the terminal last changed size: output after it was written for that size.
+    private nonisolated let resizeOutputMark = Atomic<UInt64>(0)
     static var frameHoldUntil = ContinuousClock.now
 
     /// Close enough to count as there: a spring's last moves are under a pixel each.
@@ -872,6 +877,18 @@ public final class TerminalSurface {
         outputPending.store(true, ordering: .releasing)
         searchOutputPending.store(true, ordering: .releasing)
         setNeedsRender()
+    }
+
+    /// The terminal's size is the view's grid (a stream's may still be the host's older one).
+    private var showsTerminalAtGrid: Bool {
+        grid.map { terminal.size.cols == Int($0.cols) && terminal.size.rows == Int($0.rows) } ?? false
+    }
+
+    /// The stream resized the terminal (any thread, in order with its output): what follows is
+    /// the program's redraw for the new size.
+    public nonisolated func streamResized() {
+        outputArrived()
+        resizeOutputMark.store(outputSerial.load(ordering: .acquiring), ordering: .releasing)
     }
 
     // MARK: Search
@@ -1355,7 +1372,7 @@ public final class TerminalSurface {
             lastFrameWait += renderer.lastFrameBufferWait
             if drawable != nil {
                 hasPresentedFrame = true
-                if outputSeen > 0 { hasPresentedOutput = true }
+                presentsSettledOutput = outputSeen > resizeOutputMark.load(ordering: .acquiring) && showsTerminalAtGrid
             }
         }
         let encoded = CACurrentMediaTime()
@@ -1418,7 +1435,7 @@ public final class TerminalSurface {
         fresh.drawableSize = pixelSize
         layer = fresh
         hasPresentedFrame = false
-        hasPresentedOutput = false
+        presentsSettledOutput = false
         onLayerReplaced?(old, fresh)
         previousDrawableSize = .zero
         renderer.releaseBuffers()

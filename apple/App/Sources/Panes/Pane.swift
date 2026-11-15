@@ -197,7 +197,7 @@ final class Pane {
                 terminal.resize(
                     cols: cols, rows: rows,
                     cellWidth: cellWidth > 0 ? cellWidth : local.width, cellHeight: cellHeight > 0 ? cellHeight : local.height)
-                surface.outputArrived()
+                surface.streamResized()
             case .connection(let state):
                 Task { @MainActor in self?.connection = state }
             case .sizingChanged:
@@ -256,10 +256,11 @@ final class Pane {
         }
     }
 
-    /// The view shows a frame of this pane's screen (the host's or the saved one), not an empty grid.
+    /// The view shows a frame of this pane's screen (the host's or the saved one) at its own grid,
+    /// not an empty grid or one the program has yet to redraw for its size.
     var hasPresentedScreen: Bool {
         let surface = view.surface
-        return surface.hasPresentedFrame && (surface.hasPresentedOutput || showsSavedScreen)
+        return surface.hasPresentedFrame && (surface.presentsSettledOutput || showsSavedScreen)
     }
 
     func foreground() -> PaneForeground? {
