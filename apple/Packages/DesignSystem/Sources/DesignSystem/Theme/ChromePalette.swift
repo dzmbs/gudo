@@ -32,6 +32,11 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// A solid fill for the one primary action and the label on it, ≥ 4.5:1.
     public let prominent: ThemeColor
     public let onProminent: ThemeColor
+    /// Labels and glyphs on a solid accent fill: the theme's own cursor text where it reads on
+    /// the accent at 4.5:1, else the nearest ink that does (`label(on:)`).
+    public let onAccent: ThemeColor
+    /// The theme's `cursor-text`, the label it pairs with its accent.
+    public let cursorText: ThemeColor?
     /// State hues: the theme's ANSI green, red, yellow, magenta and blue, mixed toward the
     /// foreground so they sit in the chrome, each ≥ 4.5:1 on every surface: they are words too
     /// ("Can't reach", an error under a form).
@@ -73,6 +78,21 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// terminal blues (#0000FF, #2F5AF3) come down to a calm, still clearly blue tone.
     public static let accentChroma = 0.13
     public static let accentLightness = (light: 0.48...0.62, dark: 0.68...0.86)
+    /// A signal over the surface under it: status chips, a glyph's disc, a drop target, the
+    /// accent's dim fill (`accentDim`). One strength for every hue so chips read as one family.
+    /// 12 % is the weakest tint that stands apart from its surface (1.2:1 on average); the signal
+    /// on it moves only a little to keep 4.5:1 (`ThemeStressTests.containerStrength`).
+    public static let containerLevel = 0.12
+    /// The accent's focus halo outside a control's solid accent edge.
+    public static let ringLevel = 0.25
+    /// A scrollbar at rest; while scrolled or under the pointer it is the tertiary ink (≥ 3:1).
+    public static let scrollbarLevel = 0.25
+    /// The light edge on floating glass (light / dark chrome).
+    public static let edgeLevels = (light: 0.08, dark: 0.16)
+    /// The dim behind a modal panel (light / dark chrome).
+    public static let scrimLevels = (light: 0.10, dark: 0.28)
+    /// The bell's border: the theme's attention hue at half strength.
+    public static let bellLevel = 0.5
     /// Minimum contrasts: text (WCAG AA), glyphs and the accent (WCAG non-text).
     public static let minimumTextContrast = 4.5
     public static let minimumGlyphContrast = 3.0
@@ -103,6 +123,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// `scheme` is the window's scheme when the user forced one (Light/Dark, or System differing
     /// from the theme); nil or the theme's own gives the theme's chrome.
     public init(theme: TerminalTheme, scheme requested: ColorScheme? = nil) {
+        let cursorText = theme.cursorText.flatMap(ThemeColor.init(hex:))
+        self.cursorText = cursorText
         let themeScheme: ColorScheme = theme.isLight ? .light : .dark
         let scheme = requested ?? themeScheme
         let themeBackground = theme.bgRGB, themeForeground = theme.fgRGB
@@ -132,48 +154,76 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
         let sidebar = background.blended(with: foreground, Self.sidebarStrength)
         let overlay = background.blended(with: foreground, Self.overlayStrength)
-        let surfaces = [background, sidebar, overlay]
 
+        let raised = background.blended(with: foreground, Self.raisedStrength)
         let refined = Self.refined(Self.accent(of: theme), scheme: scheme)
-        let accent = Self.legible(refined, on: surfaces, minimum: Self.minimumGlyphContrast)
+        // A glyph on the accent's own dim fill too, where hand-drawn controls sit (not on menus).
+        let accent = Self.legible(
+            Self.legible(refined, on: [background, sidebar, raised, overlay], minimum: Self.minimumGlyphContrast),
+            on: [background, sidebar, raised], minimum: Self.minimumGlyphContrast, tints: [Self.containerLevel])
         self.accent = accent
         let (prominent, onProminent) = Self.prominent(accent: accent, background: background, foreground: foreground)
         self.prominent = prominent
         self.onProminent = onProminent
-        let raised = background.blended(with: foreground, Self.raisedStrength)
-        let (selectionLevel, selection) = Self.selection(
-            accent: accent, on: raised, text: foreground,
-            level: scheme == .light ? Self.selectionLevels.light : Self.selectionLevels.dark)
+        self.onAccent = Self.label(on: accent, preferring: cursorText, background: background, foreground: foreground)
+        let level = scheme == .light ? Self.selectionLevels.light : Self.selectionLevels.dark
+        let selectionLevel = [background, sidebar, raised, overlay]
+            .map { Self.selection(accent: accent, on: $0, text: foreground, level: level).0 }
+            .min() ?? level
+        let selection = raised.blended(with: accent, selectionLevel)
         self.selectionLevel = selectionLevel
         self.selection = selection
         self.onSelection = selection.blended(with: foreground, Self.textLevels.primary)
 
-        let selectedRows = [background, sidebar].map { $0.blended(with: foreground, Self.fillLevels.selected) }
-        let textSurfaces = [background, sidebar, raised, overlay] + selectedRows
+        let controlSurfaces = Self.controlStrengths.map { background.blended(with: foreground, $0) }
+        let accentDims = [background, sidebar, raised].map { $0.blended(with: accent, Self.containerLevel) }
+        let textSurfaces = controlSurfaces + [overlay] + accentDims
         secondaryLevel = Self.level(Self.textLevels.secondary, cap: Self.levelCaps.secondary, of: foreground, on: textSurfaces, minimum: Self.minimumTextContrast)
         tertiaryLevel = Self.level(Self.textLevels.tertiary, cap: Self.levelCaps.tertiary, of: foreground, on: textSurfaces, minimum: Self.minimumGlyphContrast)
         let markLevel = Self.level(Self.markStrength * secondaryLevel, cap: secondaryLevel, of: foreground, on: [background, sidebar], minimum: Self.minimumGlyphContrast)
         markOpacity = markLevel / secondaryLevel
 
-        func state(_ index: Int, reference: String) -> ThemeColor {
-            var hue = theme.ansiRGB(index)
-            let referenceHue = ThemeColor(hex: reference)!
-            // A theme whose "green" is grey or not green (monochrome themes) keeps the meaning
-            // with the default hue.
-            if hue.chroma < 12 || Self.hueDistance(hue.hue, referenceHue.hue) > 60 { hue = referenceHue }
-            let mixed = foreground.blended(with: hue, 1 - Self.stateMix)
-            return Self.legible(mixed, on: [background, sidebar, raised, overlay], minimum: Self.minimumTextContrast)
+        let stateSurfaces = [background, sidebar, raised, overlay]
+        func state(_ signal: StateSignal) -> ThemeColor {
+            Self.state(signal, of: theme, ink: foreground, on: stateSurfaces, tint: Self.containerLevel)
         }
-        done = state(2, reference: "#b5bd68")
-        error = state(1, reference: "#cc6666")
-        attention = state(3, reference: "#f0c674")
-        working = state(5, reference: "#b294bb")
-        info = state(4, reference: "#81a2be")
+        done = state(.done)
+        error = state(.error)
+        attention = state(.attention)
+        working = state(.working)
+        info = state(.info)
     }
 
     public static let standard = ChromePalette(theme: .ghosttyDefault)
 
     // MARK: Derivation steps
+
+    /// A state's ANSI slot and the hue it falls back to (Ghostty's default palette).
+    enum StateSignal: CaseIterable {
+        case done, error, attention, working, info
+
+        var slot: (index: Int, reference: String) {
+            switch self {
+            case .done: (2, "#b5bd68")
+            case .error: (1, "#cc6666")
+            case .attention: (3, "#f0c674")
+            case .working: (5, "#b294bb")
+            case .info: (4, "#81a2be")
+            }
+        }
+    }
+
+    /// The theme's hue for `signal` softened toward the ink, then moved just far enough to read
+    /// at 4.5:1 on every surface and, with a `tint`, on its own container over each.
+    static func state(_ signal: StateSignal, of theme: TerminalTheme, ink: ThemeColor, on surfaces: [ThemeColor], tint: Double?) -> ThemeColor {
+        var hue = theme.ansiRGB(signal.slot.index)
+        let referenceHue = ThemeColor(hex: signal.slot.reference) ?? hue
+        // A theme whose "green" is grey or not green (monochrome themes) keeps the meaning
+        // with the default hue.
+        if hue.chroma < 12 || hueDistance(hue.hue, referenceHue.hue) > 60 { hue = referenceHue }
+        let mixed = ink.blended(with: hue, 1 - stateMix)
+        return legible(mixed, on: surfaces, minimum: minimumTextContrast, tints: tint.map { [$0] } ?? [])
+    }
 
     /// The ink pushed toward white (dark chrome) or black (light chrome) until text at `level` (by
     /// default the strongest secondary text) reads at 4.5:1 on every surface mixed from it; if even
@@ -182,7 +232,7 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         let extreme: ThemeColor = background.contrast(with: .white) >= background.contrast(with: .black) ? .white : .black
         let opposite: ThemeColor = extreme == .white ? .black : .white
         func worst(_ ink: ThemeColor, _ background: ThemeColor) -> Double {
-            [0, sidebarStrength, raisedStrength, overlayStrength, (sidebarStrength + raisedStrength) / 2].map { strength -> Double in
+            (controlStrengths + [overlayStrength, (sidebarStrength + raisedStrength) / 2]).map { strength -> Double in
                 let surface = background.blended(with: ink, strength)
                 return surface.blended(with: ink, level).contrast(with: surface)
             }.min() ?? 0
@@ -201,6 +251,13 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         return (opposite, extreme)
     }
 
+    /// Every surface a hand-drawn control sits on (base, sidebar, raised) under each of its fills
+    /// (rest, hover, selected, pressed), as one strength of the ink over the background. Menus
+    /// (overlay) are the system's and carry no hand-drawn states.
+    static let controlStrengths: [Double] = [0, sidebarStrength, raisedStrength].flatMap { surface in
+        [0, fillLevels.hover, fillLevels.selected, fillLevels.pressed].map { fill in 1 - (1 - surface) * (1 - fill) }
+    }
+
     /// The ink strength from `level` up to `cap` at which the ink reads at `minimum` on every
     /// surface (the cap when none does).
     static func level(_ level: Double, cap: Double, of ink: ThemeColor, on surfaces: [ThemeColor], minimum: Double) -> Double {
@@ -214,9 +271,13 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
 
     /// The colour with its OKLab lightness moved away from the surfaces, hue kept and chroma
     /// eased only where sRGB runs out, just until it reaches `minimum` against every surface.
-    static func legible(_ color: ThemeColor, on surfaces: [ThemeColor], minimum: Double) -> ThemeColor {
+    /// `tints` are strengths at which the colour is also laid over each surface under itself (its
+    /// container), where it must read as well.
+    static func legible(_ color: ThemeColor, on surfaces: [ThemeColor], minimum: Double, tints: [Double] = []) -> ThemeColor {
         func readsOnEverySurface(_ candidate: ThemeColor) -> Bool {
-            surfaces.allSatisfy { candidate.contrast(with: $0) >= minimum }
+            surfaces.allSatisfy { surface in
+                ([surface] + tints.map { surface.blended(with: candidate, $0) }).allSatisfy { candidate.contrast(with: $0) >= minimum }
+            }
         }
         guard !readsOnEverySurface(color) else { return color }
         let whiteContrast = surfaces.map { $0.contrast(with: .white) }.min() ?? 0
@@ -296,6 +357,26 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
             level -= 0.02
         }
         return (level, surface.blended(with: accent, level))
+    }
+
+    /// The label for a solid `fill`: `preferred` (the theme's cursor text) when it reads at 4.5:1,
+    /// else the chrome's background or ink, else white or black (one of which always does).
+    static func label(on fill: ThemeColor, preferring preferred: ThemeColor?, background: ThemeColor, foreground: ThemeColor) -> ThemeColor {
+        let candidates = [preferred, background, foreground].compactMap { $0 }
+        if let readable = candidates.first(where: { $0.contrast(with: fill) >= minimumTextContrast }) { return readable }
+        return fill.contrast(with: .white) >= fill.contrast(with: .black) ? .white : .black
+    }
+
+    /// The label for a solid fill of any chrome colour (a swipe action's disc, a count badge).
+    public func label(on fill: ThemeColor) -> ThemeColor {
+        Self.label(on: fill, preferring: cursorText, background: background, foreground: foreground)
+    }
+
+    /// The colour behind a modal panel: the darker ink taken halfway to black, so it dims
+    /// without greying a tinted theme.
+    public var scrimColor: ThemeColor {
+        let darker = background.luminance <= foreground.luminance ? background : foreground
+        return darker.blended(with: .black, 0.5)
     }
 
     /// A solid fill: the accent deepened toward the darker ink until the lighter ink reads on it

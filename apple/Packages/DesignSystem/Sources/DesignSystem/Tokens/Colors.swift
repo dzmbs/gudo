@@ -49,6 +49,12 @@ public extension DS {
         /// The accent deepened until `onProminent` reads on it at 4.5:1.
         public static let prominent = ChromeStyle(.prominent)
         public static let onProminent = ChromeStyle(.onProminent)
+        /// Labels and glyphs on a solid accent: the theme's cursor text where it reads (4.5:1).
+        public static let onAccent = ChromeStyle(.onAccent)
+        /// The accent at the container strength: a pressed accent control, a lit toggle, a drop target.
+        public static let accentDim = ChromeStyle(.accentDim)
+        /// The accent's soft focus halo, outside a solid accent edge.
+        public static let accentRing = ChromeStyle(.accentRing)
 
         /// Your turn: an agent waiting for input, a slow or reconnecting link (the theme's
         /// yellow). Amber, not red: red means broken.
@@ -62,7 +68,28 @@ public extension DS {
         public static let error = ChromeStyle(.error)
         public static let info = ChromeStyle(.info)
 
-        public static let bell = Color(red: 1, green: 0.8, blue: 0).opacity(0.5)
+        /// Signals over the surface under them, at one strength (`ChromePalette.containerLevel`):
+        /// status chips, a glyph's disc. The signal itself reads on its container at 4.5:1.
+        public static let doneContainer = ChromeStyle(.container(.done))
+        public static let errorContainer = ChromeStyle(.container(.error))
+        public static let attentionContainer = ChromeStyle(.container(.attention))
+        public static let workingContainer = ChromeStyle(.container(.working))
+        public static let infoContainer = ChromeStyle(.container(.info))
+        /// Any signal's container, for a colour chosen at run time (a project's, a state's).
+        public static func container(_ style: ChromeStyle) -> ChromeStyle { ChromeStyle(.container(style.token)) }
+        /// The label on a solid fill of `style`: the theme's cursor text, background or ink, the
+        /// first that reads at 4.5:1.
+        public static func on(_ style: ChromeStyle) -> ChromeStyle { ChromeStyle(.on(style.token)) }
+
+        /// The bell's border: the theme's attention hue at half strength.
+        public static let bell = ChromeStyle(.bell)
+        /// A scrollbar at rest, and while scrolling or under the pointer (≥ 3:1).
+        public static let scrollbar = ChromeStyle(.scrollbar)
+        public static let scrollbarActive = ChromeStyle(.scrollbarActive)
+        /// The light edge on floating glass and lifted panes.
+        public static let edge = ChromeStyle(.edge)
+        /// The dim behind a modal panel (the palette).
+        public static let scrim = ChromeStyle(.scrim)
 
         /// Text: the theme's foreground at 90 / 60 / 40 / 20 %. Window and sheet roots set the
         /// first three as the hierarchical styles, so `.primary`, `.secondary` and `.tertiary`
@@ -105,6 +132,10 @@ public extension DS {
 nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     public enum Token: Hashable, Sendable {
         case accent, selection, onSelection, prominent, onProminent
+        case onAccent, accentDim, accentRing
+        case bell, scrollbar, scrollbarActive, edge, scrim
+        indirect case container(Token)
+        indirect case on(Token)
         case done, error, attention, working, info
         case text, textSecondary, textTertiary, textQuaternary
         case hoverFill, selectedFill, pressedFill
@@ -124,10 +155,7 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     public func resolve(in environment: EnvironmentValues) -> Color.Resolved {
         let token = environment.colorSchemeContrast == .increased ? token.increasedContrast : token
         if case .ansi(let index) = token { return environment.terminalTheme.ansiRGB(index).color.resolve(in: environment) }
-        if case .project(let index) = token {
-            return ProjectColor.color(index, theme: environment.terminalTheme, chrome: environment.chrome).color.resolve(in: environment)
-        }
-        return environment.chrome.color(token).resolve(in: environment)
+        return environment.chrome.layer(token, theme: environment.terminalTheme).swiftUIColor.resolve(in: environment)
     }
 }
 
@@ -139,43 +167,73 @@ nonisolated public extension ChromeStyle.Token {
         case .textSecondary: .text
         case .textTertiary: .textSecondary
         case .hairline, .separator: .border
+        case .scrollbar: .scrollbarActive
         default: self
         }
     }
 }
 
+/// A token as drawn: a colour and how strongly it lays over whatever is under it.
+nonisolated public struct ChromeLayer: Hashable, Sendable {
+    public let color: ThemeColor
+    public let alpha: Double
+
+    public init(_ color: ThemeColor, _ alpha: Double = 1) {
+        self.color = color
+        self.alpha = alpha
+    }
+
+    public func composited(over surface: ThemeColor) -> ThemeColor { surface.blended(with: color, alpha) }
+
+    public var swiftUIColor: Color { alpha >= 1 ? color.color : color.color.opacity(alpha) }
+}
+
 nonisolated public extension ChromePalette {
-    func color(_ token: ChromeStyle.Token) -> Color {
+    func color(_ token: ChromeStyle.Token) -> Color { layer(token).swiftUIColor }
+
+    /// The token as drawn; `theme` resolves the ANSI and project colours (the foreground without it).
+    func layer(_ token: ChromeStyle.Token, theme: TerminalTheme? = nil) -> ChromeLayer {
         switch token {
-        case .accent: accentColor
-        case .selection: selectionColor
-        case .onSelection: onSelectionColor
-        case .prominent: prominentColor
-        case .onProminent: onProminentColor
-        case .done: done.color
-        case .error: error.color
-        case .attention: attention.color
-        case .working: working.color
-        case .info: info.color
-        case .text: text
-        case .textSecondary: textSecondary
-        case .textTertiary: textTertiary
-        case .textQuaternary: textQuaternary
-        case .hoverFill: hoverFill
-        case .selectedFill: selectedFill
-        case .pressedFill: pressedFill
-        case .hairline: hairline
-        case .separator: separator
-        case .border: border
-        case .base: baseColor
-        case .sidebar: sidebarColor
-        case .raised: raisedColor
-        case .overlay: overlayColor
-        case .groupedPage: groupedPageColor
-        case .groupedRow: groupedRowColor
-        case .terminal: terminalColor
-        case .ink: foreground.color
-        case .ansi, .project: foreground.color
+        case .onAccent: ChromeLayer(onAccent)
+        case .accentDim: ChromeLayer(accent, Self.containerLevel)
+        case .accentRing: ChromeLayer(accent, Self.ringLevel)
+        case .bell: ChromeLayer(attention, Self.bellLevel)
+        case .scrollbar: ChromeLayer(foreground, Self.scrollbarLevel)
+        case .scrollbarActive: ChromeLayer(foreground, tertiaryLevel)
+        case .edge: ChromeLayer(foreground, scheme == .dark ? Self.edgeLevels.dark : Self.edgeLevels.light)
+        case .scrim: ChromeLayer(scrimColor, scheme == .dark ? Self.scrimLevels.dark : Self.scrimLevels.light)
+        case .container(let signal): ChromeLayer(layer(signal, theme: theme).color, Self.containerLevel)
+        case .on(let fill): ChromeLayer(label(on: layer(fill, theme: theme).composited(over: base)))
+        case .accent: ChromeLayer(accent)
+        case .selection: ChromeLayer(accent, selectionLevel)
+        case .onSelection: ChromeLayer(foreground, Self.textLevels.primary)
+        case .prominent: ChromeLayer(prominent)
+        case .onProminent: ChromeLayer(onProminent)
+        case .done: ChromeLayer(done)
+        case .error: ChromeLayer(error)
+        case .attention: ChromeLayer(attention)
+        case .working: ChromeLayer(working)
+        case .info: ChromeLayer(info)
+        case .text: ChromeLayer(foreground, Self.textLevels.primary)
+        case .textSecondary: ChromeLayer(foreground, secondaryLevel)
+        case .textTertiary: ChromeLayer(foreground, tertiaryLevel)
+        case .textQuaternary: ChromeLayer(foreground, Self.textLevels.quaternary)
+        case .hoverFill: ChromeLayer(foreground, Self.fillLevels.hover)
+        case .selectedFill: ChromeLayer(foreground, Self.fillLevels.selected)
+        case .pressedFill: ChromeLayer(foreground, Self.fillLevels.pressed)
+        case .hairline: ChromeLayer(foreground, Self.lineLevels.hairline)
+        case .separator: ChromeLayer(foreground, Self.lineLevels.separator)
+        case .border: ChromeLayer(foreground, Self.lineLevels.border)
+        case .base: ChromeLayer(base)
+        case .sidebar: ChromeLayer(sidebar)
+        case .raised: ChromeLayer(raised)
+        case .overlay: ChromeLayer(overlay)
+        case .groupedPage: ChromeLayer(groupedPage)
+        case .groupedRow: ChromeLayer(groupedRow)
+        case .terminal: ChromeLayer(terminal)
+        case .ansi(let index): ChromeLayer(theme?.ansiRGB(index) ?? foreground)
+        case .project(let index): ChromeLayer(theme.map { ProjectColor.color(index, theme: $0, chrome: self) } ?? foreground)
+        case .ink: ChromeLayer(foreground)
         }
     }
 }

@@ -41,6 +41,20 @@ struct ChromePaletteTests {
         #expect(light.raised.luminance < light.base.luminance)
     }
 
+    @Test func onAccentIsTheThemesCursorTextWhenItReads() throws {
+        var theme = ThemeCatalog.theme(named: "Dracula")
+        theme.cursor = "#bd93f9"
+        theme.cursorText = "#21222c"
+        let chrome = ChromePalette(theme: theme)
+        let cursorText = try #require(ThemeColor(hex: "#21222c"))
+        #expect(cursorText.contrast(with: chrome.accent) >= 4.5)
+        #expect(chrome.onAccent == cursorText)
+        theme.cursorText = "#9a9cb0"
+        let unreadable = ChromePalette(theme: theme)
+        #expect(unreadable.onAccent != ThemeColor(hex: "#9a9cb0"))
+        #expect(unreadable.onAccent.contrast(with: unreadable.accent) >= 4.5)
+    }
+
     @Test func defaultThemeKeepsGhosttyBlue() {
         let chrome = ChromePalette(theme: .ghosttyDefault)
         #expect(chrome.accent == ThemeColor(hex: "#7aa6da"))
