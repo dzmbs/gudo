@@ -37,7 +37,7 @@ final class PanePresentationTests: XCTestCase {
         func resize(cols: UInt16, rows: UInt16, cellWidth: UInt32, cellHeight: UInt32) {
             state.withLock { $0.resizes += 1 }
         }
-        func claimSize() { state.withLock { $0.claims += 1 } }
+        func claimSize() { state.withLock { $0.isDeferred = false; $0.claims += 1 } }
         func useSize() { state.withLock { $0.isDeferred = false; $0.claims += 1 } }
         func terminate() {}
     }
@@ -46,6 +46,7 @@ final class PanePresentationTests: XCTestCase {
         let backend = Backend()
         let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
         XCTAssertTrue(pane.prepareToParkTerminal())
+        pane.inputPresentation.value = .chat
         pane.view.surface.layout(size: CGSize(width: 390, height: 600), scale: 2)
         pane.claimSize()
         XCTAssertTrue(backend.isSizeDeferred)
@@ -53,6 +54,36 @@ final class PanePresentationTests: XCTestCase {
         XCTAssertEqual(backend.state.withLock { $0.resizes }, 0)
         XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
         XCTAssertEqual(pane.resizesSent, 0)
+    }
+
+    func testATerminalBackFromChatTakesThePhoneSizeWithoutAnExtraTap() throws {
+        let backend = Backend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        let state = PaneChatState(member: HostPane(hostId: "sizing", pane: PaneId(1)), defaultPresentation: .terminal,
+                                  agent: .codex, inputPresentation: pane.inputPresentation,
+                                  preferences: .init(suiteName: "sizing-" + UUID().uuidString) ?? .standard,
+                                  pool: ChatModelPool())
+        XCTAssertTrue(state.select(.chat, persistence: .transient) { pane.prepareToParkTerminal() })
+        pane.view.surface.layout(size: CGSize(width: 390, height: 600), scale: 2)
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
+
+        XCTAssertTrue(state.show(.terminal, terminal: pane, persistence: .transient))
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 1)
+        XCTAssertFalse(backend.isSizeDeferred)
+    }
+
+    func testSceneActivationClaimsAVisibleTerminalLeftDeferredButNotHiddenChat() throws {
+        let backend = Backend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        XCTAssertTrue(pane.prepareToParkTerminal())
+        pane.inputPresentation.value = .chat
+        pane.claimSize()
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
+
+        pane.inputPresentation.value = .terminal
+        pane.claimSize()
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 1)
+        XCTAssertFalse(backend.isSizeDeferred)
     }
 
     func testParkingRefusesMarkedTextWithoutCommittingOrDiscardingIt() throws {

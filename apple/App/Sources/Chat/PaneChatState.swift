@@ -157,7 +157,8 @@ final class PaneChatState {
 
     @discardableResult
     func show(_ presentation: PanePresentation, terminal: Pane, persistence: Persistence = .remembered) -> Bool {
-        select(presentation, persistence: persistence) {
+        let leavesChat = self.presentation == .chat && presentation == .terminal
+        let shown = select(presentation, persistence: persistence) {
             switch presentation {
             case .chat:
                 guard offersChat else {
@@ -172,6 +173,9 @@ final class PaneChatState {
                 return controller?.prepareToPark() ?? true
             }
         }
+        // The terminal is on screen now: it takes the phone's grid, as opening it does.
+        if shown, leavesChat { terminal.claimSize() }
+        return shown
     }
 
     @discardableResult

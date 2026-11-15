@@ -172,7 +172,7 @@ final class PaneChatStateTests: XCTestCase {
         first.updateAgent(.codex)
         XCTAssertNil(first.terminalNotice)
         XCTAssertEqual(backend.state.withLock { $0.resizes }, 0)
-        XCTAssertEqual(backend.state.withLock { $0.claims }, 0)
+        XCTAssertEqual(backend.state.withLock { $0.claims }, 2)
         XCTAssertTrue(backend.state.withLock { $0.input.isEmpty })
     }
 

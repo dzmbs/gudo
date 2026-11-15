@@ -278,7 +278,9 @@ final class Pane {
 
     /// This window's view of the pane drives its size (it took focus): the PTY follows it.
     func claimSize() {
-        guard (backend as? any DeferredPaneSizing)?.isSizeDeferred != true else { return }
+        // Hidden Chat geometry never takes the size; a terminal back on screen does.
+        let isDeferred = (backend as? any DeferredPaneSizing)?.isSizeDeferred == true
+        guard !isDeferred || inputPresentation.allowsTerminalInput else { return }
         (backend as? any SharedPaneTap)?.claimSize()
     }
 

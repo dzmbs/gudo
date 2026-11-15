@@ -328,9 +328,14 @@ id, rather than its shared principal. These are sent on attachment and ownership
 even when the grid and principal stay unchanged. Clients without that capability never receive
 this variant, including clients that already support `ACTIVE_SIZING`.
 
+A pane shown in Chat on iOS defers its viewport, so hidden Chat geometry never claims. Its
+Terminal coming back on screen (a switch or a Chat fallback) claims the phone's grid at once, and
+scene activation claims a visible Terminal even if a deferral was left behind; the Mac takes its
+own size back on its next activation or input.
+
 Apple clients cache sizing identity per pane, clearing it on closure, disconnect and attachment
-changes. A quiet terminal overlay names the other device or local window after 200 ms; it does
-not take space from the grid. Local tap handoffs notify both windows even when their grids match,
+changes. A quiet strip along the pane's top edge names the other device or local window after
+200 ms, clear of the program's input lines; it does not take space from the grid. Local tap handoffs notify both windows even when their grids match,
 so live-resize dimension differences are not mistaken for another window. The action requires
 an active window, Drive and an open input gate. “Use this size” claims the local tap and daemon
 connection before selecting `LastActive`, including when leaving a fixed or composite policy.
