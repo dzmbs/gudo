@@ -72,6 +72,29 @@ pub(crate) fn from_rollouts(
     best.map(|(_, id)| id)
 }
 
+/// The rollout of session `id` under `codex_home`, newest day first: a resumed session
+/// keeps writing the rollout of the day it started.
+pub(crate) fn rollout_path(codex_home: &Path, id: &str) -> Option<PathBuf> {
+    let sessions = codex_home.join("sessions");
+    let newest_first = |dir: &Path| {
+        let mut names: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
+        names.sort();
+        names.reverse();
+        names
+    };
+    newest_first(&sessions)
+        .iter()
+        .flat_map(|year| newest_first(year))
+        .flat_map(|month| newest_first(&month))
+        .flat_map(|day| newest_first(&day))
+        .find(|path| rollout_id(path).is_some_and(|found| found.eq_ignore_ascii_case(id)))
+}
+
 /// The three most recent `YYYY/MM/DD` directories (sessions crossing midnight, time zones).
 fn day_dirs(sessions: &Path) -> Vec<PathBuf> {
     fn newest(dir: &Path, count: usize) -> Vec<PathBuf> {
@@ -124,6 +147,28 @@ mod tests {
         );
         assert_eq!(rollout_id(Path::new("/x/rollout-short.jsonl")), None);
         assert_eq!(rollout_id(Path::new("/x/notes.jsonl")), None);
+    }
+
+    #[test]
+    fn a_session_rollout_is_found_by_its_id_on_any_day() {
+        let home = tempfile::tempdir().unwrap();
+        let old_day = home.path().join("sessions/2025/12/31");
+        let new_day = home.path().join("sessions/2026/10/18");
+        std::fs::create_dir_all(&old_day).unwrap();
+        std::fs::create_dir_all(&new_day).unwrap();
+        let rollout = old_day.join(format!("rollout-2025-12-31T23-59-00-{ID}.jsonl"));
+        std::fs::write(&rollout, "").unwrap();
+        std::fs::write(
+            new_day.join("rollout-2026-10-18T12-00-00-0199a213-0000-7800-8aa1-bbab2a035a53.jsonl"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(rollout_path(home.path(), ID), Some(rollout));
+        assert_eq!(
+            rollout_path(home.path(), "0199a213-ffff-7800-8aa1-bbab2a035a53"),
+            None
+        );
+        assert_eq!(rollout_path(&home.path().join("missing"), ID), None);
     }
 
     #[test]
