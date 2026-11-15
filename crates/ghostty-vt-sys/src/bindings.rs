@@ -3788,7 +3788,10 @@ pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_XT_CHECKSUM_EXTENSION: Ghos
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS: GhosttyTerminalOption = 47;
 #[doc = " Callback invoked when the running program asks to resize the window,\n such as with CSI 8 ; rows ; columns t. Set to NULL to ignore resize\n requests.\n\n Input type: GhosttyTerminalResizeWindowFn"]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_RESIZE_WINDOW: GhosttyTerminalOption = 48;
-#[doc = " Callback invoked when the running program asks to resize the window,\n such as with CSI 8 ; rows ; columns t. Set to NULL to ignore resize\n requests.\n\n Input type: GhosttyTerminalResizeWindowFn"]
+#[doc = " Set whether the shell redraws its prompt when the terminal is resized.\n\n When true, a resize while the cursor is on an OSC 133 prompt or input\n line clears the whole prompt so the shell can redraw it at the new size,\n as Ghostty's own terminal does for its shell integration. A prompt can\n still change this with OSC 133;A;redraw=0, redraw=1 or redraw=last.\n\n A NULL value pointer resets to the library default of false.\n\n Input type: bool*"]
+pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SHELL_REDRAWS_PROMPT: GhosttyTerminalOption =
+    49;
+#[doc = " Set whether the shell redraws its prompt when the terminal is resized.\n\n When true, a resize while the cursor is on an OSC 133 prompt or input\n line clears the whole prompt so the shell can redraw it at the new size,\n as Ghostty's own terminal does for its shell integration. A prompt can\n still change this with OSC 133;A;redraw=0, redraw=1 or redraw=last.\n\n A NULL value pointer resets to the library default of false.\n\n Input type: bool*"]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MAX_VALUE: GhosttyTerminalOption = 2147483647;
 #[doc = " Terminal option identifiers.\n\n These values are used with ghostty_terminal_set() to configure\n terminal callbacks and associated state.\n\n @ingroup terminal"]
 pub type GhosttyTerminalOption = ::core::ffi::c_uint;

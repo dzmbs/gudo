@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Sun, 15 Nov 2026 20:07:46 +0100
+Subject: [PATCH] terminal: let C embedders say the shell redraws its prompt on
+ resize
+
+The C API turns off clearing the prompt on resize, since embedders do not
+necessarily install Ghostty's shell integration. An embedder that does
+install it (zsh's sends OSC 133;A without a redraw option and relies on the
+terminal's default) had no way to get Ghostty's behaviour back: after a
+resize the shell redrew its prompt over the old one, leaving the reflowed
+copy (a wrapped right prompt, a prompt pulled back from scrollback) on the
+screen.
+
+GHOSTTY_TERMINAL_OPT_SHELL_REDRAWS_PROMPT sets the flag; a prompt's own
+redraw option still changes it, and NULL restores the default of false.
+---
+ include/ghostty/vt/terminal.h | 14 ++++++++++++++
+ src/terminal/c/terminal.zig   | 29 +++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/include/ghostty/vt/terminal.h b/include/ghostty/vt/terminal.h
+index bb887c0..fc57f16 100644
+--- a/include/ghostty/vt/terminal.h
++++ b/include/ghostty/vt/terminal.h
+@@ -2651,6 +2651,20 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * Input type: GhosttyTerminalResizeWindowFn
+    */
+   GHOSTTY_TERMINAL_OPT_RESIZE_WINDOW = 48,
++
++  /**
++   * Set whether the shell redraws its prompt when the terminal is resized.
++   *
++   * When true, a resize while the cursor is on an OSC 133 prompt or input
++   * line clears the whole prompt so the shell can redraw it at the new size,
++   * as Ghostty's own terminal does for its shell integration. A prompt can
++   * still change this with OSC 133;A;redraw=0, redraw=1 or redraw=last.
++   *
++   * A NULL value pointer resets to the library default of false.
++   *
++   * Input type: bool*
++   */
++  GHOSTTY_TERMINAL_OPT_SHELL_REDRAWS_PROMPT = 49,
+   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalOption;
+ 
+diff --git a/src/terminal/c/terminal.zig b/src/terminal/c/terminal.zig
+index a5f6a31..9dd737f 100644
+--- a/src/terminal/c/terminal.zig
++++ b/src/terminal/c/terminal.zig
+@@ -1503,6 +1503,7 @@ pub const Option = enum(c_int) {
+     xt_checksum_extension = 46,
+     program_status = 47,
+     resize_window = 48,
++    shell_redraws_prompt = 49,
+ 
+     _,
+ 
+@@ -1540,6 +1541,7 @@ pub const Option = enum(c_int) {
+             .title_report,
+             .xt_checksum_report,
+             .resize_pull_scrollback,
++            .shell_redraws_prompt,
+             => ?*const bool,
+             .kitty_image_medium_temp_file => ?*const lib.String,
+             .apc_max_bytes,
+@@ -1789,6 +1791,8 @@ fn setTyped(
+             if (value) |ptr| ptr.* else kitty_clipboard.max_write_size,
+         .resize_pull_scrollback => wrapper.terminal.flags.resize_pull_scrollback =
+             if (value) |ptr| ptr.* else true,
++        .shell_redraws_prompt => wrapper.terminal.flags.shell_redraws_prompt =
++            if (value) |ptr| (if (ptr.*) .true else .false) else .false,
+         .xt_checksum_extension => {
+             const bits = if (value) |ptr| ptr.* else 0;
+             const flags = std.math.cast(u5, bits) orelse return .invalid_value;
+@@ -4638,6 +4642,31 @@ test "set resize pull scrollback" {
+     try testing.expect(t.?.terminal.flags.resize_pull_scrollback);
+ }
+ 
++test "set shell redraws prompt" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(
++        &lib.alloc.test_allocator,
++        &t,
++        80,
++        24,
++    ));
++    defer free(t);
++    try testing.expect(t.?.terminal.flags.shell_redraws_prompt == .false);
++
++    const enabled = true;
++    try testing.expectEqual(Result.success, set(t, .shell_redraws_prompt, &enabled));
++    try testing.expect(t.?.terminal.flags.shell_redraws_prompt == .true);
++
++    // A prompt's own redraw option still wins.
++    const prompt = "\x1b]133;A;redraw=last\x07";
++    vt_write(t, prompt, prompt.len);
++    try testing.expect(t.?.terminal.flags.shell_redraws_prompt == .last);
++
++    // NULL restores the default.
++    try testing.expectEqual(Result.success, set(t, .shell_redraws_prompt, null));
++    try testing.expect(t.?.terminal.flags.shell_redraws_prompt == .false);
++}
++
+ test "set and get selection" {
+     var t: Terminal = null;
+     try testing.expectEqual(Result.success, new(
+-- 
+2.54.0 (Apple Git-157)
+

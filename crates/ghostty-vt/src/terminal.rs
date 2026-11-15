@@ -268,7 +268,25 @@ impl Terminal {
             Some(CONTINUATION_MAX_BYTES),
         )?;
         terminal.set_kitty_image_storage_limit(crate::KITTY_IMAGE_STORAGE_LIMIT)?;
+        terminal.enable_prompt_redraw()?;
         Ok(terminal)
+    }
+
+    /// Clears the prompt on resize, as Ghostty's own terminal does, so the shell's redraw at
+    /// the new size is the only copy. Panes run Ghostty's shell integration, whose zsh and fish
+    /// prompts rely on this default (bash's says `redraw=last`); the C API leaves it off for
+    /// embedders without that integration.
+    fn enable_prompt_redraw(&mut self) -> Result<(), Error> {
+        let enabled = true;
+        // SAFETY: the handle is live and the option takes a `bool *`, read before the call
+        // returns.
+        Error::check(unsafe {
+            ffi::ghostty_terminal_set(
+                self.as_raw(),
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SHELL_REDRAWS_PROMPT,
+                ptr::from_ref(&enabled).cast(),
+            )
+        })
     }
 
     /// Takes ownership of a terminal handle returned by libghostty-vt.

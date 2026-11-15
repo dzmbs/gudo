@@ -155,6 +155,10 @@ public final class Terminal: @unchecked Sendable {
         effects = Effects(writeInput: writeInput, writePty: writePty)
         self.configuration = configuration
         Self.configure(terminal, effects: effects, configuration: configuration)
+        // As Ghostty's own terminal (and the daemon's) does: a resize clears the prompt so the
+        // shell's redraw is the only copy. A restored snapshot carries its own setting instead.
+        var shellRedrawsPrompt = true
+        ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_SHELL_REDRAWS_PROMPT, &shellRedrawsPrompt)
 
         self.terminal = terminal
         keyEncoder = encoder

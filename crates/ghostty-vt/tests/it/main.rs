@@ -6,6 +6,7 @@ mod anchors;
 mod continuation;
 mod corrupt;
 mod forget;
+mod prompt_redraw;
 mod queries;
 mod resize;
 mod size;
