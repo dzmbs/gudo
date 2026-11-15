@@ -116,7 +116,6 @@ struct PairingSheet: View {
                     .padding(.bottom, DS.Space.s)
             }
             #endif
-            .macFittedForm(maxHeight: mode == .ssh && live != nil ? 600 : 520, step: formStep)
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -138,7 +137,7 @@ struct PairingSheet: View {
         // field, below a half sheet's fold on a phone.
         .phoneDetents([.large])
         #else
-        // Sized per mode only; content that arrives later (a new public key, an error) scrolls.
+        // Sized per mode only: the form fills what the title and buttons leave and scrolls.
         .frame(width: 500, height: macHeight)
         .animation(DS.Motion.standard, value: mode)
         #endif
@@ -220,11 +219,6 @@ struct PairingSheet: View {
                 }
             }
         }
-    }
-
-    /// Changes that add or remove rows: the sheet may resize for these only.
-    private var formStep: [AnyHashable] {
-        [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil]
     }
 
     /// The destination is a tailnet address or MagicDNS name (100.64.0.0/10, `*.ts.net`).
