@@ -167,6 +167,9 @@ struct WorkspaceView: View {
                     .frame(width: width)
                     .frame(width: shown ? width : 0, alignment: .trailing)
                     .clipped()
+                    // The bar over the column is the sidebar's own surface, up to the window's
+                    // top edge: the clip above stops the column's background at the bar.
+                    .background { Rectangle().fill(DS.Palette.sidebar).ignoresSafeArea(edges: .top) }
                     .overlay(alignment: .trailing) {
                         // A page ends at the fold: no divider to drag there.
                         if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
