@@ -169,14 +169,14 @@ struct PaneTitle<Detail: View>: View {
         HStack(spacing: DS.Space.row) {
             Text(verbatim: headline.program)
                 .font(.caption.weight(.medium))
-                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textTertiary)
+                .foregroundStyle(isFocused ? DS.Palette.text : DS.Palette.textSecondary)
                 .lineLimit(1)
                 .layoutPriority(1)
             detail
             if let directory = headline.directory {
                 Text(verbatim: directory)
                     .font(.caption)
-                    .foregroundStyle(isFocused ? DS.Palette.textSecondary : DS.Palette.textTertiary)
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }

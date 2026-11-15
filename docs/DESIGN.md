@@ -554,7 +554,7 @@ tabs to reorder.
   default, Ghostty's whole-pane dim), Dim Header Only, or None. Off and Dim are as Ghostty.
 - Pane header (only in splits, 24 pt, on the terminal background): program tile with its state
   dot, the program ("zsh", or its display name) in `text` and its folder in `textSecondary`,
-  head-truncated (`PaneTitle`; both `textTertiary` on an unfocused pane, same weight, so nothing
+  head-truncated (`PaneTitle`; both `textSecondary` on an unfocused pane so they stay readable, same weight, so nothing
   moves when focus does), its account ("· ● Work", only when that agent has more than one account
   on the host), "Needs you" or "Failed" as a pill and the program's own words, an "At Limit" mark in the attention colour
   whose menu offers a new tab under another signed-in account, and the header buttons. Tap
