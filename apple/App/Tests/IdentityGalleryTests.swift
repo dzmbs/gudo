@@ -37,7 +37,7 @@ final class IdentityGalleryTests: XCTestCase {
         try XCTSkipIf(path == nil, "set TEST_RUNNER_GUDO_IDENTITY_GALLERY_DIR to render the gallery")
         galleryDirectory = URL(fileURLWithPath: try XCTUnwrap(path), isDirectory: true)
         try FileManager.default.createDirectory(at: galleryDirectory, withIntermediateDirectories: true)
-        for key in [TerminalPreferences.Key.theme, ThemePair.enabledKey] + Self.windowStateKeys {
+        for key in [TerminalPreferences.Key.theme, ThemePair.enabledKey, ProgramTileTint.key] + Self.windowStateKeys {
             savedDefaults[key] = UserDefaults.standard.object(forKey: key)
         }
         savedDefaults["sidebar"] = TabPlacement.sidebarShown
@@ -62,6 +62,22 @@ final class IdentityGalleryTests: XCTestCase {
                         Self.arrange(model, selecting: selectedIndex)
                     }
                 }
+            }
+        }
+    }
+
+    /// Every tint, each program's tile at rest and selected, with every state, on the sidebar.
+    func testRenderTileSheets() throws {
+        for (appearance, themeName) in Self.themes {
+            let theme = ThemeCatalog.theme(named: themeName)
+            for tint in ProgramTileTint.allCases {
+                UserDefaults.standard.set(tint.rawValue, forKey: ProgramTileTint.key)
+                let renderer = ImageRenderer(content: TileSheet(theme: theme))
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.nsImage)
+                let tiff = try XCTUnwrap(image.tiffRepresentation)
+                let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+                try png.write(to: galleryDirectory.appendingPathComponent("tiles-\(appearance)-\(tint.rawValue).png"))
             }
         }
     }
@@ -124,6 +140,40 @@ final class IdentityGalleryTests: XCTestCase {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         try png.write(to: galleryDirectory.appendingPathComponent("\(name).png"))
+    }
+}
+
+private struct TileSheet: View {
+    let theme: TerminalTheme
+    private let programs = ["claude", "codex", "pi", "opencode", "amp", "nvim", "git", "zsh"]
+    private let states: [AgentState?] = [nil, .idle, .working, .done, .blocked, .error]
+
+    var body: some View {
+        let chrome = ChromePalette(theme: theme)
+        VStack(alignment: .leading, spacing: DS.Space.s) {
+            ForEach(programs, id: \.self) { name in
+                let identity = ProgramCatalog.identity(process: name)
+                HStack(spacing: DS.Space.l) {
+                    Text(identity.displayName).font(DS.Font.meta).frame(width: 90, alignment: .leading)
+                    ForEach(Array(states.enumerated()), id: \.offset) { _, state in
+                        HStack(spacing: DS.Space.xs) {
+                            ProgramTile(identity, size: 17, state: state)
+                            ProgramTile(identity, size: 17, isSelected: true, state: state)
+                                .padding(DS.Space.xxs)
+                                .background(DS.Palette.selectedFill, in: .rounded(DS.Radius.control))
+                            if let state { StatePill(state) }
+                        }
+                        .frame(width: 130, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .padding(DS.Space.l)
+        .background(chrome.color(.sidebar))
+        .foregroundStyle(DS.Palette.text)
+        .environment(\.terminalTheme, theme)
+        .environment(\.chrome, chrome)
+        .environment(\.colorScheme, chrome.scheme)
     }
 }
 #endif
