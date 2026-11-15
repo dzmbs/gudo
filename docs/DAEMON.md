@@ -2564,8 +2564,12 @@ snapshot to a file on the host. `browser_upload` first asks the app to approve t
 `files: [{name, mime_type, data}]` (base64) with `approved` and `approved_origin`, at most 3 MB
 in all so the call fits one frame (hook lines may be `MAX_FRAME_LEN` long). Paths must be in the
 agent's working tree; keys, credentials, keychains, browser profiles and the state directory are
-refused (docs/security/host-local.md). The app runs them on the browser leaf beside the agent's pane
-(opened by the first navigate): the user sees each step (cursor and highlight), can take over,
+refused (docs/security/host-local.md). The app runs them on the browser leaves beside the agent's pane
+(opened by the first navigate, in the background: the user's tab, focus and sheets never change, and
+the tab's row marks the change). The tab's pages are shared, but each agent pane has its own current
+page; every tool but `browser_tabs` takes `page` (`t1`), and a current page someone else closed
+fails with `page_closed: … closed by <who>. Open pages: …` instead of moving to another. The user
+sees each step (cursor and highlight), can take over,
 and approves purchases and form submits on sign-in or payment pages, or types passwords
 themselves; the call waits meanwhile. The agent skill's `references/browser.md` teaches agents
 the tools.

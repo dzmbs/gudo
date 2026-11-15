@@ -25,7 +25,11 @@ dialogs, upload, debug), from the shell.
 5. A stale ref means the page moved on: snapshot again. Don't guess refs.
 6. Dialogs hold the page until `browser_dialog` answers them. Pages opened in a new window
    become tabs (`browser_tabs`).
-7. Debug with `browser_console`, `browser_network` and `browser_wait`.
+7. The pages beside a terminal are shared by the agents in that tab, but each terminal has its
+   own current page: the one it opened or switched to. Every tool takes `page` (`t1`, `t2`) to
+   act on another. If someone closes your current page, tools answer `page_closed` with who
+   closed it and the pages still open; they never move you to another page by themselves.
+8. Debug with `browser_console`, `browser_network` and `browser_wait`.
 
 ## The user is there
 
@@ -41,7 +45,7 @@ dialogs, upload, debug), from the shell.
 
 Opens a URL (a bare host means https, localhost means http), or `back`, `forward`, `reload`.
 
-Arguments: `url` (required).
+Arguments: `url` (required), `page`.
 
 ### `browser_snapshot`
 
@@ -49,97 +53,99 @@ The page as an accessibility tree. `filter`: `interactive` (controls in view, th
 `visible` (everything in view) or `all`. `ref` limits it to one subtree, `full` lists the whole
 tree instead of changes, `save_to_file` writes a long one to a file and returns its path.
 
-Arguments: `filter`, `depth`, `ref`, `full`, `save_to_file`.
+Arguments: `filter`, `depth`, `ref`, `full`, `save_to_file`, `page`.
 
 ### `browser_find`
 
 Elements matching a plain description ("search field"), up to 20, in snapshot format.
 
-Arguments: `query` (required).
+Arguments: `query` (required), `page`.
 
 ### `browser_get_text`
 
 The page's visible text, main content first.
 
-Arguments: none.
+Arguments: `page`.
 
 ### `browser_click`
 
-Arguments: `target` (required), `modifiers`, `force`.
+Arguments: `target` (required), `modifiers`, `force`, `page`.
 
 ### `browser_double_click`
 
-Arguments: `target` (required), `force`.
+Arguments: `target` (required), `force`, `page`.
 
 ### `browser_hover`
 
-Arguments: `target` (required), `force`.
+Arguments: `target` (required), `force`, `page`.
 
 ### `browser_type`
 
 Types key by key into the focused field, or clicks `target` first; `submit` presses Enter after.
 Password fields are left to the user.
 
-Arguments: `text` (required), `target`, `submit`, `force`.
+Arguments: `text` (required), `target`, `submit`, `force`, `page`.
 
 ### `browser_fill`
 
 Sets a field's value at once: text, a date or number as text, true or false for checkboxes, an
 option's value or text for selects.
 
-Arguments: `target` (required), `value` (required).
+Arguments: `target` (required), `value` (required), `page`.
 
 ### `browser_press`
 
 Keys at the focus: `Enter`, a chord such as `cmd+a`, or a sequence such as `Tab Tab Enter`.
 
-Arguments: `keys` (required), `repeat`.
+Arguments: `keys` (required), `repeat`, `page`.
 
 ### `browser_scroll`
 
-Arguments: `direction` (required), `amount`, `target`.
+Arguments: `direction` (required), `amount`, `target`, `page`.
 
 ### `browser_scroll_to`
 
-Arguments: `target` (required).
+Arguments: `target` (required), `page`.
 
 ### `browser_drag`
 
 Drags from `target` to `to` (sliders, sortable lists, drag and drop).
 
-Arguments: `target` (required), `to` (required).
+Arguments: `target` (required), `to` (required), `page`.
 
 ### `browser_wait`
 
 Until `text` appears, `selector` matches, `until` is `load` or `network_idle`, or for `seconds`;
 at most 30 s.
 
-Arguments: `text`, `selector`, `until`, `seconds`.
+Arguments: `text`, `selector`, `until`, `seconds`, `page`.
 
 ### `browser_screenshot`
 
 A picture of the visible page; its pixels are the coordinates targets use. `annotate` labels
 each interactive element with its ref.
 
-Arguments: `annotate`.
+Arguments: `annotate`, `page`.
 
 ### `browser_zoom`
 
 A close-up of `region` `[x0, y0, x1, y1]` in screenshot pixels.
 
-Arguments: `region` (required).
+Arguments: `region` (required), `page`.
 
 ### `browser_tabs`
 
 `action` `list`, `new` (optionally at `url`), `switch` or `close` (by `tab_id`: `t1`, `t2`, …).
+The list marks your current page with `*` and names other terminals' current pages. `new` and
+`switch` change only your current page; nothing comes forward on the user's screen.
 
-Arguments: `action` (required), `tab_id`, `url`.
+Arguments: `action` (required), `tab_id` (for switch and close), `url`.
 
 ### `browser_dialog`
 
 Answers an alert, confirm, prompt or leave-page check: `accept`, with `text` for a prompt.
 
-Arguments: `accept` (required), `text`.
+Arguments: `accept` (required), `text`, `page`.
 
 ### `browser_upload`
 
@@ -148,19 +154,19 @@ this project, or `files` given inline; at most 3 MB in all. The user approves ea
 device; keys, credentials and files outside the project are never uploaded. `cancel` closes an
 open picker.
 
-Arguments: `target`, `paths`, `files`, `cancel`.
+Arguments: `target`, `paths`, `files`, `cancel`, `page`.
 
 ### `browser_console`
 
 Console messages and uncaught errors since the last read.
 
-Arguments: none.
+Arguments: `page`.
 
 ### `browser_network`
 
 Requests since the last read: method, URL, status, type, duration.
 
-Arguments: none.
+Arguments: `page`.
 
 ## From the shell
 

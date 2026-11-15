@@ -45,6 +45,14 @@ fn none() -> Value {
     json!({})
 }
 
+/// Every tool but `browser_tabs` acts on one page: the caller's current page unless it names one.
+fn page() -> Value {
+    json!({
+        "type": "string",
+        "description": "The page to act on (t1, t2 from browser_tabs). Each terminal has a current page of its own; this one when left out.",
+    })
+}
+
 fn force() -> Value {
     json!({ "type": "boolean", "default": false, "description": "Skip the checks that the element is visible, enabled, still and not covered." })
 }
@@ -192,7 +200,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_tabs",
-        description: "The pages beside this terminal, with ids t1, t2, …: list them, open a new one (optionally at url), switch to one or close one by tab_id. Pages a page opens (links to a new window) become tabs here.",
+        description: "The pages beside this terminal, with ids t1, t2, …: list them, open a new one (optionally at url), switch to one or close one by tab_id. Other terminals' agents may use pages here too; each has its own current page, which the list marks. A current page someone else closed is reported as page_closed, never swapped for another. Pages a page opens (links to a new window) become tabs here.",
         properties: || {
             json!({
                 "action": { "type": "string", "enum": ["list", "new", "switch", "close"] },
@@ -262,10 +270,16 @@ pub fn tools() -> Vec<Value> {
     TOOLS
         .iter()
         .map(|tool| {
+            let mut properties = (tool.properties)();
+            if tool.name != "browser_tabs"
+                && let Some(map) = properties.as_object_mut()
+            {
+                map.insert("page".into(), page());
+            }
             json!({
                 "name": tool.name,
                 "description": tool.description,
-                "inputSchema": { "type": "object", "properties": (tool.properties)(), "required": tool.required },
+                "inputSchema": { "type": "object", "properties": properties, "required": tool.required },
                 "annotations": { "readOnlyHint": tool.read_only, "openWorldHint": true },
             })
         })
@@ -326,6 +340,14 @@ pub fn call_with(
     {
         return error(&format!("`{missing}` is required"));
     }
+    if name == "browser_tabs"
+        && let Some(action @ ("switch" | "close")) = args["action"].as_str()
+        && args.get("tab_id").is_none()
+    {
+        return error(&format!(
+            "`tab_id` is required to {action} a tab: call browser_tabs with action list for the ids."
+        ));
+    }
     if name == "browser_upload" {
         return upload(&own(&args), backend, &UploadScope::current());
     }
@@ -375,8 +397,19 @@ fn ask(name: &str, args: &Value, backend: &mut dyn Backend) -> Result<String, Va
 /// `browser_upload`: the owner approves the files and the origin on the device before any file
 /// on this host is read; then they go to that origin only.
 fn upload(args: &Value, backend: &mut dyn Backend, scope: &UploadScope) -> Value {
+    let page = args.get("page").cloned();
+    let on_page = |mut ask: Value| {
+        if let Some(page) = &page {
+            ask["page"] = page.clone();
+        }
+        ask
+    };
     if args.get("cancel") == Some(&Value::Bool(true)) {
-        return match ask("browser_upload", &json!({ "cancel": true }), backend) {
+        return match ask(
+            "browser_upload",
+            &on_page(json!({ "cancel": true })),
+            backend,
+        ) {
             Ok(json) => result(&json, false),
             Err(error) => error,
         };
@@ -388,7 +421,11 @@ fn upload(args: &Value, backend: &mut dyn Backend, scope: &UploadScope) -> Value
         Ok(plan) => plan,
         Err(why) => return error(&why),
     };
-    let review = match ask(REVIEW_TOOL, &plan.review(args.get("target")), backend) {
+    let review = match ask(
+        REVIEW_TOOL,
+        &on_page(plan.review(args.get("target"))),
+        backend,
+    ) {
         Ok(json) => json,
         Err(failure) if failure.to_string().contains(REVIEW_TOOL) => {
             return error(&format!(
@@ -412,7 +449,7 @@ fn upload(args: &Value, backend: &mut dyn Backend, scope: &UploadScope) -> Value
     if let Some(target) = args.get("target") {
         approved["target"] = target.clone();
     }
-    match ask("browser_upload", &approved, backend) {
+    match ask("browser_upload", &on_page(approved), backend) {
         Ok(json) => result(&json, false),
         Err(error) => error,
     }
@@ -826,6 +863,49 @@ mod tests {
         let result = upload(&json!({ "paths": ["/nonexistent/f"] }), &mut fake, &scope);
         assert_eq!(result["isError"], true);
         assert!(fake.asked.is_empty());
+    }
+
+    #[test]
+    fn every_page_tool_takes_a_page() {
+        for tool in tools() {
+            let takes_page = tool["inputSchema"]["properties"].get("page").is_some();
+            assert_eq!(
+                takes_page,
+                tool["name"] != "browser_tabs",
+                "{}",
+                tool["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn switching_or_closing_a_tab_without_its_id_is_refused_here() {
+        for action in ["switch", "close"] {
+            let mut fake = Recorder::default();
+            let result = call("browser_tabs", &json!({ "action": action }), &mut fake);
+            assert_eq!(result["isError"], true);
+            let text = result["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("`tab_id`"), "{text}");
+            assert!(fake.asked.is_empty());
+        }
+    }
+
+    #[test]
+    fn an_upload_goes_to_the_page_it_names() {
+        let (_home, scope) = project();
+        let mut fake = Recorder {
+            replies: vec![approved("https://forms.example")],
+            ..Recorder::default()
+        };
+        upload(
+            &json!({ "paths": ["notes.txt"], "page": "t2" }),
+            &mut fake,
+            &scope,
+        );
+        assert_eq!(fake.asked.len(), 2);
+        for (_, asked) in &fake.asked {
+            assert_eq!(asked["page"], "t2", "{asked}");
+        }
     }
 
     #[test]

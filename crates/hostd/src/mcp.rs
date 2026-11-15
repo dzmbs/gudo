@@ -40,7 +40,8 @@ browser_snapshot (role \"name\" [ref_3]) rather than screenshots, act with targe
 
 If an action says it had no effect or the element is covered, deal with the cover (it is in the \
 snapshot), focus it and use browser_press, or click coordinates from browser_screenshot. Answer \
-dialogs with browser_dialog; new windows become tabs (browser_tabs). A stale ref means the page \
+dialogs with browser_dialog; new windows become tabs (browser_tabs). Each terminal has its own \
+current page; pass page to act on another. A stale ref means the page \
 moved on: snapshot again. Sign-ins, passwords, payments and purchases are left to the user on \
 the device: the tool waits while they act, then answers. list_drawings and get_drawing read the \
 drawings, sketches and images the user made in this terminal session; with no id, get_drawing \
