@@ -59,9 +59,9 @@ private struct DictationIndicator: ViewModifier {
             }
             .padding(.bottom, DS.Space.l)
             .padding(.horizontal, DS.Space.l)
-            .movingTransition(.bottom)
+            .motionTransition(.toast(from: .bottom))
         }
-        .animation(DS.Motion.overlay, value: voice.phase)
+        .animation(DS.Motion.standard, value: voice.phase)
     }
 
     private var title: String {

@@ -309,7 +309,7 @@ struct NewTaskSheet: View {
         guard let hostID else { return }
         let answer = await feed.installs(on: hostID) ?? [:]
         guard !Task.isCancelled else { return }
-        withAnimation(DS.Motion.snappy) { installs = answer }
+        withAnimation(DS.Motion.standard) { installs = answer }
     }
 
     private func install(_ command: String) {
@@ -321,7 +321,7 @@ struct NewTaskSheet: View {
                     cwd: "~", sessionId: session, name: "Install \(title)", command: command)
                 model.reveal(host: host.id, pane: pane)
             } catch {
-                withAnimation(DS.Motion.snappy) { failure = ScreenError.describe(error) }
+                withAnimation(DS.Motion.standard) { failure = ScreenError.describe(error) }
             }
         }
     }
@@ -351,7 +351,7 @@ struct NewTaskSheet: View {
                 dismiss()
             } catch {
                 isStarting = false
-                withAnimation(DS.Motion.snappy) { failure = ScreenError.describe(error) }
+                withAnimation(DS.Motion.standard) { failure = ScreenError.describe(error) }
             }
         }
     }
@@ -368,7 +368,7 @@ private struct RunnerPicker: View {
             ForEach(NewTaskSheet.Runner.allCases) { runner in
                 let selected = runner == selection
                 Button {
-                    withAnimation(DS.Motion.snappy) { selection = runner }
+                    withAnimation(DS.Motion.standard) { selection = runner }
                 } label: {
                     HStack(spacing: DS.Space.row) {
                         if let agent = runner.agent {

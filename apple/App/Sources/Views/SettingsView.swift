@@ -190,11 +190,11 @@ struct SettingsView: View {
         Task { @MainActor in
             // The form (iOS) or the pane (Mac) replaces the results first.
             try? await Task.sleep(for: .milliseconds(150))
-            withAnimation(DS.Motion.snappy) { proxy.scrollTo(entry.id, anchor: .center) }
+            withAnimation(DS.Motion.standard) { proxy.scrollTo(entry.id, anchor: .center) }
             highlight = entry.id
             // Once more after the search bar has closed and the form settled.
             try? await Task.sleep(for: .milliseconds(350))
-            withAnimation(DS.Motion.snappy) { proxy.scrollTo(entry.id, anchor: .center) }
+            withAnimation(DS.Motion.standard) { proxy.scrollTo(entry.id, anchor: .center) }
             try? await Task.sleep(for: .seconds(1.6))
             if highlight == entry.id { highlight = nil }
             if jump == entry { jump = nil }
@@ -495,7 +495,7 @@ private struct AppearanceSection: View {
         } set: { on in
             windowTheme = on ? .auto : (ThemeCatalog.theme(named: theme).isLight ? .dark : .light)
         }
-        Toggle(isOn: matches.animation(DS.Motion.quick)) {
+        Toggle(isOn: matches.animation(DS.Motion.micro)) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Window Matches Theme")
                 Text("Sidebar, toolbar and key bar in the theme's colours")

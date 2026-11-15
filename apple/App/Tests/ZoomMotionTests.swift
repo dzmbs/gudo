@@ -17,7 +17,7 @@ final class ZoomMotionTests: XCTestCase {
     /// The frames SwiftUI draws for a pane whose target changes at the given times: the canvas's
     /// spring, retargeted from where the pane is with the speed it has, as SwiftUI does.
     private static func trajectory(_ targets: [(time: Double, frame: CGRect)], until end: Double = 0.8) -> [CGRect] {
-        let spring = DS.Motion.splitSpring
+        let spring = DS.Motion.Role.structural.spring
         func components(_ rect: CGRect) -> [Double] { [rect.minX, rect.minY, rect.maxX, rect.maxY] }
         var position = components(targets[0].frame)
         var velocity = [Double](repeating: 0, count: 4)

@@ -188,7 +188,7 @@ private struct SettingAnchor: ViewModifier {
             .listRowBackground(
                 Rectangle().fill(DS.Palette.groupedRow)
                     .overlay(Rectangle().fill(DS.Palette.accent.opacity(lit ? 0.18 : 0)))
-                    .animation(DS.Motion.overlay, value: lit))
+                    .animation(DS.Motion.standard, value: lit))
     }
 }
 

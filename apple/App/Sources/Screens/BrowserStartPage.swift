@@ -46,8 +46,8 @@ struct BrowserStartPage: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background(theme.background)
-        .animation(DS.Motion.snappy, value: text.isEmpty)
-        .animation(DS.Motion.snappy, value: devServers)
+        .animation(DS.Motion.standard, value: text.isEmpty)
+        .animation(DS.Motion.standard, value: devServers)
         .onAppear { if focusOnAppear { isFocused = true } }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("start-page")
@@ -91,7 +91,7 @@ struct BrowserStartPage: View {
         .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel))
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.panel).strokeBorder(DS.Palette.border))
         .shadow(color: .black.opacity(isFocused ? 0.12 : 0.05), radius: isFocused ? 16 : 6, y: 4)
-        .animation(DS.Motion.snappy, value: isFocused)
+        .animation(DS.Motion.standard, value: isFocused)
     }
 
     private func move(_ step: Int) -> KeyPress.Result {

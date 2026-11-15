@@ -156,7 +156,7 @@ extension WindowModel {
     /// terminal does.
     func join(_ ref: TabRef, projectOf origin: TabRef?) {
         guard let origin, let project = groups.project(of: origin), let index = project.tabs.firstIndex(of: origin) else { return }
-        withAnimation(DS.Motion.reorder) { groups.apply(groups.planner().move(ref, into: project.id, at: index + 1)) }
+        withAnimation(DS.Motion.standard) { groups.apply(groups.planner().move(ref, into: project.id, at: index + 1)) }
         groups.collapsedProjects.remove(project.id)
         flashJoined(ref)
     }
@@ -164,7 +164,7 @@ extension WindowModel {
     /// Joins tabs that arrived for a project's + or ⌘T, and keeps watching while any is due
     /// (a daemon makes its tab a round trip later).
     private func claimJoinedTabs() {
-        let joined = withAnimation(DS.Motion.reorder) { groups.claimNewTabs() }
+        let joined = withAnimation(DS.Motion.standard) { groups.claimNewTabs() }
         for ref in joined {
             if let project = groups.project(of: ref) { groups.collapsedProjects.remove(project.id) }
             flashJoined(ref)
@@ -189,7 +189,7 @@ extension WindowModel {
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
             guard let self, joinedTab == ref else { return }
-            withAnimation(DS.Motion.overlay) { joinedTab = nil }
+            withAnimation(DS.Motion.standard) { joinedTab = nil }
         }
     }
 

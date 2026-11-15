@@ -148,38 +148,60 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 
 ### Motion
 
-| Token | Curve | Use | Source |
-|---|---|---|---|
-| `snappy` | snappy 0.25 s | selection, rows, tab switch | - |
-| `quick` | easeInOut 0.15 s | tab pill, ⌘ hints, lit toolbar toggles | - |
-| `hover` | easeInOut 0.1 s | hover fills | - |
-| `palette` | none (Mac) / easeOut 0.15 s fade (touch) | command palette in/out | `animationBehavior = .none` on the Mac |
-| `overlay` | easeOut 0.2 s | overlays in/out, search corner snap | Ghostty search bar |
-| `indicator` | spring 0.3 / 0.8 | badges, status glyphs | Ghostty `KeyStateIndicator` |
-| `bell` | easeInOut 0.3 s | bell border | Ghostty |
-| `panel` | smooth 0.35 s | panels, tab style switch | - |
-| `fold` | smooth 0.4 s | the iPhone Duo's layout moving to a new posture (pages parting, the deck rising); ends on time so the grids reflow once | - |
-| resize overlay | visible 750 ms after the last change | cols × rows | Ghostty `resize-overlay-duration` |
-| `banner` | spring 0.42 / 0.82 | banners (toasts) in and out: from below, grown from 0.9, a 4 pt blur | - |
-| `menu` | spring 0.3 / 0.86 | menus, popovers, the host switcher's highlight | - |
-| `swipe` | spring 0.32 / 0.86 | a row settling open or shut after a swipe | iOS Mail |
-| `reorder` | spring 0.3 / 0.84 | sidebar rows making room for a dragged tab, a drop settling; a collapsed project springs open after 0.6 s | Finder, Safari's sidebar |
-| `press` | spring 0.2 / 0.7 | a quiet button's press (scale 0.97) | - |
-| `split` | spring 0.3 s, no bounce (within a point by `splitSettle`, 0.42 s) | panes splitting, closing, zooming in and out, a drop landing, a dragged pane's neighbours making room (that preview uses `reorder`) | - |
-| `lift` | spring 0.42 s, bounce 0.12 | a pane floating out of its tab or docking back, a window to the tray and back: the pane and every neighbour making room move in this one spring | - |
-| layout motion | every terminal a layout change moves | travels as its last frame, anchored top-left (cropped as it shrinks, on its background as it grows); its grid changes once, for where it is going, before it moves (one SIGWINCH), and it draws again when it is there and the program's redraw has come in (quiet 30 ms, 150 ms at most). Nothing reflows on the way, nothing jumps at rest, no cols × rows overlay. The sidebar's animation holds frames the same way and changes the grids once it settles (`TerminalSurface.prepareResize`, `holdFrames`) | Ghostty's resize coalescing |
-| lift beat | keyframes: 1.03 (snappy 0.16 s) → 1 (smooth 0.36 s) floating; 0.985 → 1 docking | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion | macOS window drag-out |
-| `settle` | spring 0.34 / 0.86 | a floating window let go, carried by its flick onto the line it snaps to; a keyboard move or resize; picture in picture settling in a corner | iOS PiP |
-| toast | 2.4 s; failures 4 s; with an action 5 s | | - |
-| agent toast | 8 s, held while the pointer or a finger is on the stack, +0.5 s after | needs you / finished / failed, max 3, newest at the bottom | - |
-| shimmer | 3 s sweep, 6-glyph cosine band, secondary → full ink | a working agent's title (sidebar, Agents); plain text under Reduce Motion | - |
-| feedback delay | 200 ms before any progress UI | | - |
+One vocabulary, `DS.Motion` (`Tokens/Tokens.swift`, `Tokens/Motion.swift`). Every animation is a
+critically damped spring (no overshoot, nothing reverses) that keeps its speed when interrupted, so a
+second tap mid-move carries on from where the thing is. Chrome moves only by opacity, scale and
+offset; it never animates its own frame, size or padding. Small things are fast and light.
 
-Only the working spinner and the working shimmer loop; under Reduce Motion both stand still (and still reads as
-"working"), and the secure-input gradient stops. Both loops are Core Animation on a layer (`LayerAnimations.swift`):
-the render server draws them, no view body runs per frame, they stop off screen, and the app reaches idle. Anything that slides or grows in (sidebar, tab strip, toasts,
-agent toasts, notices, banners, the exit bar) uses `movingTransition(_:)` / `scalingTransition(_:)`: under Reduce
-Motion it only fades.
+| Role | Spring | Within 1 % by | Use |
+|---|---|---|---|
+| `micro` | 0.12 s, no bounce | 0.15 s | hover fills, a press (scale 0.97), pills, badges, status glyphs, ⌘ hints, lit toggles, a field's focus ring |
+| `standard` | 0.22 s, no bounce | 0.25 s | rows and selection, toasts and banners, menus, popovers, the host switcher's highlight, panels and bars, overlays, the search corner snap, a swipe settling, sidebar rows making room for a drag, the bell border |
+| `structural` | 0.3 s, no bounce | 0.34 s (within a point of a full-window move by `structuralSettle`, 0.42 s) | splits, closing, zoom, a pane floating out or docking, a window to the tray and back, a floating window settling after a flick, picture in picture, the sidebar, the iPhone Duo's fold |
+| `palette` | none on the Mac (`animationBehavior = .none`); `standard` on touch | | command palette in and out |
+
+Named transitions (`.motionTransition(_:)`), each only opacity, scale and offset, each on its
+own role so it never pops even when the change is not animated:
+
+| Transition | Away from rest | Role | Use |
+|---|---|---|---|
+| `fade` | opacity 0 | the change's own | anything that should only fade |
+| `pill(anchor:)` | opacity 0, scale 0.86 | `micro` | pills, badges, small buttons, a program mark changing |
+| `toast(from:)` | opacity 0, scale 0.96, 16 pt toward the edge | `standard` | banners, agent toasts (from the leading edge), notices, secret prompts, knocks, presence cards, the update card |
+| `row` | opacity 0, scale 0.97 from the top, 4 pt up | `standard` | a sidebar row arriving or leaving |
+| `panel(from:)` | opacity 0, scale 0.98, 10 pt toward the edge | `standard` | the tab strip, bottom bars, the exit bar, the browser's address panel |
+| `card(anchor:)` | opacity 0, scale 0.96 | `standard` | the reconnect card, cards under an avatar, picture in picture |
+| `tab` | opacity 0, scale 0.985 | `standard` | a tab arriving in the strip |
+| `arriving` | opacity 0, after `arrivalDelay` (0.16 s) | `micro` | what lands where a structural move is heading: a new divider, the minimize button once the header has made room, the exit control's label |
+
+Under Reduce Motion every named transition only fades. `attentionCue(trigger:)` is the one beat
+that draws the eye to something that changed (it grows to 1.08 on `micro` and settles back on
+`standard`); it does nothing under Reduce Motion.
+
+| Timing | Value | Use |
+|---|---|---|
+| layout motion | every terminal a layout change moves | travels as its last frame, anchored top-left (cropped as it shrinks, on its background as it grows); its grid changes once, for where it is going, before it moves (one SIGWINCH), and it draws again when it is there and the program's redraw has come in (quiet 30 ms, 150 ms at most). Nothing reflows on the way, nothing jumps at rest, no cols × rows overlay. The sidebar's animation holds frames the same way and changes the grids once it settles (`TerminalSurface.prepareResize`, `holdFrames`, `structuralSettle`) |
+| lift beat | 1.03 floating, 0.985 docking, on `micro` until `arrivalDelay`, back to 1 on `structural` by `structuralSettle` | the pane coming towards you as it lifts, pressed in as it docks; off under Reduce Motion |
+| resize overlay | visible 750 ms after the last change | cols × rows (Ghostty `resize-overlay-duration`) |
+| toast | 2.4 s; failures 4 s; with an action 5 s | |
+| agent toast | 8 s, held while the pointer or a finger is on the stack, +0.5 s after | needs you / finished / failed, max 3, newest at the bottom |
+| shimmer | `Loop.shimmerPeriod` 3 s sweep, 6-glyph cosine band, secondary → full ink | a working agent's title (sidebar, Agents); plain text under Reduce Motion |
+| feedback delay | 200 ms before any progress UI | |
+
+Only the working spinner (`Loop.spinnerPeriod`), the working shimmer and the secure-input
+gradient (`Loop.secureInput`) loop, with the typing dots and a knock's waiting dot, which only
+pulse opacity; under Reduce Motion they all stand still (and still read as "working"). The spinner and shimmer are Core Animation on a layer (`LayerAnimations.swift`): the
+render server draws them, no view body runs per frame, they stop off screen, and the app reaches
+idle. UIKit and layer animations use the same springs (`Role.layerAnimation(keyPath:)`,
+`Role.timingParameters`, `UIView.animate(DS.Motion.standard)`).
+
+`MotionLintTests` (DesignSystem) fails on any literal curve, spring, duration or delay outside
+`DS.Motion`, and on `.transition` used directly instead of a named one; a line may opt out with
+`motion-lint-allow:` and its reason (the keyboard following the system's own duration, TerminalKit
+below DesignSystem, the Duo's deck rising its full height). `MotionTests` checks every role is
+critically damped, never reverses and settles within its budget, and drives each named transition
+on a sampled clock to check it only fades, grows and travels, settles in time and never changes
+layout.
 
 ### Haptics (iPhone/iPad, touch only)
 
@@ -209,7 +231,7 @@ Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.pa
 | `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
 | `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), ink 8 % hover / 15 % press, radius 6. Glass stays on bars and floating surfaces |
-| `ControlState`, `controlFill(_:in:)`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | hand-drawn controls (pane header glyphs, sidebar rows): rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `hover`; disabled drops the fill and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why |
+| `ControlState`, `controlFill(_:in:)`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | hand-drawn controls (pane header glyphs, sidebar rows): rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `micro`; disabled drops the fill and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why |
 | `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and a soft 25 % halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
@@ -298,7 +320,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   the states), its name in the section font and + New Terminal; its tabs under it with a 2 pt
   thread of its colour at their leading edge, each naming its host on the second line. Drop a tab
   on another to group them (the row lights in the colour), between rows to place it (the rows
-  slide apart with `DS.Motion.reorder`; the dragged row leaves a gap, never slides over others).
+  slide apart with `DS.Motion.standard`; the dragged row leaves a gap, never slides over others).
   A one-tap "Group 3 tabs in app" suggestion when loose tabs share a repository. The strip draws
   a project's colour under its tabs.
 - Tab history (APP-ARCHITECTURE §25), in the suggestion's voice at the top of the list: one
@@ -412,7 +434,7 @@ tabs to reorder.
 
 docs/APP-ARCHITECTURE.md §28 has the model. One canvas per tab (`PaneCanvas.swift`): every pane,
 tiled or floating, is one view keyed by its id, so floating, docking, zooming, dropping and
-minimizing only move and resize views in one `lift` spring, and no terminal is ever rebuilt.
+minimizing only move and resize views in one `structural` spring, and no terminal is ever rebuilt.
 
 - **Header buttons** (every pane while more than one shows, the zoomed one included): Split
   Right, Split Down, Float/Dock (lit in the accent while floating), Minimize (windows only),
@@ -422,7 +444,7 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   Zoom, Pop Out to Window, Copy Pane ID, Close.
 - **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
   glass chip with its mark, name and directory follows the hand, and the canvas shows the drop
-  before it happens: the other panes make room in the `reorder` spring (as pictures of their
+  before it happens: the other panes make room in the `standard` spring (as pictures of their
   last frame) and the dragged pane sits where it will land, lit by a region in the accent at
   20 % with a 1.5 pt rim (radius `pane`, inset 4). That region is exactly the frame the drop
   gives (worked out by applying the op to a copy of the session), so a pane dragged out of a
@@ -441,7 +463,7 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   14/28 on touch, never under 240 × 140). It snaps (10 pt) to the tab's edges at an 8 pt
   margin, its halves and thirds and other windows' edges (aligned or 8 pt apart), with a 1 pt
   accent guide per snapped edge; a flick carries it as far as a scroll view would and it
-  `settle`s. Held 0.38 s over a pane's outer quarter, it offers to dock there (the same exact
+  settles in the `structural` spring. Held 0.38 s over a pane's outer quarter, it offers to dock there (the same exact
   region); letting go docks it. Focus raises; new windows cascade 4 % down and right.
 - **Float transition.** The pane lifts out of the tree to its window frame while the panes
   beside it expand into its space in the same spring, the lift beat and the shadow growing
@@ -458,7 +480,7 @@ minimizing only move and resize views in one `lift` spring, and no terminal is e
   terminals keep their grids: the program, and every other device, sees no resize. ⌥⌘F hides
   every window for a look underneath.
 - **Zoom** (⇧⌘↩, the header's button, double-click): the pane grows over its neighbours to
-  take the tab (or its window, in a window of several) in the `split` spring, a picture of its
+  take the tab (or its window, in a window of several) in the `structural` spring, a picture of its
   last frame on the way, and the windows step aside; zooming out it shrinks back onto them. Its
   header stays,
   with Zoom lit as the way back, and the title's subtitle says "Zoomed".
@@ -481,7 +503,7 @@ floating-zoom` (`Model/FloatingFixtures.swift`). Layout motion: `MacSnapshotTest
 two shells at a prompt with a right-aligned clock, `-screen transitions-columns|transitions-rows`,
 `Model/TransitionFixtures.swift`) and `testDragPreview` (`drag-preview-N`, `drag-drop-N`: two
 stacked panes, the lower dragged onto the upper's left half). Off a display (a locked Mac) the sequences are
-drawn at points along the `lift` spring (`CanvasLayout.blended`) and each terminal is drawn into
+drawn at points along the `structural` spring (`CanvasLayout.blended`) and each terminal is drawn into
 the capture from its own frame, since such a window gets no animation or display-link frames.
 
 ### Key bar (iPad, iPhone)
@@ -523,7 +545,7 @@ hardware's halves, not resizable: no divider handle on the fold (HIG: split view
 - Folding, unfolding, opening into a book and standing it up keep the tab, the focused pane, its
   scroll position, the cursor and the composer draft.
 - The views move rather than being rebuilt: the sidebar's width animates into the page and the
-  deck rises from below in one `fold` animation.
+  deck rises from below in one `structural` spring.
 - The grids reflow once as it settles. No cols × rows overlay, no blank frame
   (`snaps/duo/transitions`).
 - Under Reduce Motion the layout changes at once.
@@ -863,7 +885,7 @@ Return. Canvas panes show the same editor full size on the terminal background.
 ## Polish checklist
 
 - [x] Terminal frames at the display's rate (ProMotion key set; renderer display link); chrome
-      animations are springs/short ease-outs, interruptible, nothing loops but the spinner.
+      animations are critically damped `DS.Motion` springs, interruptible; only the spinner, shimmer and secure-input badge loop.
 - [x] No layout jank: splits snap to whole cells; resize overlay ignores keyboard-driven resizes;
       tab strip uses fixed equal widths; badges use `numericText` transitions and monospaced
       digits; space for progress labels is reserved.

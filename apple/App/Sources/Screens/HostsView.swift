@@ -126,7 +126,7 @@ struct HostsView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(DS.Palette.base)
-        .animation(DS.Motion.snappy, value: hosts)
+        .animation(DS.Motion.standard, value: hosts)
     }
 
     @ViewBuilder
@@ -192,9 +192,9 @@ struct HostsView: View {
 
     private func perform(_ action: RowAction, on host: HostSummary) {
         switch action {
-        case .pin, .unpin: withAnimation(DS.Motion.snappy) { directory.togglePin(host.id) }
+        case .pin, .unpin: withAnimation(DS.Motion.standard) { directory.togglePin(host.id) }
         case .disconnect: directory.disconnect(host.id)
-        case .removeHost: withAnimation(DS.Motion.snappy) { directory.forget(host.id) }
+        case .removeHost: withAnimation(DS.Motion.standard) { directory.forget(host.id) }
         default: break
         }
     }

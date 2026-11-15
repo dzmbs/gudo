@@ -123,10 +123,10 @@ struct BrowserView: View {
                         .frame(maxWidth: 640)
                         .floatingPanel()
                         .padding(DS.Space.s)
-                        .transition(.opacity.combined(with: .scale(0.98, anchor: isCompact ? .bottom : .top)))
+                        .motionTransition(.panel(from: isCompact ? .bottom : .top))
                 }
             }
-            .animation(DS.Motion.menu, value: isEditing && !suggestions.isEmpty)
+            .animation(DS.Motion.standard, value: isEditing && !suggestions.isEmpty)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isCompact { compactBar }
             }
@@ -341,7 +341,7 @@ struct BrowserView: View {
         }
         .padding(.horizontal, DS.Space.l)
         .padding(.bottom, DS.Space.s)
-        .animation(DS.Motion.snappy, value: isEditing)
+        .animation(DS.Motion.standard, value: isEditing)
     }
 
     /// A long press lists the history.
@@ -464,7 +464,7 @@ struct BrowserView: View {
         #if os(iOS)
         .hoverEffect(.highlight)
         #endif
-        .animation(.easeOut(duration: 0.15), value: isEditing)
+        .animation(DS.Motion.micro, value: isEditing)
     }
 
     private var securityMark: some View {
@@ -527,11 +527,11 @@ struct BrowserView: View {
             Rectangle()
                 .fill(DS.Palette.accent)
                 .frame(width: geometry.size.width * page.estimatedProgress)
-                .animation(DS.Motion.overlay, value: page.estimatedProgress)
+                .animation(DS.Motion.standard, value: page.estimatedProgress)
         }
         .frame(height: 2)
         .opacity(page.isLoading ? 1 : 0)
-        .animation(DS.Motion.overlay, value: page.isLoading)
+        .animation(DS.Motion.standard, value: page.isLoading)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -708,8 +708,8 @@ private struct AgentBar: View {
         }
         .padding(.bottom, DS.Space.l)
         .padding(.horizontal, DS.Space.l)
-        .animation(DS.Motion.snappy, value: pane.agentActivity)
-        .animation(DS.Motion.snappy, value: pane.userHasControl)
+        .animation(DS.Motion.standard, value: pane.agentActivity)
+        .animation(DS.Motion.standard, value: pane.userHasControl)
     }
 
     private func capsule(dot: ChromeStyle, text: String, @ViewBuilder action: () -> some View) -> some View {

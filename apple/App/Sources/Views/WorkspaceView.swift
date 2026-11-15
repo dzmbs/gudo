@@ -186,13 +186,14 @@ struct WorkspaceView: View {
                 FoldGutter().frame(height: layout.gutter)
                 TabletopDeck(workspace: workspace)
                     .frame(maxHeight: .infinity)
+                    // motion-lint-allow: the deck rises its whole height, in the fold's structural spring.
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             #endif
         }
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
-        .animation(DS.Motion.sidebar, value: model.isSidebarShown)
-        .animation(DS.Motion.panel, value: model.isEditorFullScreen)
+        .animation(DS.Motion.structural, value: model.isSidebarShown)
+        .animation(DS.Motion.standard, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
         #if os(macOS)
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
@@ -266,7 +267,7 @@ struct NewTabButton: View {
                 Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent() }
                     .accessibilityIdentifier("new-tab-agent")
                 Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
-                    withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+                    withAnimation(DS.Motion.standard) { model.newEmptyProject() }
                 }
                 .accessibilityIdentifier("new-tab-project")
                 if groups.count > 1 {
@@ -380,7 +381,7 @@ private struct DetailColumn: View {
             if !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages {
                 TabBar(workspace: workspace)
                     .chromeContent()
-                    .movingTransition(.top)
+                    .motionTransition(.panel(from: .top))
             }
             switch model.destination {
             case .terminal:

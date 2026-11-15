@@ -124,7 +124,7 @@ public struct ProcessExitedBar: View {
             .foregroundStyle(.primary)
             .opacity(isHovered ? 0 : 1)
             .onHover { isHovered = $0 }
-            .movingTransition(.bottom)
+            .motionTransition(.panel(from: .bottom))
             .accessibilityLabel(message)
     }
 }
@@ -142,7 +142,7 @@ public struct BellBorder: View {
             .strokeBorder(DS.Palette.bell, lineWidth: 3)
             .allowsHitTesting(false)
             .opacity(ringing ? 1 : 0)
-            .animation(DS.Motion.bell, value: ringing)
+            .animation(DS.Motion.standard, value: ringing)
             .accessibilityHidden(true)
     }
 }
@@ -211,8 +211,8 @@ public struct SecureInputBadge: View {
             .accessibilityLabel("Secure input on")
             .onAppear {
                 guard !reduceMotion else { return }
-                withAnimation(.linear(duration: 2).repeatForever(autoreverses: false)) { gradientAngle = .degrees(360) }
-                withAnimation(.linear(duration: 2).repeatForever(autoreverses: true)) { gradientOpacity = 1 }
+                withAnimation(DS.Motion.Loop.secureInput.repeatForever(autoreverses: false)) { gradientAngle = .degrees(360) }
+                withAnimation(DS.Motion.Loop.secureInput.repeatForever(autoreverses: true)) { gradientOpacity = 1 }
             }
     }
 }

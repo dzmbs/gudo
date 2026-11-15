@@ -59,7 +59,7 @@ struct OverlayToolbar: View {
                     .padding(.horizontal, DS.Space.m)
                     .padding(.vertical, 6)
                     .floatingCapsule()
-                    .transition(.opacity)
+                    .motionTransition(.fade)
                     .accessibilityIdentifier("drawing.hint")
             }
             GlassEffectContainer {
@@ -93,7 +93,7 @@ struct OverlayToolbar: View {
                 .floatingCapsule()
             }
         }
-        .animation(DS.Motion.overlay, value: model.showsHint)
+        .animation(DS.Motion.standard, value: model.showsHint)
         .fixedSize()
         .accessibilityElement(children: .contain)
         .accessibilityValue(model.loaded ? "ready" : "loading")

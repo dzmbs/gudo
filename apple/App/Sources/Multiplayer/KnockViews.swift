@@ -180,7 +180,7 @@ struct KnockBanner: View {
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.l)
             .sensoryFeedback(DS.Haptic.attention, trigger: knock.knockId)
-            .movingTransition(.bottom)
+            .motionTransition(.toast(from: .bottom))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("knock-banner")
         }
@@ -198,7 +198,7 @@ struct KnockOverlay: View {
                 KnockBanner(session: session)
             }
         }
-        .animation(DS.Motion.panel, value: session?.knocks.map(\.knockId) ?? [])
+        .animation(DS.Motion.standard, value: session?.knocks.map(\.knockId) ?? [])
     }
 }
 
@@ -229,7 +229,7 @@ struct ApprovalRulesSection: View {
             if supported {
                 Text(footer)
                     .contentTransition(.opacity)
-                    .animation(DS.Motion.snappy, value: session.approvalPolicy)
+                    .animation(DS.Motion.standard, value: session.approvalPolicy)
             }
         }
     }

@@ -101,7 +101,7 @@ private struct RowActionsModifier<Menu: View>: ViewModifier {
         if actions.needsConfirmation(action) {
             confirming = action
         } else {
-            withAnimation(DS.Motion.snappy) { perform(action) }
+            withAnimation(DS.Motion.standard) { perform(action) }
         }
     }
 }
@@ -183,7 +183,7 @@ private struct SwipeContainer: ViewModifier {
                         })
                 .sensoryFeedback(DS.Haptic.armed, trigger: armed) { _, now in now }
                 .onChange(of: shared?.open) { _, open in
-                    if open != id, offset != 0, start == nil { withAnimation(DS.Motion.swipe) { offset = 0 } }
+                    if open != id, offset != 0, start == nil { withAnimation(DS.Motion.standard) { offset = 0 } }
                 }
         }
     }
@@ -223,7 +223,7 @@ private struct SwipeContainer: ViewModifier {
         if armed, let action = edge.first {
             armed = false
             let sign: CGFloat = offset < 0 ? -1 : 1
-            withAnimation(DS.Motion.swipe) { offset = sign * width }
+            withAnimation(DS.Motion.standard) { offset = sign * width }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(180))
                 close(animated: false)
@@ -236,7 +236,7 @@ private struct SwipeContainer: ViewModifier {
         let opens = offset < 0
             ? (velocity < -300 || (velocity < 300 && -offset > reveal / 2))
             : (velocity > 300 || (velocity > -300 && offset > reveal / 2))
-        withAnimation(DS.Motion.swipe) {
+        withAnimation(DS.Motion.standard) {
             offset = opens && !edge.isEmpty ? (offset < 0 ? -reveal : reveal) : 0
         }
         if offset == 0, shared?.open == id { shared?.open = nil }
@@ -245,7 +245,7 @@ private struct SwipeContainer: ViewModifier {
     private func close(animated: Bool = true) {
         armed = false
         if animated {
-            withAnimation(DS.Motion.swipe) { offset = 0 }
+            withAnimation(DS.Motion.standard) { offset = 0 }
         } else {
             offset = 0
         }

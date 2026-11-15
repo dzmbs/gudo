@@ -108,7 +108,7 @@ private struct ShareRoot: View {
             if session.isOwner {
                 if let created {
                     InviteResult(invite: created, summary: createdSummary) {
-                        withAnimation(DS.Motion.panel) { self.created = nil }
+                        withAnimation(DS.Motion.standard) { self.created = nil }
                     }
                     .chromeRows()
                 } else {
@@ -299,7 +299,7 @@ private struct ShareRoot: View {
         Task {
             do {
                 let invite = try await session.createInvite(options)
-                withAnimation(DS.Motion.panel) {
+                withAnimation(DS.Motion.standard) {
                     created = invite
                     createdSummary = summary
                 }
@@ -431,7 +431,7 @@ private struct RolePicker: View {
         let isOn = locked || roles.contains(role)
         return Button {
             guard !locked else { return }
-            withAnimation(DS.Motion.snappy) {
+            withAnimation(DS.Motion.standard) {
                 if roles.contains(role) { roles.remove(role) } else { roles.insert(role) }
             }
         } label: {
@@ -566,10 +566,10 @@ private struct InviteResult: View {
 
     private func copy() {
         Pasteboard.copySecret(invite.link)
-        withAnimation(DS.Motion.indicator) { copied = true }
+        withAnimation(DS.Motion.micro) { copied = true }
         Task {
             try? await Task.sleep(for: .milliseconds(1500))
-            withAnimation(DS.Motion.indicator) { copied = false }
+            withAnimation(DS.Motion.micro) { copied = false }
         }
     }
 }

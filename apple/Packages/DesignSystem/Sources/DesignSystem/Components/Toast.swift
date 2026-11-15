@@ -58,18 +58,18 @@ public final class ToastCenter {
         if let current, current.repeats(toast) {
             self.current?.action = toast.action
         } else {
-            withAnimation(DS.Motion.banner) { current = toast }
+            withAnimation(DS.Motion.standard) { current = toast }
         }
         dismissTask?.cancel()
         dismissTask = Task { [weak self] in
             guard (try? await Task.sleep(for: toast.duration)) != nil else { return }
-            withAnimation(DS.Motion.banner) { self?.current = nil }
+            withAnimation(DS.Motion.standard) { self?.current = nil }
         }
     }
 
     public func dismiss() {
         dismissTask?.cancel()
-        withAnimation(DS.Motion.banner) { current = nil }
+        withAnimation(DS.Motion.standard) { current = nil }
     }
 
     /// Cards at the bottom of panes (others' drafts, a guest's composer), in global
@@ -183,7 +183,7 @@ public struct Banner: View {
                     if value.translation.height > 16 || value.velocity.height > 300 {
                         dismiss()
                     } else {
-                        withAnimation(DS.Motion.banner) { dragOffset = 0 }
+                        withAnimation(DS.Motion.standard) { dragOffset = 0 }
                     }
                 })
         .accessibilityElement(children: .contain)
@@ -218,30 +218,12 @@ private struct ToastHost: ViewModifier {
                         .padding(.horizontal, DS.Space.l)
                         .padding(.bottom, ToastCenter.bottomInset(
                             base: bottomInset, banner: size, in: host, avoiding: Array(center.obstacles.values)))
-                        .animation(DS.Motion.banner, value: center.obstacles.count)
-                        .transition(BannerTransition.value)
+                        .animation(DS.Motion.standard, value: center.obstacles.count)
+                        .motionTransition(.toast(from: .bottom))
                         .id(toast.id)
                         .sensoryFeedback(toast.style == .failure ? DS.Haptic.failure : DS.Haptic.success, trigger: toast.id)
                 }
             }
-    }
-}
-
-/// From below with a slight grow; a fade under Reduce Motion.
-private struct BannerTransition: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let active: Bool
-
-    static var value: AnyTransition {
-        .modifier(active: BannerTransition(active: true), identity: BannerTransition(active: false))
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(active ? 0 : 1)
-            .scaleEffect(active && !reduceMotion ? 0.9 : 1, anchor: .bottomLeading)
-            .offset(y: active && !reduceMotion ? 24 : 0)
-            .blur(radius: active && !reduceMotion ? 4 : 0)
     }
 }
 

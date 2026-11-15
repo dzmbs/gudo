@@ -12,7 +12,7 @@ extension WindowModel {
         if FoldLayout.plan(next) == FoldLayout.plan(fold) {
             fold = next
         } else {
-            withAnimation(Self.reduceMotion ? nil : DS.Motion.fold) { fold = next }
+            withAnimation(Self.reduceMotion ? nil : DS.Motion.structural) { fold = next }
         }
         syncColumns()
     }

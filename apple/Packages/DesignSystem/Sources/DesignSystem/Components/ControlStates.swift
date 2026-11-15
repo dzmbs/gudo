@@ -40,12 +40,12 @@ nonisolated public extension ChromeStyle {
 }
 
 public extension View {
-    /// The fill behind a hand-drawn control in `state`, easing in and out with `DS.Motion.hover`.
+    /// The fill behind a hand-drawn control in `state`, easing in and out with `DS.Motion.micro`.
     func controlFill(_ state: ControlState, in shape: some Shape = RoundedRectangle(cornerRadius: DS.Radius.control)) -> some View {
         background {
             shape
                 .fill(DS.Palette.ink.opacity(state.fillLevel))
-                .animation(DS.Motion.hover, value: state.fillLevel)
+                .animation(DS.Motion.micro, value: state.fillLevel)
         }
     }
 }

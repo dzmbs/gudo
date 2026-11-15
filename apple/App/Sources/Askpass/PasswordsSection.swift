@@ -58,6 +58,6 @@ struct PasswordsSection: View {
         } catch {
             failure = error.localizedDescription
         }
-        withAnimation(DS.Motion.snappy) { refresh() }
+        withAnimation(DS.Motion.standard) { refresh() }
     }
 }

@@ -450,15 +450,13 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     func flash() {
         layer.borderColor = UIColor(ChromePalette.fromPreferences().accentColor).cgColor
         layer.cornerRadius = 3
-        layer.borderWidth = 1.5
-        let fade = CABasicAnimation(keyPath: "borderWidth")
+        layer.borderWidth = 0
+        let fade = DS.Motion.Role.standard.layerAnimation(keyPath: "borderWidth")
         fade.fromValue = 1.5
         fade.toValue = 0
         fade.beginTime = CACurrentMediaTime() + 1.2
-        fade.duration = 0.6
         fade.fillMode = .backwards
         layer.add(fade, forKey: "flash")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer.borderWidth = 0 }
     }
 }
 #else

@@ -646,7 +646,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         let keys = profile.keys + favourites.keys
         rowKeys = keys.filter { seen.insert($0.id).inserted }.map { ($0, keyCap(for: $0, idPrefix: "keybar-")) }
         updatePasteTargets()
-        UIView.transition(with: strip, duration: UIAccessibility.isReduceMotionEnabled ? 0 : 0.18,
+        UIView.transition(with: strip, duration: UIAccessibility.isReduceMotionEnabled ? 0 : DS.Motion.Role.micro.budget,
                           options: .transitionCrossDissolve) {
             self.layoutBand()
             self.strip.layoutIfNeeded()

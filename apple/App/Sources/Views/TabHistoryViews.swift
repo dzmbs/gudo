@@ -42,7 +42,7 @@ struct RestoreTabsRow: View {
         ) {
             model.restoreHiddenTabs()
         } dismiss: {
-            withAnimation(DS.Motion.snappy) { model.groups.restoreDismissed = true }
+            withAnimation(DS.Motion.standard) { model.groups.restoreDismissed = true }
         }
     }
 }
@@ -135,7 +135,7 @@ struct TabSelectionBar: View {
             .foregroundStyle(DS.Palette.textSecondary)
             .disabled(count == 0)
             .help("Actions for the selected tabs")
-            Button("Done") { withAnimation(DS.Motion.snappy) { model.endTabSelection() } }
+            Button("Done") { withAnimation(DS.Motion.standard) { model.endTabSelection() } }
                 .buttonStyle(.quietProminent)
                 .keyboardShortcut(.cancelAction)
         }
@@ -167,7 +167,7 @@ struct TabSelectionMenuItems: View {
         }
         Divider()
         Button("Select All Tabs", systemImage: "checklist") { model.selectAllTabs() }
-        Button("Deselect All") { withAnimation(DS.Motion.snappy) { model.endTabSelection() } }
+        Button("Deselect All") { withAnimation(DS.Motion.standard) { model.endTabSelection() } }
     }
 }
 

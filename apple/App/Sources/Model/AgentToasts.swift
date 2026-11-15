@@ -149,7 +149,7 @@ final class AgentToasts {
         expiry = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow)))
             guard !Task.isCancelled, let self else { return }
-            withAnimation(DS.Motion.overlay) { self.expire() }
+            withAnimation(DS.Motion.standard) { self.expire() }
             self.scheduleExpiry()
         }
     }

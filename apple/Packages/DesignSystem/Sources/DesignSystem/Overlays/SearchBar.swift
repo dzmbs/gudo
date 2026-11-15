@@ -133,7 +133,7 @@ public struct TerminalSearchBar: View {
                     .onEnded { value in
                         let center = centerPosition(for: corner, in: geometry.size)
                         let dropped = CGPoint(x: center.x + value.translation.width, y: center.y + value.translation.height)
-                        withAnimation(DS.Motion.overlay) {
+                        withAnimation(DS.Motion.standard) {
                             corner = closestCorner(to: dropped, in: geometry.size)
                             dragOffset = .zero
                         }

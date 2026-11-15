@@ -107,56 +107,72 @@ public extension DS {
 // MARK: - Motion
 
 public extension DS {
-    /// Every animation is interruptible (springs or short ease-outs); nothing loops except the
-    /// working spinner.
+    /// One vocabulary for every animation: critically damped springs (no overshoot, never
+    /// reversing) that keep their velocity when interrupted, by role. Chrome moves only by
+    /// opacity, scale and offset (`MotionTransition`). See docs/DESIGN.md, Motion.
     nonisolated enum Motion {
-        public static let snappy = Animation.snappy(duration: 0.25)
-        public static let quick = Animation.easeInOut(duration: 0.15)
-        public static let hover = Animation.easeInOut(duration: 0.1)
-        public static let overlay = Animation.easeOut(duration: 0.2)
-        /// None on the Mac, a short fade on touch.
+        nonisolated public enum Role: CaseIterable, Sendable {
+            /// Hover, press, pills, badges, status glyphs, lit toggles.
+            case micro
+            /// Rows, selection, toasts, menus, popovers, panels, the palette, swipes.
+            case standard
+            /// Splits, zoom, float and dock, the sidebar, a fold changing posture.
+            case structural
+
+            public var spring: Spring {
+                switch self {
+                case .micro: Spring(duration: 0.12, bounce: 0)
+                case .standard: Spring(duration: 0.22, bounce: 0)
+                case .structural: Spring(duration: 0.3, bounce: 0)
+                }
+            }
+
+            public var animation: Animation { .spring(spring) }
+
+            /// When it is within 1 % of where it is going, which is when it reads as still.
+            public var budget: Double {
+                switch self {
+                case .micro: 0.15
+                case .standard: 0.25
+                case .structural: 0.34
+                }
+            }
+        }
+
+        public static let micro = Role.micro.animation
+        public static let standard = Role.standard.animation
+        public static let structural = Role.structural.animation
+
+        /// A structural move is within a point of a full-window move: each terminal shows its
+        /// last frame on the way and draws at its new size from here.
+        public static let structuralSettle = 0.42
+        /// Something that lands where a structural move is heading shows as the move arrives.
+        public static let arrivalDelay = 0.16
+
+        /// None on the Mac, where the palette is a panel that appears at once; `standard` on touch.
         #if os(macOS)
         public static let palette: Animation? = nil
         #else
-        public static let palette: Animation? = .easeOut(duration: 0.15)
+        public static let palette: Animation? = standard
         #endif
-        public static let indicator = Animation.spring(response: 0.3, dampingFraction: 0.8)
-        public static let bell = Animation.easeInOut(duration: 0.3)
-        public static let panel = Animation.smooth(duration: panelDuration)
-        public static let panelDuration = 0.3
-        /// A curve that ends on time, so the terminals' one reflow follows straight after.
-        public static let sidebar = Animation.easeInOut(duration: sidebarDuration)
-        public static let sidebarDuration = 0.25
-        /// Ends on time so the terminals reflow once, straight after.
-        public static let fold = Animation.smooth(duration: foldDuration)
-        public static let foldDuration = 0.34
+
+        /// The only loops: the working spinner, the working shimmer and the secure-input badge.
+        nonisolated public enum Loop {
+            public static let spinnerPeriod = 1.0
+            public static let shimmerPeriod = 3.0
+            public static let secureInput = Animation.linear(duration: 2)
+        }
+
         /// How long the cols × rows overlay stays after the last resize.
         public static let resizeOverlayDuration = Duration.milliseconds(750)
         /// Long enough to read eight words.
         public static let toastDuration = Duration.milliseconds(2400)
-        /// Do not show progress for anything faster than this.
-        public static let feedbackDelay = Duration.milliseconds(200)
-
-        /// No overshoot. Each terminal shows its last frame on the way and draws at its new size
-        /// once there (`splitSettle`, when a spring this stiff is within a point).
-        public static let split = Animation.spring(splitSpring)
-        public static let splitSpring = Spring(duration: splitDuration, bounce: 0)
-        public static let splitDuration = 0.3
-        public static let splitSettle = 0.42
-        public static let banner = Animation.spring(response: 0.42, dampingFraction: 0.82)
-        public static let menu = Animation.spring(response: 0.3, dampingFraction: 0.86)
-        public static let swipe = Animation.spring(response: 0.32, dampingFraction: 0.86)
-        public static let reorder = Animation.spring(response: 0.3, dampingFraction: 0.84)
-        /// A collapsed group opening under a drag that rests on it.
-        public static let springOpenDelay = Duration.milliseconds(600)
-        public static let press = Animation.spring(response: 0.2, dampingFraction: 0.86)
-        /// A pane lifting into a floating window, docking back or going to the tray. Grids hold
-        /// for `liftDuration`, then reflow once.
-        public static let lift = Animation.spring(duration: 0.34, bounce: 0)
-        public static let liftDuration = 0.42
-        public static let settle = Animation.spring(response: 0.34, dampingFraction: 0.86)
         /// Errors stay longer than confirmations: they are read, not glanced at.
         public static let bannerErrorDuration = Duration.seconds(4)
+        /// Do not show progress for anything faster than this.
+        public static let feedbackDelay = Duration.milliseconds(200)
+        /// A collapsed group opening under a drag that rests on it.
+        public static let springOpenDelay = Duration.milliseconds(600)
     }
 }
 
@@ -194,28 +210,5 @@ private struct ShadowModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content.shadow(color: .black.opacity(shadow.opacity(dark: chrome.scheme == .dark)), radius: shadow.radius, y: shadow.y)
-    }
-}
-
-// MARK: - Reduce Motion
-
-public extension View {
-    /// Slides in from `edge` with a fade; under Reduce Motion, only the fade.
-    func movingTransition(_ edge: Edge) -> some View {
-        modifier(MotionAwareTransition(moving: .move(edge: edge)))
-    }
-
-    /// Grows from `scale` with a fade; under Reduce Motion, only the fade.
-    func scalingTransition(_ scale: CGFloat, anchor: UnitPoint = .center) -> some View {
-        modifier(MotionAwareTransition(moving: .scale(scale: scale, anchor: anchor)))
-    }
-}
-
-private struct MotionAwareTransition: ViewModifier {
-    let moving: AnyTransition
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func body(content: Content) -> some View {
-        content.transition(reduceMotion ? .opacity : moving.combined(with: .opacity))
     }
 }

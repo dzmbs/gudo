@@ -151,7 +151,7 @@ struct LinksSheet: View {
         failure = nil
         do {
             let loaded = try await source.links()
-            withAnimation(links == nil ? nil : DS.Motion.snappy) { links = loaded }
+            withAnimation(links == nil ? nil : DS.Motion.standard) { links = loaded }
         } catch {
             failure = ScreenError.describe(error)
         }

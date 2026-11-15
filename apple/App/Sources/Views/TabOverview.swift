@@ -22,7 +22,7 @@ struct TabOverview: View {
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
                         if !model.isSelectingTabs, model.groups.tabs.count > 1 {
-                            Button("Select") { withAnimation(DS.Motion.snappy) { model.isSelectingTabs = true } }
+                            Button("Select") { withAnimation(DS.Motion.standard) { model.isSelectingTabs = true } }
                                 .accessibilityIdentifier("tab-overview-select")
                         }
                         NewTabButton(workspace: workspace)

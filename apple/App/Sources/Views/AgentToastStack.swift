@@ -3,17 +3,13 @@ import SwiftUI
 
 struct AgentToastStack: View {
     @Environment(WindowModel.self) private var model
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
         let toasts = model.agentToasts
         let compact = model.widthBucket == .compact
         VStack(alignment: .leading, spacing: DS.Space.s) {
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
                 AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1)
-                    .transition(reduceMotion ? .opacity : .asymmetric(
-                        insertion: .move(edge: .leading).combined(with: .opacity),
-                        removal: .opacity.combined(with: .scale(scale: 0.96))))
+                    .motionTransition(.toast(from: .leading))
             }
         }
         .frame(maxWidth: compact ? .infinity : 380)
@@ -26,7 +22,7 @@ struct AgentToastStack: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in toasts.hold(true) }
                 .onEnded { _ in toasts.hold(false) })
-        .animation(DS.Motion.indicator, value: toasts.cards.map(\.id))
+        .animation(DS.Motion.micro, value: toasts.cards.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-toasts")
     }
@@ -56,7 +52,7 @@ private struct AgentToastCard: View {
         .overlay(alignment: .topTrailing) {
             if isHovered {
                 Button("Dismiss", systemImage: "xmark") {
-                    withAnimation(DS.Motion.overlay) { model.agentToasts.dismiss(card.id) }
+                    withAnimation(DS.Motion.standard) { model.agentToasts.dismiss(card.id) }
                 }
                 .help("Dismiss")
                 .labelStyle(.iconOnly)
@@ -67,11 +63,11 @@ private struct AgentToastCard: View {
                 .background(DS.Palette.raised, in: .circle)
                 .overlay(Circle().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                 .offset(x: 6, y: -6)
-                .transition(.opacity)
+                .motionTransition(.pill())
                 .accessibilityIdentifier("agent-toast-dismiss")
             }
         }
-        .onHover { hovering in withAnimation(DS.Motion.overlay) { isHovered = hovering } }
+        .onHover { hovering in withAnimation(DS.Motion.standard) { isHovered = hovering } }
         .chromeContent()
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-toast-\(item.id)")
@@ -200,21 +196,21 @@ private struct AgentToastCard: View {
     }
 
     private func decide(allow: Bool) {
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             if allow { model.agents.approve(item.id) } else { model.agents.deny(item.id) }
             model.agentToasts.dismiss(card.id)
         }
     }
 
     private func approveAlways() {
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             model.agents.approveAlways(item.id)
             model.agentToasts.dismiss(card.id)
         }
     }
 
     private func allowForPane() {
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             model.agents.allowForPane(item.id)
             model.agentToasts.dismiss(card.id)
         }

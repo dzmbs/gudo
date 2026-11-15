@@ -30,7 +30,7 @@ nonisolated public enum ShimmerMath {
         /// Track padding on both sides (glyphs), so the band slides in and out of the text.
         public var padding: Double
 
-        public init(period: Double = 3, radius: Double = 6, padding: Double = 8) {
+        public init(period: Double = DS.Motion.Loop.shimmerPeriod, radius: Double = 6, padding: Double = 8) {
             self.period = period
             self.radius = radius
             self.padding = padding

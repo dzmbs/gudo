@@ -29,7 +29,7 @@ struct AskpassPaneOverlay: View {
                     .id("askpass-\(prompt.id)")
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, DS.Space.l)
-                    .movingTransition(.top)
+                    .motionTransition(.toast(from: .top))
                 } else if let detected = session.detected[pane.rawValue] {
                     if opened == detected {
                         SecretPromptCard(target: .detected(detected), hostId: hostId, session: session, isStale: false) {
@@ -39,17 +39,17 @@ struct AskpassPaneOverlay: View {
                         .id("detected-\(pane.rawValue)-\(detected.atSeq)")
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, DS.Space.l)
-                        .movingTransition(.top)
+                        .motionTransition(.toast(from: .top))
                     } else {
                         SecretPromptChip { opened = detected }
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             .padding(.bottom, DS.Space.m)
-                            .movingTransition(.bottom)
+                            .motionTransition(.toast(from: .bottom))
                     }
                 }
             }
-            .animation(DS.Motion.panel, value: session.prompt(for: pane.rawValue)?.id)
-            .animation(DS.Motion.overlay, value: session.detected[pane.rawValue])
+            .animation(DS.Motion.standard, value: session.prompt(for: pane.rawValue)?.id)
+            .animation(DS.Motion.standard, value: session.detected[pane.rawValue])
             .onChange(of: session.detected[pane.rawValue]) { _, current in
                 if current == nil { opened = nil }
             }

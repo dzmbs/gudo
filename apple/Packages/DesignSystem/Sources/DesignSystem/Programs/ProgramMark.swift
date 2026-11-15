@@ -37,10 +37,10 @@ public struct ProgramMark: View {
         ZStack {
             art
                 .id(artKey)
-                .scalingTransition(0.7)
+                .motionTransition(.pill())
         }
         .frame(width: size, height: size)
-        .animation(DS.Motion.indicator, value: artKey)
+        .animation(DS.Motion.micro, value: artKey)
         .accessibilityElement()
         .accessibilityLabel(identity.displayName)
         .accessibilityIdentifier("program-mark-\(identity.id)")

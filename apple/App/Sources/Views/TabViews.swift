@@ -58,7 +58,7 @@ struct WorkspaceSidebar: View {
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-            .animation(DS.Motion.snappy, value: model.groups.collapsed)
+            .animation(DS.Motion.standard, value: model.groups.collapsed)
         }
         .listStyle(.plain)
         .contentMargins(.all, 0, for: .scrollContent)
@@ -85,7 +85,7 @@ struct WorkspaceSidebar: View {
         // Rows keep their own menus.
         .contextMenu {
             Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
-                withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+                withAnimation(DS.Motion.standard) { model.newEmptyProject() }
             }
         }
         #endif
@@ -105,17 +105,17 @@ struct WorkspaceSidebar: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if model.isSelectingTabs || model.tabSelection.isMultiple {
                 TabSelectionBar()
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .motionTransition(.panel(from: .bottom))
             }
         }
-        .animation(DS.Motion.snappy, value: model.isSelectingTabs || model.tabSelection.isMultiple)
+        .animation(DS.Motion.standard, value: model.isSelectingTabs || model.tabSelection.isMultiple)
         .overlay(alignment: .bottomLeading) { ConnectionProbe() }
     }
 
     private func destinationRow(_ destination: Destination, @ViewBuilder trailing: () -> some View) -> some View {
         let selected = model.destination == destination
         return Button {
-            withAnimation(DS.Motion.snappy) { model.destination = destination }
+            withAnimation(DS.Motion.standard) { model.destination = destination }
         } label: {
             ListRow(Text(destination.title), titleFont: SidebarFont.title) {
                 Image(systemName: destination.systemImage)
@@ -435,9 +435,9 @@ private struct HostGroupHeader: View {
         .padding(.top, DS.Space.l)
         .padding(.bottom, DS.Space.xxs)
         .contentShape(.rect)
-        .onTapGesture { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) } }
+        .onTapGesture { withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(group.id) } }
         .onHover { hovered = $0 }
-        .animation(DS.Motion.overlay, value: state)
+        .animation(DS.Motion.standard, value: state)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(group.name), \(state.title)")
         .accessibilityValue(state.title)
@@ -628,14 +628,14 @@ struct TabLeadingMark: View {
         ZStack {
             if let state, state != .idle, state != .unknown {
                 AgentGlyph(state: state)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             } else if let favicon {
                 Favicon(image: favicon, size: ProgramMark.rowSlot - 2)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             } else {
                 ProgramMark(program)
                     .foregroundStyle(.primary)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
         }
         .frame(width: ProgramMark.rowSlot, height: ProgramMark.rowSlot)
@@ -643,7 +643,7 @@ struct TabLeadingMark: View {
         // and title stay on the same line in every state.
         .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
         .alignmentGuide(.lastTextBaseline) { $0[.bottom] - 3 }
-        .animation(DS.Motion.indicator, value: state)
+        .animation(DS.Motion.micro, value: state)
     }
 
     /// The row's spoken label: name, then the agent's state or the program, then the host.
@@ -695,10 +695,10 @@ struct SidebarTabIcon: View {
                     .fill(badge)
                     .frame(width: dot, height: dot)
                     .position(centre)
-                    .transition(.scale(scale: 0.5).combined(with: .opacity))
+                    .motionTransition(.pill())
             }
         }
-        .animation(DS.Motion.indicator, value: state)
+        .animation(DS.Motion.micro, value: state)
         .accessibilityHidden(true)
     }
 
@@ -746,7 +746,7 @@ private struct PaneTreeActions: ViewModifier {
             .accessibilityActions {
                 if opens, paneCount > 1 {
                     Button(expanded ? "Hide Panes" : "Show Panes") {
-                        withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
+                        withAnimation(DS.Motion.standard) { model.expandedTabs.formSymmetricDifference([ref]) }
                     }
                 }
             }
@@ -840,7 +840,7 @@ private struct GroupMenu: View {
             NewOnHostItems(group: group)
         }
         Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
-            withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(group.id) }
+            withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(group.id) }
         }
         if !group.isLocal {
             if !group.status.isLive {
@@ -967,10 +967,10 @@ struct TabRow: View {
                         // In a project it leads with the host, which the section header doesn't name.
                         TabSubtitle(context: informative, running: running, worktree: worktree, host: host, status: status,
                                     program: program.isShell ? nil : program.displayName)
-                            .transition(.opacity)
+                            .motionTransition(.fade)
                     }
                 }
-                .animation(DS.Motion.snappy, value: status != nil || informative != nil || running != nil)
+                .animation(DS.Motion.standard, value: status != nil || informative != nil || running != nil)
                 Spacer(minLength: DS.Space.xs)
                 if let worktree { TabGitBadges(worktree: worktree, selected: isActive) }
                 TabPresence(workspace: workspace, panes: tab.root.panes)
@@ -985,7 +985,7 @@ struct TabRow: View {
                 // Trailing, as a project's own chevron is.
                 if listStyle == .plain, tab.root.panes.count > 1 {
                     TreeChevron(isExpanded: model.expandedTabs.contains(ref)) {
-                        withAnimation(DS.Motion.snappy) { model.expandedTabs.formSymmetricDifference([ref]) }
+                        withAnimation(DS.Motion.standard) { model.expandedTabs.formSymmetricDifference([ref]) }
                     }
                 }
                 TabNumber(number: number, shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil)
@@ -1022,16 +1022,16 @@ struct TabRow: View {
                 ProjectMenuItems(model: model, ref: ref)
                 Divider()
                 Button("Select Tabs", systemImage: "checkmark.circle") {
-                    withAnimation(DS.Motion.snappy) {
+                    withAnimation(DS.Motion.standard) {
                         model.isSelectingTabs = true
                         model.tabSelection.select(ref)
                     }
                 }
             }
         }
-        .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: -1) } }
+        .accessibilityAction(named: "Move Up") { withAnimation(DS.Motion.standard) { model.groups.moveTab(ref, by: -1) } }
         .modifier(PaneTreeActions(ref: ref, paneCount: tab.root.panes.count, opens: listStyle == .plain))
-        .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.reorder) { model.groups.moveTab(ref, by: 1) } }
+        .accessibilityAction(named: "Move Down") { withAnimation(DS.Motion.standard) { model.groups.moveTab(ref, by: 1) } }
     }
 
     private var actions: RowActions {
@@ -1081,12 +1081,12 @@ private struct SidebarFooter: View {
         VStack(spacing: DS.Space.s) {
             if update.showsCard {
                 UpdateCard(prompt: update)
-                    .movingTransition(.bottom)
+                    .motionTransition(.toast(from: .bottom))
             }
             buttons(update: update)
         }
         .padding(.top, update.showsCard ? DS.Space.s : 0)
-        .animation(DS.Motion.snappy, value: update.showsCard)
+        .animation(DS.Motion.standard, value: update.showsCard)
         .background(UpdateSidebarAnchor(model: model))
         // Opaque: rows scroll under it.
         .chromeBackground(DS.Palette.sidebar)
@@ -1101,7 +1101,7 @@ private struct SidebarFooter: View {
         buttonRow {
             if update.showsIndicator {
                 UpdateIndicator(prompt: update)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    .motionTransition(.pill())
             }
         }
     }
@@ -1114,7 +1114,7 @@ private struct SidebarFooter: View {
     private func buttonRow(@ViewBuilder trailing: () -> some View) -> some View {
         HStack(spacing: DS.Space.s) {
             Button {
-                withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+                withAnimation(DS.Motion.standard) { model.newEmptyProject() }
             } label: {
                 Label(WorkspaceAction.newProject.title, systemImage: "plus")
                     .labelStyle(.titleAndIcon)

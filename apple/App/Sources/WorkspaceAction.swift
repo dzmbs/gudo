@@ -243,7 +243,7 @@ enum WorkspaceAction: Hashable {
         case .newTab: window.newTab()
         case .newTabOnHost: window.showHostPicker()
         case .newAgent: window.newAgent()
-        case .newProject: withAnimation(DS.Motion.reorder) { window.newEmptyProject() }
+        case .newProject: withAnimation(DS.Motion.standard) { window.newEmptyProject() }
         case .splitWithHost: window.showSplitWithHostPicker()
         case .previousTab: window.selectTab(offset: -1)
         case .nextTab: window.selectTab(offset: 1)
@@ -251,8 +251,8 @@ enum WorkspaceAction: Hashable {
         case .selectHost(let number): window.selectHost(number: number)
         case .lastTab: window.selectTab(shortcut: 9)
         case .goToTab: window.showTabFinder()
-        case .moveTabUp: withAnimation(DS.Motion.reorder) { window.moveCurrentTab(by: -1) }
-        case .moveTabDown: withAnimation(DS.Motion.reorder) { window.moveCurrentTab(by: 1) }
+        case .moveTabUp: withAnimation(DS.Motion.standard) { window.moveCurrentTab(by: -1) }
+        case .moveTabDown: withAnimation(DS.Motion.standard) { window.moveCurrentTab(by: 1) }
         case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
         case .find: window.showSearch()
@@ -327,7 +327,7 @@ enum WorkspaceAction: Hashable {
     func perform(window: WindowModel) {
         switch self {
         case .toggleSidebar:
-            withAnimation(DS.Motion.sidebar) { window.isSidebarShown.toggle() }
+            withAnimation(DS.Motion.structural) { window.isSidebarShown.toggle() }
         default:
             if let workspace = window.workspace { perform(on: workspace, window: window) }
         }

@@ -152,12 +152,12 @@ final class TouchSnapshotTests: XCTestCase {
         let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
         let last = try XCTUnwrap(app.tabs.last)
         drag.dragging = last
-        withAnimation(DS.Motion.reorder) { drag.plan = .insert(last, into: .project(app.id), at: 0) }
+        withAnimation(DS.Motion.standard) { drag.plan = .insert(last, into: .project(app.id), at: 0) }
         for (index, delay) in [0.05, 0.08, 0.3].enumerated() {
             await pump(delay)
             try capture(sidebar, "sidebar-reorder-\(index)")
         }
-        withAnimation(DS.Motion.reorder) { drag.reset() }
+        withAnimation(DS.Motion.standard) { drag.reset() }
         await pump(0.5)
         window.isHidden = true
         sidebar.isHidden = true
@@ -300,7 +300,7 @@ final class TouchSnapshotTests: XCTestCase {
         }
         let app = try [XCTUnwrap(ref("fixture-studio", "api-server")), XCTUnwrap(ref("fixture-hetzner", "web"))]
         model.newProject(from: app, name: "acme-app", naming: false)
-        withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+        withAnimation(DS.Motion.standard) { model.newEmptyProject() }
         await pump(1)
         try capture(sidebar, "projects-new")
         model.namingProject = nil
@@ -308,14 +308,14 @@ final class TouchSnapshotTests: XCTestCase {
         let drag = model.sidebarDrag
         let logs = try XCTUnwrap(ref("fixture-studio", "logs"))
         drag.dragging = logs
-        withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app[1]) }
+        withAnimation(DS.Motion.standard) { drag.plan = .group(logs, onto: app[1]) }
         await pump(0.6)
         try capture(sidebar, "projects-drop-add")
         let deploy = try XCTUnwrap(ref("fixture-hetzner", "deploy"))
-        withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: deploy) }
+        withAnimation(DS.Motion.standard) { drag.plan = .group(logs, onto: deploy) }
         await pump(0.6)
         try capture(sidebar, "projects-drop-group")
-        withAnimation(DS.Motion.reorder) { drag.reset() }
+        withAnimation(DS.Motion.standard) { drag.reset() }
 
         model.focus(app[0])
         model.newTab()

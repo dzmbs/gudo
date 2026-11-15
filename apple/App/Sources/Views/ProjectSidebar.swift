@@ -253,7 +253,7 @@ struct SidebarTabList: View {
                     .onDisappear { geometry.frames[item.id] = nil }
             }
         }
-        .animation(DS.Motion.reorder, value: items)
+        .animation(DS.Motion.standard, value: items)
         // Taught once: the first project, however made, retires the hint for good.
         .onChange(of: model.projects.isEmpty, initial: true) { _, empty in
             if !empty, !introDismissed { introDismissed = true }
@@ -324,7 +324,7 @@ private struct SidebarItemView: View {
             if let group = model.groups.group(host), let repo = model.groups.repoSidebar(for: group)?.repos.first(where: { $0.id == repoID }) {
                 let folds = WorktreeFoldStore.shared
                 RepoFoldRow(repo: repo, fold: WorktreeFold(repo), host: host, expanded: folds.isExpanded(repo: repoID, host: host)) {
-                    withAnimation(DS.Motion.snappy) { folds.toggle(repo: repoID, host: host) }
+                    withAnimation(DS.Motion.standard) { folds.toggle(repo: repoID, host: host) }
                 }
                 .padding(.top, DS.Space.xs)
                 .opacity(group.showsAsLive ? 1 : 0.6)
@@ -370,7 +370,7 @@ private struct SidebarTabRow: View {
                         .background(DS.Palette.sidebar, in: .capsule)
                         .overlay(Capsule().fill(tint.opacity(0.14)))
                         .padding(.trailing, DS.Space.l)
-                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .trailing)))
+                        .motionTransition(.pill(anchor: .trailing))
                         .accessibilityHidden(true)
                 }
             }
@@ -380,10 +380,10 @@ private struct SidebarTabRow: View {
                     RoundedRectangle(cornerRadius: DS.Radius.control)
                         .fill(DS.Palette.selection)
                         .padding(.horizontal, DS.Space.s)
-                        .transition(.opacity)
+                        .motionTransition(.fade)
                 }
             }
-            .animation(DS.Motion.quick, value: model.isInMultipleSelection(ref))
+            .animation(DS.Motion.micro, value: model.isInMultipleSelection(ref))
             // "Will group": the row lights in the project's colour (the accent for a loose one).
             .background {
                 RoundedRectangle(cornerRadius: DS.Radius.control)
@@ -395,9 +395,9 @@ private struct SidebarTabRow: View {
             // The dragged row leaves a gap where it will land: it never slides over its
             // neighbours, they make room around it.
             .opacity(drag.dragging == ref ? 0 : 1)
-            .animation(DS.Motion.reorder, value: isGroupTarget)
+            .animation(DS.Motion.standard, value: isGroupTarget)
             // Gone at once (the lifted preview covers it); back with a short fade on the drop.
-            .animation(drag.dragging == ref ? nil : DS.Motion.quick, value: drag.dragging == ref)
+            .animation(drag.dragging == ref ? nil : DS.Motion.micro, value: drag.dragging == ref)
             .sidebarTabDrag(ref, model: model, drag: drag, title: dragTitle)
     }
 
@@ -492,7 +492,7 @@ struct SidebarDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        withAnimation(DS.Motion.reorder) { drag.reset() }
+        withAnimation(DS.Motion.standard) { drag.reset() }
     }
 
     func performDrop(info: DropInfo) -> Bool {
@@ -500,7 +500,7 @@ struct SidebarDropDelegate: DropDelegate {
         let plan = drag.plan, move = drag.projectMove
         // The rows already show the result: commit it in the same transaction that ends the
         // preview, so they stay where they are.
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             if let plan { model.commit(plan) }
             if let move { model.moveProject(move.id, to: move.index) }
             drag.reset()
@@ -552,7 +552,7 @@ struct SidebarDropDelegate: DropDelegate {
             break
         }
         if next != drag.plan {
-            withAnimation(DS.Motion.reorder) { drag.plan = next }
+            withAnimation(DS.Motion.standard) { drag.plan = next }
         }
         springOpen(springTarget)
     }
@@ -566,7 +566,7 @@ struct SidebarDropDelegate: DropDelegate {
         drag.springTask = Task { @MainActor [drag, model] in
             try? await Task.sleep(for: DS.Motion.springOpenDelay)
             guard !Task.isCancelled, drag.springTarget == id else { return }
-            _ = withAnimation(DS.Motion.reorder) { model.groups.collapsedProjects.remove(id) }
+            _ = withAnimation(DS.Motion.standard) { model.groups.collapsedProjects.remove(id) }
         }
     }
 
@@ -580,7 +580,7 @@ struct SidebarDropDelegate: DropDelegate {
         guard let target, let index = order.firstIndex(of: target) else { return }
         let move: (id: String, index: Int)? = index == order.firstIndex(of: id) ? nil : (id, index)
         if move?.id != drag.projectMove?.id || move?.index != drag.projectMove?.index {
-            withAnimation(DS.Motion.reorder) { drag.projectMove = move }
+            withAnimation(DS.Motion.standard) { drag.projectMove = move }
         }
     }
 }
@@ -701,7 +701,7 @@ private struct ProjectHeader: View {
                     .foregroundStyle(DS.Palette.textTertiary)
                     .contentTransition(.numericText())
                 if let badge = SidebarTabIcon.badge(for: model.mostUrgentState(inProject: project)) {
-                    Circle().fill(badge).frame(width: 7, height: 7).transition(.opacity)
+                    Circle().fill(badge).frame(width: 7, height: 7).motionTransition(.pill())
                 }
             }
             Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
@@ -721,7 +721,7 @@ private struct ProjectHeader: View {
         .padding(.leading, DS.Space.l)
         .padding(.trailing, DS.Space.gap10)
         .padding(.top, DS.Space.m)
-        .animation(DS.Motion.hover, value: controlsShown)
+        .animation(DS.Motion.micro, value: controlsShown)
         .background {
             RoundedRectangle(cornerRadius: DS.Radius.control)
                 .fill(DS.Palette.project(project.color).opacity(dropping ? 0.14 : 0))
@@ -738,7 +738,7 @@ private struct ProjectHeader: View {
             #if os(macOS)
             if NSApp.currentEvent?.clickCount == 2 { return startRename() }
             #endif
-            withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+            withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) }
         }
         .onHover { hovered = $0 }
         .onDrag {
@@ -756,7 +756,7 @@ private struct ProjectHeader: View {
         .accessibilityAddTraits(.isHeader)
         .accessibilityIdentifier("project-\(project.name)")
         // Combined, the header's own tap and + are reached as its actions.
-        .accessibilityAction { withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) } }
+        .accessibilityAction { withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) } }
         .accessibilityAction(named: "New Terminal") { model.newTab(inProject: project.id) }
         .accessibilityAction(named: "Rename") { startRename() }
     }
@@ -827,17 +827,17 @@ struct ProjectMenu: View {
         Button("New Terminal", systemImage: "terminal") { model.newTab(inProject: project.id) }
         if let collapsed {
             Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
-                withAnimation(DS.Motion.snappy) { model.groups.toggleCollapsed(project: project.id) }
+                withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) }
             }
         }
         Divider()
         if project.tabs.isEmpty {
             Button("Delete Project", systemImage: "trash") {
-                withAnimation(DS.Motion.reorder) { model.ungroupProject(project.id) }
+                withAnimation(DS.Motion.standard) { model.ungroupProject(project.id) }
             }
         } else {
             Button("Ungroup", systemImage: "rectangle.stack.badge.minus") {
-                withAnimation(DS.Motion.reorder) { model.ungroupProject(project.id) }
+                withAnimation(DS.Motion.standard) { model.ungroupProject(project.id) }
             }
             Button("Close All Tabs", systemImage: "xmark.square", role: .destructive) { model.closeProject(project.id) }
         }
@@ -854,18 +854,18 @@ struct ProjectMenuItems: View {
         let current = model.groups.project(of: ref)
         let others = model.projects.filter { $0.id != current?.id }
         Button("New Project from Tab", systemImage: "folder.badge.plus") {
-            withAnimation(DS.Motion.reorder) { model.newProject(from: [ref]) }
+            withAnimation(DS.Motion.standard) { model.newProject(from: [ref]) }
         }
         if !others.isEmpty {
             Menu("Move to Project") {
                 ForEach(others) { project in
-                    Button(project.name) { withAnimation(DS.Motion.reorder) { model.move(ref, toProject: project.id) } }
+                    Button(project.name) { withAnimation(DS.Motion.standard) { model.move(ref, toProject: project.id) } }
                 }
             }
         }
         if let current {
             Button("Remove from \(current.name)", systemImage: "folder.badge.minus") {
-                withAnimation(DS.Motion.reorder) { model.removeFromProject(ref) }
+                withAnimation(DS.Motion.standard) { model.removeFromProject(ref) }
             }
         }
     }
@@ -881,7 +881,7 @@ private struct SuggestionRow: View {
     var body: some View {
         HStack(spacing: DS.Space.gap10) {
             Button {
-                withAnimation(DS.Motion.reorder) { model.accept(suggestion) }
+                withAnimation(DS.Motion.standard) { model.accept(suggestion) }
             } label: {
                 HStack(spacing: DS.Space.gap10) {
                     Image(systemName: "folder.badge.plus")
@@ -899,7 +899,7 @@ private struct SuggestionRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
-            Button("Not Now", systemImage: "xmark") { withAnimation(DS.Motion.snappy) { model.dismiss(suggestion) } }
+            Button("Not Now", systemImage: "xmark") { withAnimation(DS.Motion.standard) { model.dismiss(suggestion) } }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.sidebarDismiss)
                 .font(.caption2)
@@ -953,7 +953,7 @@ private struct ProjectEmptyRow: View {
         }
         .buttonStyle(.plain)
         .projectThread(.project(project.id), model: model, opacity: 0.5)
-        .animation(DS.Motion.quick, value: dropping)
+        .animation(DS.Motion.micro, value: dropping)
         .accessibilityLabel("No tabs in \(project.name). New Terminal")
         .accessibilityIdentifier("project-empty-\(project.name)")
     }
@@ -982,7 +982,7 @@ struct ProjectsIntroRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-            Button("Close", systemImage: "xmark") { withAnimation(DS.Motion.snappy) { dismissed = true } }
+            Button("Close", systemImage: "xmark") { withAnimation(DS.Motion.standard) { dismissed = true } }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.sidebarDismiss)
                 .font(.caption2.weight(.semibold))

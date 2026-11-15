@@ -205,7 +205,7 @@ private struct CertificatesSection: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url) else { throw RelayCertificate.Problem.unreadable(url.lastPathComponent) }
-                _ = try withAnimation(DS.Motion.snappy) { try hosts.importRelayCertificates(data) }
+                _ = try withAnimation(DS.Motion.standard) { try hosts.importRelayCertificates(data) }
             }
             failure = nil
         } catch {
@@ -215,7 +215,7 @@ private struct CertificatesSection: View {
 
     private func remove(_ certificate: RelayCertificate) {
         do {
-            try withAnimation(DS.Motion.snappy) { try hosts.removeRelayCertificate(certificate.der) }
+            try withAnimation(DS.Motion.standard) { try hosts.removeRelayCertificate(certificate.der) }
             failure = nil
         } catch {
             failure = error.localizedDescription

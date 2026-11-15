@@ -72,7 +72,7 @@ struct HostNotices: View {
         .frame(maxWidth: 420, alignment: .trailing)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(DS.Space.l)
-        .animation(DS.Motion.panel, value: app.hosts.installs[workspace.hostId ?? ""]?.summary)
+        .animation(DS.Motion.standard, value: app.hosts.installs[workspace.hostId ?? ""]?.summary)
     }
 
     private func notice(systemImage: String?, tint: ChromeStyle?, @ViewBuilder _ content: () -> some View) -> some View {
@@ -86,7 +86,7 @@ struct HostNotices: View {
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .movingTransition(.top)
+        .motionTransition(.toast(from: .top))
     }
 }
 
@@ -134,7 +134,7 @@ private struct InstallHelperOffer: View {
         .padding(DS.Space.m)
         .frame(width: 320)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .movingTransition(.top)
+        .motionTransition(.toast(from: .top))
     }
 }
 
@@ -178,7 +178,7 @@ private struct HelperUpdateNotice: View {
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .floatingPanel(cornerRadius: DS.Radius.panel)
-        .movingTransition(.top)
+        .motionTransition(.toast(from: .top))
     }
 
     private func update() {
@@ -237,7 +237,7 @@ struct SavedScreenOverlay: View {
         ZStack(alignment: .bottomTrailing) {
             if pane.showsSavedScreen {
                 theme.background.opacity(0.32)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
             if case .holding = pane.heldInput {
                 Label("Sends when connected", systemImage: "keyboard")
@@ -246,12 +246,12 @@ struct SavedScreenOverlay: View {
                     .padding(.vertical, DS.Space.xs)
                     .floatingCapsule()
                     .padding(DS.Space.s)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
                     .accessibilityIdentifier("held-input-\(pane.id)")
             }
         }
-        .animation(DS.Motion.overlay, value: pane.showsSavedScreen)
-        .animation(DS.Motion.overlay, value: pane.heldInput)
+        .animation(DS.Motion.standard, value: pane.showsSavedScreen)
+        .animation(DS.Motion.standard, value: pane.heldInput)
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken)

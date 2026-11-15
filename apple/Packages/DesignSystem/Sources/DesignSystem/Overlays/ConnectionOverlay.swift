@@ -185,16 +185,16 @@ private struct ConnectionOverlayModifier: ViewModifier {
                     if let notice = presentation.notice {
                         ConnectionNotice(state: state, copy: notice)
                             .padding(DS.Space.l)
-                            .transition(.opacity)
+                            .motionTransition(.fade)
                     }
                 }
                 .overlay {
                     if let card = presentation.card {
                         ConnectionCard(state: state, card: card, onRetry: onRetry, onDisconnect: onDisconnect)
-                            .scalingTransition(0.96)
+                            .motionTransition(.card())
                     }
                 }
-                .animation(DS.Motion.overlay, value: presentation)
+                .animation(DS.Motion.standard, value: presentation)
         }
         .onChange(of: state.isQuiet || state.isLive, initial: true) { _, healthy in
             downSince = healthy ? nil : (downSince ?? .now)

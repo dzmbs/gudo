@@ -44,12 +44,12 @@ final class CommandKeyState {
     private func commandChanged(_ down: Bool) {
         pending?.cancel()
         guard down else {
-            if held { withAnimation(DS.Motion.quick) { held = false } }
+            if held { withAnimation(DS.Motion.micro) { held = false } }
             return
         }
         pending = Task { @MainActor [weak self] in
             guard (try? await Task.sleep(for: CommandKeyState.delay)) != nil, let self, !self.held else { return }
-            withAnimation(DS.Motion.quick) { self.held = true }
+            withAnimation(DS.Motion.micro) { self.held = true }
         }
     }
     #endif

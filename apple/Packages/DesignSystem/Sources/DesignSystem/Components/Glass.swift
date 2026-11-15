@@ -134,7 +134,7 @@ public struct BarButtonStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: DS.Radius.field)
                     .fill(DS.Palette.ink.opacity(isLit ? (configuration.isPressed ? 0.2 : 0.1) : 0))
-                    .animation(DS.Motion.hover, value: isLit))
+                    .animation(DS.Motion.micro, value: isLit))
             .contentShape(.rect)
             .onHover { isHovered = $0 }
             #if os(iOS)
@@ -165,7 +165,7 @@ public struct RowButtonStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: cornerRadius)
                     .fill(fill(configuration.isPressed))
-                    .animation(DS.Motion.hover, value: isHovered))
+                    .animation(DS.Motion.micro, value: isHovered))
             .onHover { isHovered = $0 }
             #if os(iOS)
             .hoverEffect(.highlight)
@@ -254,7 +254,7 @@ private struct LitModifier: ViewModifier {
                     .fill(DS.Palette.ink.opacity(isOn ? 0.2 : 0))
                     .padding(-DS.Space.xs)
             }
-            .animation(DS.Motion.quick, value: isOn)
+            .animation(DS.Motion.micro, value: isOn)
             .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
@@ -284,7 +284,7 @@ public struct QuietButtonStyle: ButtonStyle {
                     .fill(DS.Palette.ink.opacity(isEnabled ? (configuration.isPressed ? 0.15 : isHovered ? 0.08 : 0) : 0)))
             .contentShape(.rect(cornerRadius: DS.Radius.field))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(DS.Motion.press, value: configuration.isPressed)
+            .animation(DS.Motion.micro, value: configuration.isPressed)
             .onHover { isHovered = $0 }
             #if os(iOS)
             .contentShape(.hoverEffect, .rect(cornerRadius: DS.Radius.field))

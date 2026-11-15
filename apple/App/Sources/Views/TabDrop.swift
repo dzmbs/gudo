@@ -34,12 +34,12 @@ private struct TabDropTarget: ViewModifier {
                                 width: side.axis == .horizontal ? size.width / 2 : nil,
                                 height: side.axis == .vertical ? size.height / 2 : nil)
                             .padding(DS.Space.s)
-                            .transition(.opacity)
+                            .motionTransition(.fade)
                             .allowsHitTesting(false)
                             .accessibilityIdentifier("tab-drop-\(side.rawValue)")
                     }
                 }
-                .animation(DS.Motion.quick, value: side)
+                .animation(DS.Motion.micro, value: side)
                 .onDrop(of: [.text], delegate: Delegate(size: size, side: $side, source: source, merge: merge))
         } else {
             content

@@ -187,7 +187,7 @@ struct EditorDeviceCodeSheet: View {
                             .accessibilityIdentifier("editor-device-code")
                         Button(copied ? "Copied" : "Copy Code", systemImage: copied ? "checkmark" : "doc.on.doc") {
                             Self.copy(login.code)
-                            withAnimation(DS.Motion.snappy) { copied = true }
+                            withAnimation(DS.Motion.standard) { copied = true }
                         }
                         .buttonStyle(.glass)
                         .contentTransition(.symbolEffect(.replace))

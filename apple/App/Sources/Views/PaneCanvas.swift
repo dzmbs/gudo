@@ -340,7 +340,7 @@ final class PaneArrangement {
 
     func still(of pane: PaneId) -> CGImage? { stills[pane] }
     /// How long stills stand in: the motion's length (design review stretches it).
-    static var stillDuration = DS.Motion.liftDuration
+    static var stillDuration = DS.Motion.structuralSettle
     /// Stretches how long a layout motion may take to settle (design review draws it slowly).
     static var settleStretch = 1.0
 
@@ -398,10 +398,10 @@ final class PaneArrangement {
     private func land() {
         landingLayout = nil
         landingTimeout?.cancel()
-        withAnimation(DS.Motion.split) { preview = nil }
-        withAnimation(DS.Motion.overlay) { landing = nil }
+        withAnimation(DS.Motion.structural) { preview = nil }
+        withAnimation(DS.Motion.standard) { landing = nil }
         // Panes the preview held go to where the layout has them.
-        if let layout { prepareTerminals(for: layout, within: DS.Motion.splitSettle) }
+        if let layout { prepareTerminals(for: layout, within: DS.Motion.structuralSettle) }
     }
 
     /// Each terminal of `layout` is on its way to its size there: its grid changes once, now,
@@ -465,8 +465,8 @@ final class PaneArrangement {
         guard let layout, let card = layout.card(id), let workspace, let pane = card.panes.first else { return clear(id) }
         if dockPreview != nil, let drop = dockDrop {
             dockDrop = nil
-            TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.liftDuration * 1000)))
-            withAnimation(DS.Motion.lift) {
+            TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
+            withAnimation(DS.Motion.structural) {
                 dockPreview = nil
                 live[id] = nil
                 guides = []
@@ -482,7 +482,7 @@ final class PaneArrangement {
         let thrown = FloatGeometry.projected(current, velocity: CGVector(dx: velocity.width, dy: velocity.height), in: layout.bounds)
         let others = layout.cards.filter { $0.id != id && $0.visible }.map(\.frame)
         let rest = FloatGeometry.snap(thrown, in: layout.bounds, others: others).rect
-        withAnimation(DS.Motion.settle) {
+        withAnimation(DS.Motion.structural) {
             live[id] = nil
             guides = []
             dockPreview = nil
@@ -491,7 +491,7 @@ final class PaneArrangement {
     }
 
     private func clear(_ id: FloatId) {
-        withAnimation(DS.Motion.settle) {
+        withAnimation(DS.Motion.structural) {
             live[id] = nil
             guides = []
             dockPreview = nil
@@ -509,7 +509,7 @@ final class PaneArrangement {
         guard drop != dwellingOn else { return }
         dwellingOn = drop
         dwell?.cancel()
-        if dockPreview != nil { withAnimation(DS.Motion.menu) { dockPreview = nil } }
+        if dockPreview != nil { withAnimation(DS.Motion.standard) { dockPreview = nil } }
         dockDrop = nil
         guard drop != .cancel, drop != .float else { return }
         dwell = Task { [weak self] in
@@ -517,7 +517,7 @@ final class PaneArrangement {
             guard !Task.isCancelled, let self, let op = self.op(placing: pane, drop, docking: true),
                   let frame = self.outcome(of: op)?.leaf(pane)?.frame else { return }
             self.dockDrop = drop
-            withAnimation(DS.Motion.menu) { self.dockPreview = frame }
+            withAnimation(DS.Motion.standard) { self.dockPreview = frame }
         }
     }
 
@@ -578,7 +578,7 @@ final class PaneArrangement {
     func endResize(_ id: FloatId) {
         defer { startFrame = nil }
         guard let layout, let workspace, let rect = live[id], let pane = layout.card(id)?.panes.first else { return clear(id) }
-        withAnimation(DS.Motion.settle) {
+        withAnimation(DS.Motion.structural) {
             live[id] = nil
             guides = []
             workspace.apply(.setFloat(pane, frame: FloatFrame(rect, in: layout.bounds), minimized: nil, pinned: nil))
@@ -623,7 +623,7 @@ final class PaneArrangement {
         }
         guard paneDrag?.drop != drop else { return }
         // The panes make room, and the dragged one shows where it lands.
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             paneDrag?.drop = drop
             paneDrag?.preview = outcome?.leaf(pane)?.frame
             preview = outcome
@@ -647,8 +647,8 @@ final class PaneArrangement {
             let rect = CGRect(x: point.x - size.width / 2, y: point.y - 16, width: size.width, height: size.height)
             op = .float(pane, frame: FloatFrame(rect, in: layout.bounds).clamped)
         }
-        TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.liftDuration * 1000)))
-        withAnimation(DS.Motion.lift) {
+        TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
+        withAnimation(DS.Motion.structural) {
             paneDrag = nil
             landing = drag.preview
             if let op { workspace.apply(op) }
@@ -694,8 +694,8 @@ private struct LiftBeat: ViewModifier {
             content.scaleEffect(reduceMotion ? 1 : scale)
         } keyframes: { _ in
             KeyframeTrack {
-                SpringKeyframe(floating ? 1.03 : 0.985, duration: 0.16, spring: .snappy)
-                SpringKeyframe(1, duration: 0.36, spring: .smooth)
+                SpringKeyframe(floating ? 1.03 : 0.985, duration: DS.Motion.arrivalDelay, spring: DS.Motion.Role.micro.spring)
+                SpringKeyframe(1, duration: DS.Motion.structuralSettle - DS.Motion.arrivalDelay, spring: DS.Motion.Role.structural.spring)
             }
         }
     }
@@ -848,7 +848,7 @@ struct ArrangementOverlay: View {
                     .offset(
                         x: guide.axis == .vertical ? guide.position - 0.5 : guide.from,
                         y: guide.axis == .vertical ? guide.from : guide.position - 0.5)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
             if let region = arrangement.dockPreview ?? arrangement.paneDrag?.preview ?? arrangement.landing {
                 DropRegion(rect: region)
@@ -858,7 +858,7 @@ struct ArrangementOverlay: View {
                     FloatTarget(lit: drag.drop == .float)
                         .frame(width: layout.floatTarget.width, height: layout.floatTarget.height)
                         .offset(x: layout.floatTarget.minX, y: layout.floatTarget.minY)
-                        .transition(.scale(scale: 0.9).combined(with: .opacity))
+                        .motionTransition(.pill())
                 }
                 DragChip(pane: drag.pane, workspace: workspace)
                     .fixedSize()
@@ -868,8 +868,8 @@ struct ArrangementOverlay: View {
         }
         .frame(width: layout.bounds.width, height: layout.bounds.height, alignment: .topLeading)
         .allowsHitTesting(false)
-        .animation(DS.Motion.overlay, value: arrangement.guides)
-        .animation(DS.Motion.menu, value: arrangement.paneDrag == nil)
+        .animation(DS.Motion.standard, value: arrangement.guides)
+        .animation(DS.Motion.standard, value: arrangement.paneDrag == nil)
     }
 }
 
@@ -884,7 +884,7 @@ private struct DropRegion: View {
             .overlay(shape.strokeBorder(DS.Palette.accent.opacity(0.65), lineWidth: 1.5))
             .frame(width: max(0, rect.width - 2 * DS.Space.xs), height: max(0, rect.height - 2 * DS.Space.xs))
             .offset(x: rect.minX + DS.Space.xs, y: rect.minY + DS.Space.xs)
-            .transition(.opacity)
+            .motionTransition(.fade)
             .accessibilityIdentifier("pane-drop-region")
     }
 }
@@ -903,7 +903,7 @@ private struct FloatTarget: View {
             }
             .floatingCapsule()
             .scaleEffect(lit ? 1.06 : 1)
-            .animation(DS.Motion.press, value: lit)
+            .animation(DS.Motion.micro, value: lit)
             .accessibilityIdentifier("pane-float-target")
     }
 }
@@ -952,7 +952,7 @@ struct FloatTray: View {
                     TrayChip(chip: chip, workspace: workspace)
                         .frame(width: chip.frame.width, height: chip.frame.height)
                         .offset(x: chip.frame.minX, y: chip.frame.minY)
-                        .transition(.scale(scale: 0.6, anchor: .bottomTrailing).combined(with: .opacity))
+                        .motionTransition(.pill(anchor: .bottomTrailing))
                 }
             }
             .frame(width: layout.bounds.width, height: layout.bounds.height, alignment: .topLeading)
@@ -971,8 +971,8 @@ private struct TrayChip: View {
         let program = model.programIdentity(ofPane: pane, onGroup: workspace.groupId)
         let state = chip.panes.lazy.compactMap { model.paneStatus.state(of: $0.description) }.first
         Button {
-            withAnimation(DS.Motion.lift) { workspace.apply(.focus(pane)) }
-            TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.liftDuration * 1000)))
+            withAnimation(DS.Motion.structural) { workspace.apply(.focus(pane)) }
+            TerminalSurface.holdGrids(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
         } label: {
             HStack(spacing: DS.Space.row) {
                 ProgramMark(program, size: 12)
@@ -998,11 +998,11 @@ private struct TrayChip: View {
         .buttonStyle(.plain)
         .floatingCapsule(interactive: true)
         .scaleEffect(hovered ? 1.03 : 1)
-        .animation(DS.Motion.press, value: hovered)
+        .animation(DS.Motion.micro, value: hovered)
         .onHover { hovered = $0 }
         .help("Restore \(program.displayName)")
         .contextMenu {
-            Button("Restore", systemImage: "arrow.up.left.and.arrow.down.right") { withAnimation(DS.Motion.lift) { workspace.apply(.focus(pane)) } }
+            Button("Restore", systemImage: "arrow.up.left.and.arrow.down.right") { withAnimation(DS.Motion.structural) { workspace.apply(.focus(pane)) } }
             Button("Dock Pane", systemImage: "rectangle.inset.filled.and.person.filled") { model.dock(pane, in: workspace) }
             Divider()
             Button("Close Pane", systemImage: "xmark", role: .destructive) { workspace.apply(.close(pane)) }

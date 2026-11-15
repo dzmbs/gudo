@@ -15,16 +15,16 @@ struct LivePaneActivity: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             ForEach(drafts, id: \.peer) { peer in
                 DraftMirror(peer: peer)
-                    .movingTransition(.bottom)
+                    .motionTransition(.toast(from: .bottom))
             }
             if !typists.isEmpty {
                 TypingPill(people: typists)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .scalingTransition(0.96, anchor: .bottomLeading)
+                    .motionTransition(.card(anchor: .bottomLeading))
             }
         }
-        .animation(DS.Motion.overlay, value: drafts.map(\.peer))
-        .animation(DS.Motion.overlay, value: typists.map(\.peer))
+        .animation(DS.Motion.standard, value: drafts.map(\.peer))
+        .animation(DS.Motion.standard, value: typists.map(\.peer))
     }
 }
 

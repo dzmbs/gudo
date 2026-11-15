@@ -462,7 +462,7 @@ struct PaneChatButton: View {
     var body: some View {
         let showsChat = state.presentation == .chat
         Button {
-            withAnimation(DS.Motion.split) { _ = state.show(showsChat ? .terminal : .chat, terminal: pane) }
+            withAnimation(DS.Motion.structural) { _ = state.show(showsChat ? .terminal : .chat, terminal: pane) }
         } label: {
             Label("Chat", systemImage: showsChat ? "text.bubble.fill" : "text.bubble")
                 .foregroundStyle(showsChat ? DS.Palette.text : DS.Palette.textSecondary)

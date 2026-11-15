@@ -56,7 +56,7 @@ struct AppLockScreen: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { Rectangle().fill(DS.Palette.base).ignoresSafeArea() }
         .chromeContent()
-        .animation(DS.Motion.overlay, value: lock.isLocked)
+        .animation(DS.Motion.standard, value: lock.isLocked)
         .task(id: lock.isLocked) {
             guard prompts, lock.isLocked, Self.appIsActive else { return }
             await lock.promptIfNeeded()

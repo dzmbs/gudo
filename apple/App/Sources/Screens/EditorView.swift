@@ -64,11 +64,11 @@ struct EditorPaneView: View {
                             retry: { Task { await source.open() } },
                             useTunnel: source.mode == .server ? { pane.isTunnelOfferShown = true } : nil,
                             close: onClose)
-                            .transition(.opacity)
+                            .motionTransition(.fade)
                     }
                 }
             }
-            .animation(DS.Motion.panel, value: pane.isWorkbenchVisible)
+            .animation(DS.Motion.standard, value: pane.isWorkbenchVisible)
             .sheet(item: Binding(get: { pane.browser?.popup }, set: { pane.browser?.popup = $0 })) { popup in
                 EditorPopupSheet(popup: popup) { pane.browser?.popup = nil }
             }
@@ -354,7 +354,7 @@ private struct EditorProgress: View {
         .padding(DS.Space.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(theme.background)
-        .animation(DS.Motion.snappy, value: phase)
+        .animation(DS.Motion.standard, value: phase)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("editor-progress")
     }
@@ -420,7 +420,7 @@ private struct EditorProgress: View {
                 case .done:
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(DS.Palette.done)
-                        .transition(.scale.combined(with: .opacity))
+                        .motionTransition(.pill())
                 case .active:
                     Spinner(color: DS.Palette.accent, lineWidth: 2)
                         .frame(width: 14, height: 14)

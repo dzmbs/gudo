@@ -1,3 +1,4 @@
+import DesignSystem
 import DrawingKit
 import QuartzCore
 import GudoCore
@@ -79,10 +80,9 @@ final class PeerInkView: PlatformView {
             let layer = stroke.layer
             CATransaction.begin()
             CATransaction.setCompletionBlock { layer.removeFromSuperlayer() }
-            let fade = CABasicAnimation(keyPath: "opacity")
+            let fade = DS.Motion.Role.standard.layerAnimation(keyPath: "opacity")
             fade.fromValue = 1
             fade.toValue = 0
-            fade.duration = 0.25
             layer.opacity = 0
             layer.add(fade, forKey: "fade")
             CATransaction.commit()

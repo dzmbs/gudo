@@ -14,7 +14,7 @@ struct BrowserSheet: View {
                     initialURL: url, dataStore: DevServerRouting.shared.dataStore(forHost: model.browserHost),
                     routedHost: model.browserHost.map { (id: $0, name: model.ports.hostName) },
                     intercept: model.browserSignInPane == nil ? nil : { [model] in model.pastedSignInCode($0) },
-                    onDone: { withAnimation(DS.Motion.snappy) { model.browserURL = nil } }, doneTitle: "Ports")
+                    onDone: { withAnimation(DS.Motion.standard) { model.browserURL = nil } }, doneTitle: "Ports")
                     .onOpenAsTab { [model] url in model.openBrowser(url, hostId: model.browserHost, placement: .tab) }
                     .id("\(model.browserHost ?? "")|\(url)")
             } else {
@@ -61,7 +61,7 @@ struct PortsList: View {
         // On the content only: over the chrome it would rename the leaf's own Close button.
         .accessibilityIdentifier("ports-list")
         .toolChrome("Ports", subtitle: model.ports.hostName)
-        .animation(DS.Motion.snappy, value: ports)
+        .animation(DS.Motion.standard, value: ports)
     }
 
     private var list: some View {
@@ -168,7 +168,7 @@ struct PortsList: View {
         if model.opensToolsAsLeaves {
             model.openPage(url, hostId: nil, besideTool: leaf?.member.id)
         } else {
-            withAnimation(DS.Motion.snappy) { model.browserURL = url }
+            withAnimation(DS.Motion.standard) { model.browserURL = url }
         }
     }
 }
@@ -205,7 +205,7 @@ struct PortOfferBanner: ViewModifier {
                         .buttonStyle(.primaryGlass)
                         .controlSize(.small)
                         .accessibilityIdentifier("port-offer-open")
-                    Button("Dismiss", systemImage: "xmark") { withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() } }
+                    Button("Dismiss", systemImage: "xmark") { withAnimation(DS.Motion.standard) { model.ports.dismissOffer() } }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.bar)
                 }
@@ -218,16 +218,16 @@ struct PortOfferBanner: ViewModifier {
                 .frame(maxWidth: 520, alignment: .leading)
                 .padding(.horizontal, DS.Space.l)
                 .padding(.bottom, Self.bottomInset(model))
-                .movingTransition(.bottom)
+                .motionTransition(.toast(from: .bottom))
                 .task(id: port.port) {
                     try? await Task.sleep(for: .seconds(15))
-                    withAnimation(DS.Motion.overlay) { model.ports.dismissOffer() }
+                    withAnimation(DS.Motion.standard) { model.ports.dismissOffer() }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("port-offer")
             }
         }
-        .animation(DS.Motion.overlay, value: model.ports.offer)
+        .animation(DS.Motion.standard, value: model.ports.offer)
     }
 }
 

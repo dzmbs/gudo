@@ -653,7 +653,7 @@ final class PaneDrawing: NSObject {
         view.addSubview(host.view)
         notice = host
         layoutNotice()
-        UIView.animate(withDuration: 0.2) { host.view.alpha = 1 }
+        UIView.animate(DS.Motion.standard) { host.view.alpha = 1 }
         #else
         let host = NSHostingView(rootView: ThemedRoot { PlacedNotice(model: model) })
         host.appearance = NSAppearance(named: isDarkTheme ? .darkAqua : .aqua)
@@ -707,7 +707,7 @@ final class PaneDrawing: NSObject {
         self.notice = nil
         #if os(iOS)
         let view = notice.view
-        UIView.animate(withDuration: 0.2, animations: { view?.alpha = 0 }, completion: { _ in view?.removeFromSuperview() })
+        UIView.animate(DS.Motion.standard) { view?.alpha = 0 } completion: { view?.removeFromSuperview() }
         #else
         notice.removeFromSuperview()
         #endif

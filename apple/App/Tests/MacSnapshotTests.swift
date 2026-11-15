@@ -327,12 +327,12 @@ final class MacSnapshotTests: XCTestCase {
             // Within a project: the last tab to the top.
             let plan = SidebarDrop.insert(last, into: .project(app.id), at: 0)
             drag.dragging = last
-            withAnimation(DS.Motion.reorder) { drag.plan = plan }
+            withAnimation(DS.Motion.standard) { drag.plan = plan }
             for (index, delay) in [0.0, 0.04, 0.04, 0.05, 0.06, 0.08, 0.12, 0.3].enumerated() {
                 await self.pump(delay)
                 try? self.capture(self.current!, "projects-reorder-\(index)")
             }
-            withAnimation(DS.Motion.reorder) {
+            withAnimation(DS.Motion.standard) {
                 model.commit(plan)
                 drag.reset()
             }
@@ -343,17 +343,17 @@ final class MacSnapshotTests: XCTestCase {
             XCTAssertEqual(model.projects.first { $0.id == app.id }?.tabs.first, last)
             // A loose tab hovering the middle of a project's row: "will group".
             drag.dragging = logs
-            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app.tabs[0]) }
+            withAnimation(DS.Motion.standard) { drag.plan = .group(logs, onto: app.tabs[0]) }
             await self.pump(0.5)
             try? self.capture(self.current!, "projects-will-group")
             // Into another project between its rows: the row leaves its host and slides in.
             guard let infra = model.projects.first(where: { $0.name == "infra" }) else { return XCTFail("infra") }
-            withAnimation(DS.Motion.reorder) { drag.plan = .insert(logs, into: .project(infra.id), at: 1) }
+            withAnimation(DS.Motion.standard) { drag.plan = .insert(logs, into: .project(infra.id), at: 1) }
             for (index, delay) in [0.03, 0.05, 0.08, 0.3].enumerated() {
                 await self.pump(delay)
                 try? self.capture(self.current!, "projects-into-\(index)")
             }
-            withAnimation(DS.Motion.reorder) { drag.reset() }
+            withAnimation(DS.Motion.standard) { drag.reset() }
         }
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
@@ -385,7 +385,7 @@ final class MacSnapshotTests: XCTestCase {
 
         try await window("projects-new", screen: "projects") { model in
             await self.pump(1)
-            withAnimation(DS.Motion.reorder) { model.newEmptyProject() }
+            withAnimation(DS.Motion.standard) { model.newEmptyProject() }
         }
         try await window("projects-drop", screen: "projects") { model in
             let drag = model.sidebarDrag
@@ -395,13 +395,13 @@ final class MacSnapshotTests: XCTestCase {
             else { return XCTFail("fixture") }
             await self.pump(1.5)
             drag.dragging = logs
-            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: app.tabs[1]) }
+            withAnimation(DS.Motion.standard) { drag.plan = .group(logs, onto: app.tabs[1]) }
             await self.pump(0.6)
             try? self.capture(self.current!, "projects-drop-add")
-            withAnimation(DS.Motion.reorder) { drag.plan = .group(logs, onto: migrate) }
+            withAnimation(DS.Motion.standard) { drag.plan = .group(logs, onto: migrate) }
             await self.pump(0.6)
             try? self.capture(self.current!, "projects-drop-group")
-            withAnimation(DS.Motion.reorder) { drag.reset() }
+            withAnimation(DS.Motion.standard) { drag.reset() }
         }
         try await window("projects-after", screen: "projects") { model in
             guard let app = model.projects.first(where: { $0.name == "acme-app" }),
@@ -947,7 +947,7 @@ final class MacSnapshotTests: XCTestCase {
     }
 
     /// Captures `name-0…` through `change`: in real time on a display; off it (a locked Mac)
-    /// the canvas is drawn at points along the `lift` spring, as its animation would draw it.
+    /// the canvas is drawn at points along the `structural` spring, as its animation would draw it.
     private func frames(_ name: String, _ model: WindowModel, _ change: () -> Void) async {
         guard let window = current else { return }
         if window.level.rawValue >= 0 {
@@ -968,13 +968,13 @@ final class MacSnapshotTests: XCTestCase {
             let start = ContinuousClock.now
             TerminalSurface.holdGrids(for: .seconds(6))
             PaneArrangement.stillDuration = 6
-            defer { PaneArrangement.stillDuration = DS.Motion.liftDuration }
+            defer { PaneArrangement.stillDuration = DS.Motion.structuralSettle }
             model.workspace?.layoutChangeUntil = .now + .seconds(8)
             arrangement.scrub = .init(from: from, progress: 0)
             change()
             await pump(0.1)
             model.workspace?.layoutChangeUntil = .now + .seconds(8)
-            let spring = Spring(duration: 0.42, bounce: 0.12)
+            let spring = DS.Motion.Role.structural.spring
             for (index, time) in [0, 0.03, 0.06, 0.1, 0.15, 0.22, 0.3, 0.5].enumerated() {
                 arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
                 await pump(0.08)
@@ -1084,7 +1084,7 @@ final class MacSnapshotTests: XCTestCase {
     /// Captures `name-0…` through `change`, the canvas drawn at points along `spring` as its
     /// animation draws it (a capture takes longer than a frame), each terminal as it shows
     /// then (its held last frame); then `name-rest` once it has settled and redrawn.
-    private func motion(_ name: String, _ model: WindowModel, spring: Spring = Spring(duration: DS.Motion.splitDuration, bounce: 0), _ change: () -> Void) async {
+    private func motion(_ name: String, _ model: WindowModel, spring: Spring = DS.Motion.Role.structural.spring, _ change: () -> Void) async {
         guard let window = current else { return }
         let arrangement = model.arrangement
         guard let from = arrangement.preview ?? arrangement.layout else { return }
@@ -1180,8 +1180,8 @@ final class MacSnapshotTests: XCTestCase {
                 arrangement.scrub = .init(from: shown, progress: 0)
                 arrangement.drag(bottom, to: CGPoint(x: start.x + (end.x - start.x) * progress, y: start.y + (end.y - start.y) * progress))
                 if step > 0, arrangement.paneDrag?.drop != drop {
-                    // The panes making room, along the `reorder` spring.
-                    let spring = Spring(response: 0.3, dampingRatio: 0.84)
+                    // The panes making room, along the `standard` spring.
+                    let spring = DS.Motion.Role.standard.spring
                     for (index, time) in Self.motionTimes.enumerated() {
                         arrangement.scrub = .init(from: shown, progress: spring.value(target: 1.0, time: time))
                         await self.pump(0.08)

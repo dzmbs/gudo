@@ -101,6 +101,6 @@ public struct SwipeActionTray: View {
         .frame(width: max(0, revealed), alignment: edge == .trailing ? .trailing : .leading)
         .frame(maxHeight: .infinity)
         .clipped()
-        .animation(DS.Motion.swipe, value: armed)
+        .animation(DS.Motion.standard, value: armed)
     }
 }

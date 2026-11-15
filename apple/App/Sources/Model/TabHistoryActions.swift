@@ -103,7 +103,7 @@ extension WindowModel {
                 if let ref = await self.reopenOne(entry) { last = ref }
             }
             if let self, let last {
-                withAnimation(DS.Motion.snappy) { self.focus(last) }
+                withAnimation(DS.Motion.standard) { self.focus(last) }
             }
         }
     }
@@ -123,7 +123,7 @@ extension WindowModel {
                 if let name = entry.name { workspace(ofGroup: entry.hostId)?.layout.apply(.rename(ref.tab, name)) }
             }
             guard await appeared(ref) else { return nil }
-            withAnimation(DS.Motion.reorder) { groups.place(ref, as: entry) }
+            withAnimation(DS.Motion.standard) { groups.place(ref, as: entry) }
             AppModel.log.info("reopened \(entry.title, privacy: .private) on \(entry.hostId, privacy: .public)")
             return ref
         } catch {
@@ -209,7 +209,7 @@ extension WindowModel {
             for host in launchHiding {
                 guard let tabs = groups.sessionTabs(of: host), app.hosts.connection(host)?.status.isLive == true else { continue }
                 let found = tabs.map { TabRef(hostId: host, tab: $0.id) }
-                withAnimation(DS.Motion.reorder) {
+                withAnimation(DS.Motion.standard) {
                     groups.hiddenTabs.formUnion(RestoreDecision.hidden(found, setting: .newTerminal, activity: tabActivity))
                 }
                 launchHiding.remove(host)
@@ -234,7 +234,7 @@ extension WindowModel {
             else { continue }
             for pane in tab.root.panes {
                 guard let assist = await daemon.paneAssist(pane), assist.runsCommand else { continue }
-                withAnimation(DS.Motion.reorder) { groups.unhide(ref) }
+                withAnimation(DS.Motion.standard) { groups.unhide(ref) }
                 break
             }
         }
@@ -242,7 +242,7 @@ extension WindowModel {
 
     /// Reopen Previous Tabs (History, the sidebar's Restore row).
     func restoreHiddenTabs() {
-        withAnimation(DS.Motion.reorder) { groups.restoreHiddenTabs() }
+        withAnimation(DS.Motion.standard) { groups.restoreHiddenTabs() }
     }
 
     // MARK: Idle tabs
@@ -285,13 +285,13 @@ extension WindowModel {
                 idle.append(ref)
             }
         }
-        if idle != idleTabs { withAnimation(DS.Motion.snappy) { idleTabs = idle } }
+        if idle != idleTabs { withAnimation(DS.Motion.standard) { idleTabs = idle } }
     }
 
     /// The suggestion's tap: the idle tabs close together, one Undo brings them back.
     func closeIdleTabs() {
         let refs = idleTabs
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             idleTabs = []
             closeTabs(refs, undoable: true)
         }
@@ -301,7 +301,7 @@ extension WindowModel {
     /// stretch untouched.
     func dismissIdleTabs() {
         for ref in idleTabs { TabTouches.shared.touch(ref) }
-        withAnimation(DS.Motion.snappy) { idleTabs = [] }
+        withAnimation(DS.Motion.standard) { idleTabs = [] }
     }
 
     // MARK: Selection
@@ -317,7 +317,7 @@ extension WindowModel {
             tabSelection.extend(to: ref, current: currentTab, in: groups.tabs)
         } else {
             tabSelection.clear()
-            withAnimation(DS.Motion.snappy) { focus(ref) }
+            withAnimation(DS.Motion.standard) { focus(ref) }
         }
     }
 
@@ -350,7 +350,7 @@ extension WindowModel {
     }
 
     func closeSelectedTabs(_ refs: [TabRef]) {
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             closeTabs(refs, undoable: true)
             endTabSelection()
         }
@@ -358,7 +358,7 @@ extension WindowModel {
 
     /// Move to Project ▸ on the selection, in sidebar order at the project's end.
     func moveSelectedTabs(toProject id: String) {
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             for ref in selectedTabs where groups.project(of: ref)?.id != id {
                 groups.apply(groups.planner().move(ref, into: id, at: .max))
             }
@@ -370,7 +370,7 @@ extension WindowModel {
     func newProjectFromSelectedTabs() {
         let refs = selectedTabs
         guard !refs.isEmpty else { return }
-        withAnimation(DS.Motion.reorder) {
+        withAnimation(DS.Motion.standard) {
             newProject(from: refs)
             endTabSelection()
         }

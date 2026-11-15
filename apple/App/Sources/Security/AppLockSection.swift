@@ -30,6 +30,6 @@ struct AppLockSection: View {
             Text("\(Brand.name) asks for \((lock.method ?? .passcode).name) when it opens and when you come back to it. Agents keep working and notifications still arrive while it is locked.")
         }
         .onAppear { lock.refreshMethod() }
-        .animation(DS.Motion.snappy, value: lock.isEnabled)
+        .animation(DS.Motion.standard, value: lock.isEnabled)
     }
 }

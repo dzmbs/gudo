@@ -346,7 +346,7 @@ struct SessionReplayView: View {
             .background(DS.Palette.sidebar)
             .onChange(of: currentAction) { _, id in
                 guard let id else { return }
-                withAnimation(DS.Motion.snappy) { proxy.scrollTo(id, anchor: .center) }
+                withAnimation(DS.Motion.standard) { proxy.scrollTo(id, anchor: .center) }
             }
         }
     }

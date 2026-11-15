@@ -140,7 +140,7 @@ struct PairingSheet: View {
         #else
         // Sized per mode only; content that arrives later (a new public key, an error) scrolls.
         .frame(width: 500, height: macHeight)
-        .animation(DS.Motion.snappy, value: mode)
+        .animation(DS.Motion.standard, value: mode)
         #endif
     }
 

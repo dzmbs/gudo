@@ -297,7 +297,7 @@ struct DiffReviewView: View {
 
     private func beginNote(_ file: DiffFile, _ line: DiffLine, oldSide: Bool) {
         composingText = ""
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             composing = NoteAnchor(path: file.path, lineId: line.id, number: (oldSide ? line.oldNumber : line.newNumber) ?? line.newNumber ?? line.oldNumber ?? 0, oldSide: oldSide, quote: line.text)
         }
     }
@@ -305,7 +305,7 @@ struct DiffReviewView: View {
     private func saveNote(_ text: String) {
         guard let anchor = composing else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             if !trimmed.isEmpty {
                 notes.append(ReviewNote(
                     path: anchor.path, startLine: anchor.number, endLine: anchor.number, oldSide: anchor.oldSide,
@@ -349,7 +349,7 @@ struct DiffReviewView: View {
             .floatingPanel()
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
-            .movingTransition(.bottom)
+            .motionTransition(.panel(from: .bottom))
         }
     }
 
@@ -368,7 +368,7 @@ struct DiffReviewView: View {
                 try await source.sendReview(notes, scope: scope, preamble: nil)
                 let reviewer = source.reviewer(for: scope) ?? "the agent"
                 model.toasts.show(Toast("Review sent to \(reviewer)", systemImage: "arrow.up.circle.fill", style: .success))
-                withAnimation(DS.Motion.snappy) { notes.removeAll() }
+                withAnimation(DS.Motion.standard) { notes.removeAll() }
                 onSent()
             } catch {
                 model.toasts.show(Toast("Couldn't send: \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
@@ -393,7 +393,7 @@ struct DiffReviewView: View {
     private func loadFiles() async {
         do {
             let loaded = try await source.files(scope)
-            withAnimation(DS.Motion.snappy) { files = loaded }
+            withAnimation(DS.Motion.standard) { files = loaded }
         } catch {
             files = nil
             problem = ToolProblem(error)

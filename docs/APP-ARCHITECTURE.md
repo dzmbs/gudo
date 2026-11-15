@@ -1211,7 +1211,7 @@ op drops its change and shows the daemon's truth. The sidebar's tab list is one 
 (`SidebarTabList`, items keyed by `TabRef`, so a row moving between a host and a project slides
 rather than fading) under one drop target that hit-tests the rows' frames. While dragging it
 draws the drop as a plan applied to its rows (`SidebarDrop`): neighbours slide apart with a
-spring (`DS.Motion.reorder`, interruptible), the dragged row leaves a gap where it will land
+spring (`DS.Motion.standard`, interruptible), the dragged row leaves a gap where it will land
 (the system's lifted preview follows the pointer or finger), never sliding over its neighbours.
 On drop the plan is committed to the stores in the same transaction that clears it, so the order
 on screen does not change, nothing moves twice, and the row fades into its gap.
@@ -1304,7 +1304,7 @@ the view's own origin; once its content overflowed, the two fed each other and t
 Folding is a size and trait change, not a teardown (Apple DTS): the window model, workspaces,
 panes and their terminal views live on.
 
-- **Nothing rebuilt.** `updateFold` animates a layout change with `DS.Motion.fold` (0.4 s; none
+- **Nothing rebuilt.** `updateFold` animates a layout change with `DS.Motion.structural` (none
   under Reduce Motion). Every layout keeps its views in place: the sidebar's width, an optional
   band, an optional deck. Two Columns' children keep their slots whether or not there is a fold.
 - **One reflow.** `quietLayoutResizes(for:)` holds the grids through the animation, so each pane
@@ -1579,15 +1579,14 @@ tab as one flat `ForEach` of panes keyed by pane id; `CanvasLayout` turns the se
 tree, `FloatScene`, zoom, the canvas size, cell size and padding) into a frame, z, corner radii
 and visibility per pane, divider frames per layer, window cards and tray chips. Because the
 views never change identity, floating, docking, zooming, a drop and the tray are frame changes
-animated by one spring; `ShapeMemo` picks `lift` (a pane changing layer) or `split` by what
-changed. Before the first frame, every terminal the change resizes is told where it is going
+animated by one spring (`DS.Motion.structural`). Before the first frame, every terminal the change resizes is told where it is going
 (`PaneArrangement.prepareTerminals` → `TerminalSurface.prepareResize`): its grid changes then,
 once (one SIGWINCH, so the shell redraws early), and its layer shows its last frame, anchored
 top-left, until the view is within a point of its new size and the program's output has gone
 quiet; only then does it draw, at its new size. No frame on the way reallocates a drawable or
 reflows. A zoomed pane grows over its neighbours (z above them, `CanvasLayout.zoomZ`), which
 stay laid out under it until it has settled; a new pane comes in under the panes making room
-for it. A zoom is one critically damped spring (`DS.Motion.splitSpring`) from start to end:
+for it. A zoom is one critically damped spring (`DS.Motion.structural`) from start to end:
 against a host, `DaemonLayoutStore` replays a zoom the host has not answered as the state it
 leads to (`Session.setZoom`), so the echo of an earlier op (the focus a header's Zoom button
 sends first) never draws it undone mid-flight. The sidebar holds frames the same way without a known end (`holdFrames`) and changes

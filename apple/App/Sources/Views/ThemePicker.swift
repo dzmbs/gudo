@@ -90,7 +90,7 @@ struct ThemePicker: View {
             LazyVGrid(columns: columns, spacing: DS.Space.xl) {
                 ForEach(themes) { theme in
                     Button {
-                        withAnimation(DS.Motion.quick) { selection = theme.name }
+                        withAnimation(DS.Motion.micro) { selection = theme.name }
                     } label: {
                         ThemeTile(theme: theme, isSelected: theme.name == selection)
                     }

@@ -120,7 +120,7 @@ struct ThemePairRows: View {
     @AppStorage(ThemePair.darkKey) private var dark = ThemePair.defaultDark
 
     var body: some View {
-        Toggle(isOn: $enabled.animation(DS.Motion.quick)) {
+        Toggle(isOn: $enabled.animation(DS.Motion.micro)) {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Follow Light and Dark Mode")
                 Text("A light theme and a dark theme, switched with the system")

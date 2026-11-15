@@ -77,7 +77,7 @@ struct HostToolbarButton: View {
             },
         ] + pairing + [
             HostSwitcherCommand(id: "all-hosts", group: 2, title: "All Hosts", systemImage: "server.rack", shortcut: ["⇧", "⌘", "H"]) {
-                withAnimation(DS.Motion.snappy) { model.destination = .hosts }
+                withAnimation(DS.Motion.standard) { model.destination = .hosts }
             },
         ]
         return rawCommands.map { command in

@@ -274,7 +274,7 @@ public struct HostSwitcher: View {
             .switcherRow(isHighlighted: isHighlighted, in: highlight)
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { withAnimation(DS.Motion.menu) { highlighted = row.id } } }
+        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = row.id } } }
         .accessibilityAddTraits(isCurrent(row) ? .isSelected : [])
         .accessibilityIdentifier("host-switcher-\(row.id)")
     }
@@ -294,7 +294,7 @@ public struct HostSwitcher: View {
         let rowIDs = rows.map(\.id)
         guard !rowIDs.isEmpty else { return }
         let index = highlighted.flatMap { rowIDs.firstIndex(of: $0) } ?? (step > 0 ? -1 : rowIDs.count)
-        withAnimation(DS.Motion.menu) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
+        withAnimation(DS.Motion.standard) { highlighted = rowIDs[min(max(index + step, 0), rowIDs.count - 1)] }
     }
 
     private func choose(_ id: String?) {

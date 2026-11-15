@@ -101,7 +101,7 @@ public struct PeopleSwitcher: View {
         }
         .buttonStyle(.plain)
         .disabled(person.isMe)
-        .onHover { if $0 { withAnimation(DS.Motion.menu) { highlighted = person.id } } }
+        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = person.id } } }
         .accessibilityLabel(person.isMe ? "\(person.name), you" : person.isFollowed ? "Stop Following \(person.name)" : "Follow \(person.name)")
         .accessibilityValue(person.detail ?? "")
         .accessibilityAddTraits(person.isFollowed ? .isSelected : [])
@@ -128,7 +128,7 @@ public struct PeopleSwitcher: View {
             .switcherRow(isHighlighted: highlighted == command.id, in: highlight)
         }
         .buttonStyle(.plain)
-        .onHover { if $0 { withAnimation(DS.Motion.menu) { highlighted = command.id } } }
+        .onHover { if $0 { withAnimation(DS.Motion.standard) { highlighted = command.id } } }
         .accessibilityIdentifier("people-\(command.id)")
     }
 }

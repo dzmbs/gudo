@@ -88,7 +88,7 @@ private struct PictureInPictureWindow: View {
                     let centre = CGPoint(x: frame.midX + value.translation.width, y: frame.midY + value.translation.height)
                     let corner = FloatGeometry.pipCorner(
                         for: centre, velocity: CGVector(dx: value.velocity.width, dy: value.velocity.height), corners: corners)
-                    withAnimation(DS.Motion.settle) {
+                    withAnimation(DS.Motion.structural) {
                         rest = corner ?? frame
                         drag = .zero
                     }
@@ -96,7 +96,7 @@ private struct PictureInPictureWindow: View {
                 })
         .onTapGesture {
             taps += 1
-            withAnimation(DS.Motion.lift) { workspace.apply(.focus(pane)) }
+            withAnimation(DS.Motion.structural) { workspace.apply(.focus(pane)) }
         }
         .contextMenu {
             Button("Open", systemImage: "arrow.up.left.and.arrow.down.right") { workspace.apply(.focus(pane)) }
@@ -106,7 +106,7 @@ private struct PictureInPictureWindow: View {
             Button("Close Pane", systemImage: "xmark", role: .destructive) { workspace.apply(.close(pane)) }
         }
         .sensoryFeedback(DS.Haptic.select, trigger: taps)
-        .transition(.scale(scale: 0.7).combined(with: .opacity))
+        .motionTransition(.card())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(program.displayName), picture in picture")
         .accessibilityHint("Opens the floating pane")

@@ -450,7 +450,7 @@ private struct ChatRowButtonStyle: ButtonStyle {
         configuration.label.frame(minHeight: DS.Size.touchTarget).contentShape(.rect)
             .background(RoundedRectangle(cornerRadius: DS.Radius.control)
                 .fill(DS.Palette.selection.opacity(configuration.isPressed ? 1 : 0)))
-            .animation(reduceMotion ? nil : DS.Motion.press, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : DS.Motion.micro, value: configuration.isPressed)
             .hoverEffect(.highlight)
     }
 }

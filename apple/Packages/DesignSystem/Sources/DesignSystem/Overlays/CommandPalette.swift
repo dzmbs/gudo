@@ -330,7 +330,7 @@ public extension View {
         overlay {
             if isPresented {
                 SpotlightLayer(onDismiss: onDismiss, panel: panel)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
         }
     }

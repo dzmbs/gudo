@@ -25,6 +25,6 @@ private struct FieldSurface: ViewModifier {
                     .stroke(DS.Palette.accent.opacity(isFocused ? 0.25 : 0), lineWidth: 4)
                     .padding(-1)
             }
-            .animation(DS.Motion.quick, value: isFocused)
+            .animation(DS.Motion.micro, value: isFocused)
     }
 }

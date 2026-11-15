@@ -134,7 +134,7 @@ final class SpinnerLayerView: RepeatingLayerView {
         let turn = CABasicAnimation(keyPath: "transform.rotation.z")
         turn.fromValue = 0
         turn.toValue = 2 * Double.pi
-        turn.duration = 1
+        turn.duration = DS.Motion.Loop.spinnerPeriod
         turn.repeatCount = .infinity
         turn.timingFunction = CAMediaTimingFunction(name: .linear)
         return turn

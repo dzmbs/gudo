@@ -118,7 +118,7 @@ struct JoinSheet: View {
             // Resizes for the user's steps (a link pasted, a knock sent), never in between.
             .macFittedForm(maxHeight: 560, step: [AnyHashable(cardKind), AnyHashable(phase)])
             .onDisappear { knocking?.cancel() }
-            .animation(DS.Motion.snappy, value: trimmed)
+            .animation(DS.Motion.standard, value: trimmed)
         }
         #if os(iOS)
         .phoneDetents([.large])
@@ -327,7 +327,7 @@ private struct KnockWaiting: View {
                 .accessibilityIdentifier("knock-stop")
         }
         .padding(.vertical, DS.Space.xs)
-        .animation(DS.Motion.snappy, value: asked)
+        .animation(DS.Motion.standard, value: asked)
     }
 
     private var who: String { owner.isEmpty ? "the owner" : owner }

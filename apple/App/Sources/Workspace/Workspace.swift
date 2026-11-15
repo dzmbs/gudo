@@ -272,6 +272,7 @@ final class Workspace {
                 if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration + Self.keyboardSettle)) }
                 let top = self.keyboardTop(screenFrame: endFrame)
                 guard top != self.keyboardTop else { return }
+                // motion-lint-allow: moves with the system keyboard, on its own duration.
                 withAnimation(duration > 0 ? .easeOut(duration: duration) : nil) { self.keyboardTop = top }
             }
         }

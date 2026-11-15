@@ -91,7 +91,7 @@ struct InboxView: View {
                 }
             } else if shown.isEmpty && knocks.isEmpty {
                 EmptyState(filter.emptyTitle, systemImage: "line.3.horizontal.decrease.circle", message: "No agent matches this filter.") {
-                    Button("Show All") { withAnimation(DS.Motion.snappy) { filter = .all } }
+                    Button("Show All") { withAnimation(DS.Motion.standard) { filter = .all } }
                         .buttonStyle(.glass)
                         .accessibilityIdentifier("inbox-show-all")
                 }
@@ -155,7 +155,7 @@ struct InboxView: View {
             guard !feed.unseenByHost.isEmpty else { return }
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
-            withAnimation(DS.Motion.overlay) { feed.markSeen() }
+            withAnimation(DS.Motion.standard) { feed.markSeen() }
         }
     }
 
@@ -235,11 +235,11 @@ struct InboxView: View {
             .environment(\.defaultMinListHeaderHeight, 0)
             .scrollContentBackground(.hidden)
             .background(DS.Palette.base)
-            .animation(DS.Motion.snappy, value: items)
-            .animation(DS.Motion.snappy, value: knocks.map(\.id))
+            .animation(DS.Motion.standard, value: items)
+            .animation(DS.Motion.standard, value: knocks.map(\.id))
             .onChange(of: focused) { _, id in
                 guard let id else { return }
-                withAnimation(DS.Motion.snappy) { proxy.scrollTo(id) }
+                withAnimation(DS.Motion.standard) { proxy.scrollTo(id) }
             }
             .accessibilityIdentifier("inbox-list")
         }
@@ -329,7 +329,7 @@ struct InboxView: View {
     private func perform(_ action: RowAction, on item: AgentItem) {
         switch action {
         case .open: open(item)
-        case .markDone: withAnimation(DS.Motion.snappy) { feed.markDone(item.id) }
+        case .markDone: withAnimation(DS.Motion.standard) { feed.markDone(item.id) }
         case .stopAgent:
             if let host = item.hostId, let pane = item.paneId { model.stopAgent(pane: PaneId(pane), onGroup: host) }
         default: break
@@ -339,19 +339,19 @@ struct InboxView: View {
     private func approve(_ item: AgentItem) {
         approvedCount += 1
         advance(from: item)
-        withAnimation(DS.Motion.snappy) { feed.approve(item.id) }
+        withAnimation(DS.Motion.standard) { feed.approve(item.id) }
         model.agentToasts.dismiss(item: item.id)
     }
 
     private func allowForPane(_ item: AgentItem) {
         approvedCount += 1
-        withAnimation(DS.Motion.snappy) { feed.allowForPane(item.id) }
+        withAnimation(DS.Motion.standard) { feed.allowForPane(item.id) }
     }
 
     private func deny(_ item: AgentItem) {
         deniedCount += 1
         advance(from: item)
-        withAnimation(DS.Motion.snappy) { feed.deny(item.id) }
+        withAnimation(DS.Motion.standard) { feed.deny(item.id) }
         model.agentToasts.dismiss(item: item.id)
     }
 
@@ -544,7 +544,7 @@ private struct InboxFilterBar: View {
                 let count = counts[filter] ?? 0
                 let isSelected = filter == selection
                 Button {
-                    withAnimation(DS.Motion.snappy) { selection = filter }
+                    withAnimation(DS.Motion.standard) { selection = filter }
                 } label: {
                     HStack(spacing: DS.Space.xs) {
                         Text(filter.title)
@@ -749,7 +749,7 @@ private struct InboxRow: View {
                 Circle()
                     .fill(DS.Palette.accent)
                     .frame(width: 7, height: 7)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
                     .accessibilityLabel("New")
                     .padding(.trailing, DS.Space.xxs)
             }
@@ -760,7 +760,7 @@ private struct InboxRow: View {
             }
             if canReply, !isReplying {
                 Button("Reply", systemImage: "arrowshape.turn.up.left") {
-                    withAnimation(DS.Motion.snappy) { isReplying = true }
+                    withAnimation(DS.Motion.standard) { isReplying = true }
                     isComposerFocused = true
                 }
                 .labelStyle(.iconOnly)
@@ -902,7 +902,7 @@ private struct InboxRow: View {
                 Text(key)
                     .font(DS.Font.badge)
                     .opacity(0.6)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
         }
     }
@@ -962,7 +962,7 @@ private struct InboxRow: View {
             }
             .controlSize(.small)
         }
-        .transition(.opacity)
+        .motionTransition(.fade)
     }
 
     private func submitEdit() {
@@ -972,7 +972,7 @@ private struct InboxRow: View {
     }
 
     private func cancelEdit() {
-        withAnimation(DS.Motion.snappy) { isEditing = false }
+        withAnimation(DS.Motion.standard) { isEditing = false }
     }
 
     private var composer: some View {
@@ -994,7 +994,7 @@ private struct InboxRow: View {
                     return .handled
                 }
                 .onKeyPress(.escape) {
-                    withAnimation(DS.Motion.snappy) { isReplying = false }
+                    withAnimation(DS.Motion.standard) { isReplying = false }
                     return .handled
                 }
                 .accessibilityIdentifier("inbox-composer")
@@ -1011,7 +1011,7 @@ private struct InboxRow: View {
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSending)
                 .accessibilityIdentifier("inbox-send")
         }
-        .movingTransition(.top)
+        .motionTransition(.panel(from: .top))
     }
 
     private func send() {
@@ -1023,7 +1023,7 @@ private struct InboxRow: View {
             isSending = false
             if sent {
                 draft = ""
-                withAnimation(DS.Motion.snappy) { isReplying = false }
+                withAnimation(DS.Motion.standard) { isReplying = false }
             }
         }
     }

@@ -226,7 +226,7 @@ struct AuditLogView: View {
                         .contentShape(.rect)
                         .onTapGesture {
                             guard record.approval != nil else { return }
-                            withAnimation(DS.Motion.snappy) {
+                            withAnimation(DS.Motion.standard) {
                                 if expanded.contains(record.seq) { expanded.remove(record.seq) } else { expanded.insert(record.seq) }
                             }
                         }
@@ -472,9 +472,9 @@ struct ActiveLinksSection: View {
         Task {
             guard let link = await session.link(for: info) else { return }
             Pasteboard.copySecret(link)
-            withAnimation(DS.Motion.indicator) { copied = info.grant.grantId }
+            withAnimation(DS.Motion.micro) { copied = info.grant.grantId }
             try? await Task.sleep(for: .milliseconds(1500))
-            withAnimation(DS.Motion.indicator) { if copied == info.grant.grantId { copied = nil } }
+            withAnimation(DS.Motion.micro) { if copied == info.grant.grantId { copied = nil } }
         }
     }
 }

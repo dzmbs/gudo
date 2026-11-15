@@ -115,7 +115,7 @@ struct PairDeviceSheet: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, DS.Space.xl)
             .padding(.vertical, DS.Space.l)
-            .animation(DS.Motion.snappy, value: model.stage)
+            .animation(DS.Motion.standard, value: model.stage)
         }
         #if os(iOS)
         .phoneDetents([.large])
@@ -201,10 +201,10 @@ struct PairDeviceSheet: View {
 
     private func copy(_ code: PairingCode) {
         Pasteboard.copySecret(code.link)
-        withAnimation(DS.Motion.indicator) { copied = true }
+        withAnimation(DS.Motion.micro) { copied = true }
         Task {
             try? await Task.sleep(for: .milliseconds(1500))
-            withAnimation(DS.Motion.indicator) { copied = false }
+            withAnimation(DS.Motion.micro) { copied = false }
         }
     }
 }

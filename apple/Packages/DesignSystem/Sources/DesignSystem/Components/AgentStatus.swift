@@ -79,7 +79,7 @@ public struct StatusIndicator: View {
             }
         }
         .frame(width: size, height: size)
-        .animation(DS.Motion.indicator, value: state)
+        .animation(DS.Motion.micro, value: state)
         .accessibilityElement()
         .accessibilityLabel(state.title)
     }
@@ -158,7 +158,7 @@ public struct CountBadge: View {
                 .frame(minWidth: 16, minHeight: 16)
                 .background(urgent ? AnyShapeStyle(DS.Palette.blocked) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)
                 .contentTransition(.numericText())
-                .animation(DS.Motion.indicator, value: count)
+                .animation(DS.Motion.micro, value: count)
                 .accessibilityLabel("\(count)")
         }
     }

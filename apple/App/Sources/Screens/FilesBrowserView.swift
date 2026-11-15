@@ -225,7 +225,7 @@ private struct ListingFilter: ViewModifier {
                     FilterField(text: $filter)
                         .padding(.horizontal, DS.Space.s)
                         .padding(.vertical, DS.Space.xs)
-                        .transition(.opacity)
+                        .motionTransition(.fade)
                 }
             }
         }
@@ -284,7 +284,7 @@ private struct DirectoryListing: View {
             .toolChrome(title, subtitle: "\(source.display(directory)) · \(source.hostName)") {
                 if leaf != nil {
                     Button("Filter", systemImage: "line.3.horizontal.decrease") {
-                        withAnimation(DS.Motion.snappy) {
+                        withAnimation(DS.Motion.standard) {
                             isFiltering.toggle()
                             if !isFiltering { filter = "" }
                         }
@@ -487,7 +487,7 @@ private struct DirectoryListing: View {
     }
 
     private func toggle(_ entry: FileEntry, navigator: FilesNavigator) {
-        withAnimation(DS.Motion.snappy) {
+        withAnimation(DS.Motion.standard) {
             if navigator.expanded.remove(entry.path) == nil { navigator.expanded.insert(entry.path) }
         }
         if navigator.expanded.contains(entry.path), navigator.listings[entry.path] == nil {
@@ -499,7 +499,7 @@ private struct DirectoryListing: View {
         guard let navigator else { return }
         do {
             let loaded = await FileListingRows.sortedInBackground(try await source.list(path))
-            withAnimation(DS.Motion.snappy) { navigator.listings[path] = loaded }
+            withAnimation(DS.Motion.standard) { navigator.listings[path] = loaded }
         } catch {
             navigator.expanded.remove(path)
             model.toasts.show(Toast("Couldn't read \((path as NSString).lastPathComponent): \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
@@ -567,7 +567,7 @@ private struct DirectoryListing: View {
             .floatingPanel()
             .padding(.horizontal, DS.Space.m)
             .padding(.bottom, DS.Space.s)
-            .movingTransition(.bottom)
+            .motionTransition(.panel(from: .bottom))
             .accessibilityIdentifier("files-transfer")
         }
     }
@@ -577,14 +577,14 @@ private struct DirectoryListing: View {
         Task {
             for (index, url) in urls.enumerated() {
                 let label = urls.count > 1 ? "Uploading \(url.lastPathComponent) (\(index + 1) of \(urls.count))" : "Uploading \(url.lastPathComponent)"
-                withAnimation(DS.Motion.snappy) { transfer = Transfer(title: label, fraction: 0, isUpload: true) }
+                withAnimation(DS.Motion.standard) { transfer = Transfer(title: label, fraction: 0, isUpload: true) }
                 do {
                     try await source.upload(url, to: directory) { fraction in transfer?.fraction = fraction }
                 } catch {
                     model.toasts.show(Toast("Couldn't upload \(url.lastPathComponent): \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
                 }
             }
-            withAnimation(DS.Motion.snappy) { transfer = nil }
+            withAnimation(DS.Motion.standard) { transfer = nil }
             model.toasts.show(Toast(urls.count == 1 ? "Uploaded \(urls[0].lastPathComponent)" : "Uploaded \(urls.count) files", systemImage: "checkmark.circle.fill", style: .success))
             await load()
         }
@@ -592,8 +592,8 @@ private struct DirectoryListing: View {
 
     private func download(_ entry: FileEntry) {
         Task {
-            withAnimation(DS.Motion.snappy) { transfer = Transfer(title: "Downloading \(entry.name)", fraction: 0, isUpload: false) }
-            defer { withAnimation(DS.Motion.snappy) { transfer = nil } }
+            withAnimation(DS.Motion.standard) { transfer = Transfer(title: "Downloading \(entry.name)", fraction: 0, isUpload: false) }
+            defer { withAnimation(DS.Motion.standard) { transfer = nil } }
             do {
                 let url = try await source.download(entry.path) { fraction in transfer?.fraction = fraction }
                 deliver(url)
@@ -655,7 +655,7 @@ private struct DirectoryListing: View {
     }
 
     private func trash(_ entry: FileEntry) {
-        withAnimation(DS.Motion.snappy) { entries?.removeAll { $0.path == entry.path } }
+        withAnimation(DS.Motion.standard) { entries?.removeAll { $0.path == entry.path } }
         Task {
             do {
                 try await source.trash(entry.path)
@@ -671,7 +671,7 @@ private struct DirectoryListing: View {
         problem = nil
         do {
             let loaded = await FileListingRows.sortedInBackground(try await source.list(directory))
-            withAnimation(entries == nil ? nil : DS.Motion.snappy) { entries = loaded }
+            withAnimation(entries == nil ? nil : DS.Motion.standard) { entries = loaded }
             for path in navigator?.expanded ?? [] where path.hasPrefix(directory + "/") {
                 await loadChildren(path)
             }

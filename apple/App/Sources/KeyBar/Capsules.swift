@@ -316,9 +316,8 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
         defaults.set(hintsShown + 1, forKey: Self.hintsShownKey)
         scrollView.contentOffset.x = scroll.hintOffset
         // Critically damped: no overshoot past the first key. A drag stops it where it is.
-        let animator = UIViewPropertyAnimator(duration: 0.7, dampingRatio: 1) { [scrollView] in
-            scrollView.contentOffset.x = 0
-        }
+        let animator = UIViewPropertyAnimator(duration: 0, timingParameters: DS.Motion.Role.structural.timingParameters)
+        animator.addAnimations { [scrollView] in scrollView.contentOffset.x = 0 }
         animator.addCompletion { [weak self] _ in self?.settleIn = nil }
         settleIn = animator
         animator.startAnimation(afterDelay: 0.15)

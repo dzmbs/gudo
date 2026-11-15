@@ -155,7 +155,7 @@ final class WindowModel {
 
     /// The grids about to change follow an animated layout change, not a resize the user is
     /// making: no cols × rows overlay counting through every frame of it.
-    func quietLayoutResizes(for duration: Double = DS.Motion.sidebarDuration) {
+    func quietLayoutResizes(for duration: Double = DS.Motion.structuralSettle) {
         // The animation, then the resize's round trip to the pane.
         let quiet = ContinuousClock.now + .seconds(duration) + .milliseconds(700)
         for workspace in workspaces.values { workspace.layoutChangeUntil = max(workspace.layoutChangeUntil, quiet) }
@@ -275,7 +275,7 @@ final class WindowModel {
     var fold = FoldGeometry() {
         didSet {
             guard FoldLayout.plan(fold) != FoldLayout.plan(oldValue) else { return }
-            quietLayoutResizes(for: DS.Motion.foldDuration)
+            quietLayoutResizes(for: DS.Motion.structuralSettle)
         }
     }
     #if DEBUG

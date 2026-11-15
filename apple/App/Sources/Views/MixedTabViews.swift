@@ -178,9 +178,6 @@ struct ExitFullScreenControl: View {
     @State private var area: CGSize = .zero
     @State private var collapse: Task<Void, Never>?
     @State private var snaps = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var motion: Animation { reduceMotion ? DS.Motion.overlay : DS.Motion.menu }
 
     var body: some View {
         Color.clear
@@ -246,9 +243,7 @@ struct ExitFullScreenControl: View {
                 }
             }
             .fixedSize()
-            .transition(.asymmetric(
-                insertion: .opacity.animation(.easeOut(duration: 0.18).delay(0.06)),
-                removal: .opacity.animation(.easeOut(duration: 0.1))))
+            .motionTransition(.arriving)
         }
     }
 
@@ -266,7 +261,7 @@ struct ExitFullScreenControl: View {
                 let end = CGPoint(
                     x: value.location.x + (value.predictedEndLocation.x - value.location.x) * carry,
                     y: value.location.y + (value.predictedEndLocation.y - value.location.y) * carry)
-                withAnimation(reduceMotion ? DS.Motion.overlay : DS.Motion.press) {
+                withAnimation(DS.Motion.standard) {
                     spot = Spot.nearest(to: end, in: area)
                     drag = .zero
                 }
@@ -277,7 +272,7 @@ struct ExitFullScreenControl: View {
 
     /// Spelled out; collapses again 2.5 s on unless `holding` (the pointer is on it).
     private func reveal(holding: Bool = false) {
-        if !isExpanded { withAnimation(motion) { isExpanded = true } }
+        if !isExpanded { withAnimation(DS.Motion.standard) { isExpanded = true } }
         collapse?.cancel()
         collapse = nil
         if !holding { settle(after: .seconds(2.5)) }
@@ -288,7 +283,7 @@ struct ExitFullScreenControl: View {
         collapse = Task { @MainActor in
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled else { return }
-            withAnimation(motion) { isExpanded = false }
+            withAnimation(DS.Motion.standard) { isExpanded = false }
             collapse = nil
         }
     }
@@ -447,7 +442,7 @@ struct MixedTabRow: View {
             .compactMap { model.agentState(ofPane: $0.pane, onGroup: $0.hostId) }
             .min { $0.urgency < $1.urgency }
         Button {
-            withAnimation(DS.Motion.snappy) { model.focus(ref) }
+            withAnimation(DS.Motion.standard) { model.focus(ref) }
         } label: {
             HStack(alignment: .center, spacing: DS.Space.gap10) {
                 SidebarTabIcon(program: program, state: state, favicon: model.favicon(ofMixedTab: tab))
@@ -725,7 +720,7 @@ private struct ColumnHeader: View {
         .dropDestination(for: String.self) { _, _ in
             guard let dragged = model.draggedTab else { return false }
             model.draggedTab = nil
-            withAnimation(DS.Motion.fold) { model.place(dragged, inLeftColumn: isLeft) }
+            withAnimation(DS.Motion.structural) { model.place(dragged, inLeftColumn: isLeft) }
             return true
         }
         .accessibilityElement(children: .combine)

@@ -155,7 +155,7 @@ struct SplitTreeView: View {
         // Here rather than in `onChange`: the hold must start before the animation's first
         // frame resizes a terminal.
         let change = lastShape.update(shape)
-        let settle = (change == .float ? DS.Motion.liftDuration : DS.Motion.splitSettle) * PaneArrangement.settleStretch
+        let settle = DS.Motion.structuralSettle * PaneArrangement.settleStretch
         if change != .none {
             if animated {
                 TerminalSurface.holdGrids(for: .milliseconds(Int(settle * 1000)))
@@ -166,7 +166,7 @@ struct SplitTreeView: View {
                 tree.resolve(leaf)?.workspace.layoutChangeUntil = .now + .milliseconds(700)
             }
         }
-        let motion: Animation? = animated ? (lastShape.lastChange == .float ? DS.Motion.lift : DS.Motion.split) : nil
+        let motion: Animation? = animated ? DS.Motion.structural : nil
         return GeometryReader { geometry in
             var target = CanvasLayout(
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
@@ -204,14 +204,14 @@ struct SplitTreeView: View {
                         .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
                         // Going: it stays solid while it shrinks and fades at the end. Coming
                         // back: solid at once, then it grows.
-                        .animation(arrangement.scrub == nil ? (leaf.visible ? .easeOut(duration: 0.12) : .easeIn(duration: 0.18).delay(0.16)) : nil) {
+                        .animation(arrangement.scrub == nil ? (leaf.visible ? DS.Motion.micro : DS.Motion.micro.delay(DS.Motion.arrivalDelay)) : nil) {
                             $0.opacity(leaf.opacity)
                         }
                         .allowsHitTesting(leaf.visible)
                         .accessibilityHidden(!leaf.visible)
                         .offset(x: leaf.frame.minX, y: leaf.frame.minY)
                         .zIndex(leaf.z)
-                        .transition(.opacity)
+                        .motionTransition(.fade)
                 }
                 ForEach(layout.dividers, id: \.id) { divider in
                     SplitDivider(divider: divider.divider, tree: tree)
@@ -221,7 +221,7 @@ struct SplitTreeView: View {
                         .offset(x: divider.divider.frame.minX, y: divider.divider.frame.minY)
                         .zIndex(divider.z)
                         // A new divider lands where the panes are heading: it shows as they arrive.
-                        .transition(.asymmetric(insertion: .opacity.animation(.easeIn(duration: 0.12).delay(0.16)), removal: .opacity))
+                        .motionTransition(.arriving)
                 }
                 if tree.arranges != nil {
                     ForEach(layout.cards.filter(\.visible), id: \.id) { card in
@@ -242,7 +242,7 @@ struct SplitTreeView: View {
         // frame for frame.
         .animation(arrangement.scrub == nil ? motion : nil, value: shape)
         .task(id: zoomed) {
-            if animated { try? await Task.sleep(for: .milliseconds(Int(DS.Motion.splitSettle * PaneArrangement.settleStretch * 1000))) }
+            if animated { try? await Task.sleep(for: .milliseconds(Int(DS.Motion.structuralSettle * PaneArrangement.settleStretch * 1000))) }
             guard !Task.isCancelled else { return }
             settledZoom = zoomed
         }
@@ -480,7 +480,7 @@ private struct SplitDivider: View {
     }
 
     private func equalize() {
-        withAnimation(DS.Motion.snappy) { setRatio(0.5) }
+        withAnimation(DS.Motion.standard) { setRatio(0.5) }
     }
 }
 

@@ -26,7 +26,7 @@ struct PresenceToolbarButton: View {
                 Image(systemName: "person.crop.circle.badge.plus")
             } else {
                 PresenceStack(others.map(\.avatar))
-                    .animation(DS.Motion.indicator, value: others.map(\.actor.device))
+                    .animation(DS.Motion.micro, value: others.map(\.actor.device))
             }
         }
         .popover(isPresented: $showsPeople, arrowEdge: .top) {
@@ -166,12 +166,12 @@ struct MultiplayerPaneOverlay: View {
                     LeaseRequestCard(session: session, request: request)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .padding(.top, DS.Space.l)
-                        .movingTransition(.top)
+                        .motionTransition(.toast(from: .top))
                 } else if showsControlChip(session) {
                     ControlChip(session: session, pane: pane.rawValue)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                         .padding(DS.Space.s)
-                        .scalingTransition(0.96, anchor: .topTrailing)
+                        .motionTransition(.card(anchor: .topTrailing))
                 }
                 if showsOverlayApproval {
                     SharedApproval(workspace: workspace, session: session, pane: pane.rawValue)
@@ -183,13 +183,13 @@ struct MultiplayerPaneOverlay: View {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     if isFocused {
                         FollowPill(session: session)
-                            .movingTransition(.top)
+                            .motionTransition(.toast(from: .top))
                     }
                     ViewportMarkers(session: session, pane: pane.rawValue)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .padding(DS.Space.s)
-                .animation(DS.Motion.overlay, value: session.following)
+                .animation(DS.Motion.standard, value: session.following)
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     LivePaneActivity(session: session, pane: pane.rawValue)
                     // A prompter's composer sits on every agent pane (it is their only input);
@@ -197,7 +197,7 @@ struct MultiplayerPaneOverlay: View {
                     if session.isGuest && !session.canDrive, isFocused || (session.canPrompt && workspace.isAgentPane(pane)) {
                         guestBar(session)
                             .frame(maxWidth: .infinity)
-                            .movingTransition(.bottom)
+                            .motionTransition(.toast(from: .bottom))
                     }
                 }
                 // Banners ("Stopped following") rise above these cards, never over them.
@@ -205,9 +205,9 @@ struct MultiplayerPaneOverlay: View {
                 .frame(maxHeight: .infinity, alignment: .bottom)
                 .padding(DS.Space.s)
             }
-            .animation(DS.Motion.panel, value: session.leaseRequests)
-            .animation(DS.Motion.overlay, value: session.leases[pane.rawValue])
-            .animation(DS.Motion.overlay, value: session.pendingTakes[pane.rawValue])
+            .animation(DS.Motion.standard, value: session.leaseRequests)
+            .animation(DS.Motion.standard, value: session.leases[pane.rawValue])
+            .animation(DS.Motion.standard, value: session.pendingTakes[pane.rawValue])
         }
     }
 
@@ -380,7 +380,7 @@ private struct PromptComposer: View {
                     .font(.caption)
                     .foregroundStyle(DS.Palette.error)
                     .padding(.horizontal, DS.Space.m)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             }
             HStack(alignment: .bottom, spacing: DS.Space.s) {
                 TextField("Prompt \(agent)…", text: $text, axis: .vertical)
@@ -414,7 +414,7 @@ private struct PromptComposer: View {
             session.setTyping(nil)
             session.clearDraft()
         }
-        .animation(DS.Motion.overlay, value: error)
+        .animation(DS.Motion.standard, value: error)
     }
 
     private func send() {

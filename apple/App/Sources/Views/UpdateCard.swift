@@ -26,7 +26,7 @@ struct UpdateCard: View {
                 .scrollIndicators(.automatic)
                 .frame(maxHeight: 148)
                 .fixedSize(horizontal: false, vertical: true)
-                .transition(.opacity)
+                .motionTransition(.fade)
                 .accessibilityLabel("Release notes")
             }
             actions
@@ -36,8 +36,8 @@ struct UpdateCard: View {
         .glassEdge(Self.shape)
         .shadow(color: .black.opacity(chrome.scheme == .dark ? 0.28 : 0.08), radius: 6, y: 2)
         .padding(.horizontal, DS.Space.l)
-        .animation(DS.Motion.snappy, value: prompt.phase)
-        .animation(DS.Motion.snappy, value: prompt.showsNotes)
+        .animation(DS.Motion.standard, value: prompt.phase)
+        .animation(DS.Motion.standard, value: prompt.showsNotes)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
         .accessibilityIdentifier("sidebar-update")
@@ -93,7 +93,7 @@ struct UpdateCard: View {
 
     private func cornerButton(_ title: String, systemImage: String, help: String, action: @escaping () -> Void) -> some View {
         Button(title, systemImage: systemImage) {
-            withAnimation(DS.Motion.snappy) { action() }
+            withAnimation(DS.Motion.standard) { action() }
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.sidebarDismiss)
@@ -135,7 +135,7 @@ struct UpdateCard: View {
 
     private var acceptButton: some View {
         Button {
-            withAnimation(DS.Motion.snappy) { prompt.accept() }
+            withAnimation(DS.Motion.standard) { prompt.accept() }
         } label: {
             Text(acceptTitle).frame(maxWidth: .infinity)
         }
@@ -247,7 +247,7 @@ struct UpdateGlyph: View {
                     .stroke(DS.Palette.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                     .padding(2)
-                    .animation(DS.Motion.quick, value: fraction)
+                    .animation(DS.Motion.micro, value: fraction)
                 Image(systemName: "arrow.down")
                     .font(.system(size: size * 0.42, weight: .bold))
                     .foregroundStyle(DS.Palette.accent)
@@ -286,7 +286,7 @@ struct UpdateIndicator: View {
 
     var body: some View {
         Button {
-            withAnimation(DS.Motion.snappy) { prompt.toggleMinimized() }
+            withAnimation(DS.Motion.standard) { prompt.toggleMinimized() }
         } label: {
             UpdateGlyph(phase: prompt.phase, size: 20)
         }
@@ -323,7 +323,7 @@ private struct UpdateProgressBar: View {
                     Capsule()
                         .fill(DS.Palette.accent)
                         .frame(width: max(4, proxy.size.width * fraction))
-                        .animation(DS.Motion.quick, value: fraction)
+                        .animation(DS.Motion.micro, value: fraction)
                 }
             } else if reduceMotion {
                 Capsule().fill(DS.Palette.accent.opacity(0.5))
@@ -366,7 +366,7 @@ private struct UpdateActionButtonStyle: ButtonStyle {
             .overlay(Capsule().fill(Color.black.opacity(configuration.isPressed ? 0.15 : 0)))
             .contentShape(.capsule)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(DS.Motion.press, value: configuration.isPressed)
+            .animation(DS.Motion.micro, value: configuration.isPressed)
             .onHover { isHovered = $0 }
     }
 }

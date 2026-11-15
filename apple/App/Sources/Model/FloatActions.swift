@@ -39,8 +39,8 @@ extension WindowModel {
 
     /// The panes around reflow in the same spring, their grids held until it ends.
     private func lift(_ body: () -> Void) {
-        TerminalSurfaceHold.hold(for: DS.Motion.liftDuration)
-        withAnimation(DS.Motion.lift, body)
+        TerminalSurfaceHold.hold(for: DS.Motion.structuralSettle)
+        withAnimation(DS.Motion.structural, body)
     }
 
     func toggleFloat(_ pane: PaneId? = nil, in workspace: Workspace? = nil) {
@@ -100,7 +100,7 @@ extension WindowModel {
         let order = tiled + floating
         guard let index = order.firstIndex(of: tab.focused), order.count > 1 else { return }
         let next = order[(index + offset + order.count) % order.count]
-        withAnimation(DS.Motion.snappy) { workspace.apply(.focus(next)) }
+        withAnimation(DS.Motion.standard) { workspace.apply(.focus(next)) }
     }
 
     func cycleFloats() {
@@ -111,7 +111,7 @@ extension WindowModel {
         let focused = workspace.focusedPane.flatMap(workspace.window(of:))
         // The one after the focused window, or the frontmost.
         let next = focused.flatMap { focusedWindow in windows.firstIndex { $0.id == focusedWindow.id } }.map { windows[($0 + 1) % windows.count] } ?? windows[0]
-        withAnimation(DS.Motion.snappy) { workspace.apply(.focus(next.panes[0])) }
+        withAnimation(DS.Motion.standard) { workspace.apply(.focus(next.panes[0])) }
     }
 
     /// Splits the focused pane along its longer side on screen.
@@ -144,7 +144,7 @@ extension WindowModel {
             case .up: frame.y -= step
             case .down: frame.y += step
             }
-            withAnimation(DS.Motion.settle) { workspace.apply(.setFloat(pane, frame: frame.clamped, minimized: nil, pinned: nil)) }
+            withAnimation(DS.Motion.structural) { workspace.apply(.setFloat(pane, frame: frame.clamped, minimized: nil, pinned: nil)) }
             return
         }
         guard workspace.canMovePanes, let tab = workspace.session.activeTab,
@@ -153,7 +153,7 @@ extension WindowModel {
         var probe = Session(tabs: [Tab(id: tab.id, root: tiled, focused: pane)], activeTabId: tab.id)
         probe.apply(.focusDirection(direction))
         guard let neighbour = probe.activeTab?.focused, neighbour != pane else { return }
-        withAnimation(DS.Motion.lift) { workspace.apply(.movePane(pane, beside: neighbour, side: direction)) }
+        withAnimation(DS.Motion.structural) { workspace.apply(.movePane(pane, beside: neighbour, side: direction)) }
     }
 
     /// Grows a floating window that way; left and up shrink it.
@@ -167,7 +167,7 @@ extension WindowModel {
         case .up: frame.height -= step
         case .down: frame.height += step
         }
-        withAnimation(DS.Motion.settle) { workspace.apply(.setFloat(pane, frame: frame.clamped, minimized: nil, pinned: nil)) }
+        withAnimation(DS.Motion.structural) { workspace.apply(.setFloat(pane, frame: frame.clamped, minimized: nil, pinned: nil)) }
         return true
     }
 

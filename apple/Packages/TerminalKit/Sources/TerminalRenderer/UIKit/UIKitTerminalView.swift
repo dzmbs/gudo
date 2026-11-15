@@ -1585,7 +1585,8 @@ private final class CapsuleToast: UIView {
         let appearing = isHidden || alpha < 1
         isHidden = false
         if appearing {
-            UIView.animate(withDuration: 0.15) { self.alpha = 1 }
+            // motion-lint-allow: TerminalKit sits below DesignSystem; DS.Motion.micro's spring.
+            UIView.animate(springDuration: 0.12, bounce: 0) { self.alpha = 1 }
             UIAccessibility.post(notification: .announcement, argument: text)
         }
         hideTask?.cancel()
@@ -1599,7 +1600,8 @@ private final class CapsuleToast: UIView {
 
     func hide() {
         hideTask?.cancel()
-        UIView.animate(withDuration: 0.3) { self.alpha = 0 } completion: { _ in
+        // motion-lint-allow: TerminalKit sits below DesignSystem; DS.Motion.standard's spring.
+        UIView.animate(springDuration: 0.22, bounce: 0) { self.alpha = 0 } completion: { _ in
             if self.alpha == 0 { self.isHidden = true }
         }
     }

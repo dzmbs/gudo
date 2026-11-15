@@ -19,17 +19,17 @@ struct TabBar: View {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
                     chips(active: active)
-                        .animation(DS.Motion.snappy, value: refs)
+                        .animation(DS.Motion.standard, value: refs)
                 }
                 .scrollIndicators(.never)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { width in widths.stripWidth = width }
                 .onChange(of: refs) { old, new in
-                    withAnimation(DS.Motion.snappy) { widths.tabsChanged(to: new.count) }
+                    withAnimation(DS.Motion.standard) { widths.tabsChanged(to: new.count) }
                     if new.count > old.count { TabTimeline.mark(.chipInserted) }
                 }
                 .onChange(of: active, initial: true) { _, ref in
                     guard let ref else { return }
-                    withAnimation(DS.Motion.snappy) { scroller.scrollTo(ref) }
+                    withAnimation(DS.Motion.standard) { scroller.scrollTo(ref) }
                     TabTimeline.mark(.scrolledIntoView)
                 }
             }
@@ -47,7 +47,7 @@ struct TabBar: View {
             if inside {
                 widths.isPointerInside = true
             } else {
-                withAnimation(DS.Motion.quick) { widths.pointerLeft() }
+                withAnimation(DS.Motion.micro) { widths.pointerLeft() }
             }
         }
         .onAppear { widths.tabsChanged(to: refs.count) }
@@ -75,7 +75,7 @@ struct TabBar: View {
                         .frame(width: width)
                         .id(ref)
                         .modifier(ChipFrameReport(ref: ref))
-                        .transition(.opacity)
+                        .motionTransition(.tab)
                     Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
                 }
             }
@@ -98,7 +98,7 @@ struct TabBar: View {
                     .frame(width: width)
                     .id(ref)
                     .modifier(ChipFrameReport(ref: ref))
-                    .transition(.opacity)
+                    .motionTransition(.tab)
                 }
             }
         }
@@ -192,7 +192,7 @@ private struct TabChip: View {
                     .fill(DS.Palette.selectedFill)
                     .overlay(RoundedRectangle(cornerRadius: DS.Radius.tabPill).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
                     .padding(.vertical, 3)
-                    .transition(.opacity)
+                    .motionTransition(.fade)
             } else if isHovered {
                 RoundedRectangle(cornerRadius: DS.Radius.tabPill)
                     .fill(DS.Palette.hoverFill)
@@ -235,17 +235,17 @@ private struct TabChip: View {
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.trailing, DS.Space.s)
-                        .transition(.opacity)
+                        .motionTransition(.fade)
                 }
             }
             .padding(.leading, 3)
-            .animation(DS.Motion.quick, value: CommandKeyState.shared.held)
+            .animation(DS.Motion.micro, value: CommandKeyState.shared.held)
         }
         .frame(height: DS.Size.tabStrip)
-        .animation(DS.Motion.quick, value: isActive)
+        .animation(DS.Motion.micro, value: isActive)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
-        .onHover { hovering in withAnimation(DS.Motion.hover) { isHovered = hovering } }
+        .onHover { hovering in withAnimation(DS.Motion.micro) { isHovered = hovering } }
         .contextMenu {
             if let workspace {
                 Button("Rename…", systemImage: "pencil") {
@@ -279,7 +279,7 @@ private struct TabChip: View {
                   let index = section.rows.firstIndex(of: ref)
             else { return false }
             model.draggedTab = nil
-            withAnimation(DS.Motion.reorder) { model.commit(.insert(dragged, into: section.container, at: index)) }
+            withAnimation(DS.Motion.standard) { model.commit(.insert(dragged, into: section.container, at: index)) }
             return true
         }
         .help(Self.tooltip(title: title, host: group.isLocal ? nil : group.name, directory: workspace?.directory(of: tab), context: workspace?.context(of: tab)))

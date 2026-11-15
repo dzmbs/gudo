@@ -118,11 +118,11 @@ enum DesignFixtures {
             // Two agents on another host start needing you and finish, a moment apart.
             guard let feed = model.agents as? MockAgentFeed else { return }
             try? await Task.sleep(for: .seconds(1.5))
-            withAnimation(DS.Motion.snappy) {
+            withAnimation(DS.Motion.standard) {
                 feed.simulate("a3", state: .blocked, request: .permission(tool: "Bash", detail: "cargo bench -p renderer"))
             }
             try? await Task.sleep(for: .seconds(0.6))
-            withAnimation(DS.Motion.snappy) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
+            withAnimation(DS.Motion.standard) { feed.simulate("a4", state: .done, summary: "The reconnect test waited on a stale timer; fixed.") }
         case "program-status":
             // A program other than Claude or Codex reports its own status (OSC 7501).
             let panes = workspace.session.activeTab?.root.panes ?? []
