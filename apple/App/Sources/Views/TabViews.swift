@@ -806,6 +806,8 @@ struct TabRow: View {
     @Environment(WindowModel.self) private var model
 
     @Environment(\.sidebarListStyle) private var listStyle
+    /// The command that has run long enough to name; a quick one never changes the row's height.
+    @State private var longRunning: UInt64?
 
     var body: some View {
         let workspace = model.workspace(ofGroup: group.id)
@@ -817,7 +819,8 @@ struct TabRow: View {
         let program = model.programIdentity(of: tab, onGroup: group.id)
         let title = workspace?.title(of: tab, agentName: program.kind == .agent ? program.displayName : nil) ?? tab.title ?? "Shell"
         let context = workspace?.context(of: tab)
-        let running = program.kind == .agent ? nil : workspace?.runningCommand(of: tab)
+        let started = program.kind == .agent ? nil : workspace?.runningCommand(of: tab)
+        let running = started.flatMap { $0.startedAtMs == longRunning ? $0 : nil }
         let worktree = model.groups.worktree(of: ref)
         let status = Self.statusLine(
             program: program, state: state, question: state == .blocked ? workspace?.agentQuestion(of: tab) : nil,
@@ -887,6 +890,12 @@ struct TabRow: View {
             .sidebarRow(selected: isActive && !model.isSelectingTabs)
         }
         .buttonStyle(.plain)
+        .task(id: started?.startedAtMs) {
+            guard let started else { return longRunning = nil }
+            let ranFor = Date.now.timeIntervalSince1970 - Double(started.startedAtMs) / 1000
+            try? await Task.sleep(for: .seconds(max(0, Double(TabSubtitle.threshold) - ranFor)))
+            if !Task.isCancelled { longRunning = started.startedAtMs }
+        }
         #if os(macOS)
         .simultaneousGesture(TapGesture(count: 2).onEnded { perform(.rename) })
         #endif
