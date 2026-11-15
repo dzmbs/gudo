@@ -12,6 +12,10 @@ struct ChatRowActions {
     var showTool: (TimelineItem) -> Void = { _ in }
     var showLongText: (TimelineLongText) -> Void = { _ in }
     var showDiff: (ChatDiffTarget) -> Void = { _ in }
+    /// Sends a prompt again; nil where this agent cannot be sent to from Chat.
+    var resend: ((String) -> Void)?
+    /// Reads an image file on the host; nil where this viewer may not read files.
+    var loadImage: ChatImageLoader?
 }
 
 struct ChatRowView: View {
@@ -21,7 +25,7 @@ struct ChatRowView: View {
     let actions: ChatRowActions
     var topSpacing: CGFloat = 0
     private static let maximumIndentationDepth = 12
-    @ScaledMetric(relativeTo: .callout) private var tableLineHeight = DS.Size.proseTableLineHeight
+    @ScaledMetric(relativeTo: .callout) private var tableCharacterWidth = ChatTableColumns.characterWidth
     @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
     @ScaledMetric(relativeTo: .body) private var diffLineHeight = DS.Size.proseDiffLineHeight
     @Environment(\.terminalTheme) private var terminalTheme
@@ -61,6 +65,7 @@ struct ChatRowView: View {
         case .markdown(let block): markdown(block)
         case .item(let item): itemContent(item)
         case .showAll(let longText): showAllContent(longText)
+        case .toolGroup(let group): toolGroupContent(group)
         case .omitted:
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 Text(verbatim: ChatRenderLimits.omittedMessage)
@@ -103,23 +108,26 @@ struct ChatRowView: View {
                 ChatCodeBlock(code: code, language: language) { actions.selectText(code.text) }
             }
         case .table:
+            let widths = ChatTableColumns.widths(block.table, characterWidth: tableCharacterWidth)
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 ScrollView(.horizontal) {
                     Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.gap10) {
                         ForEach(Array(block.table.enumerated()), id: \.offset) { index, cells in
-                            GridRow {
-                                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                            GridRow(alignment: .firstTextBaseline) {
+                                ForEach(Array(cells.enumerated()), id: \.offset) { column, cell in
                                     Text(cell).fontWeight(index == 0 ? .semibold : .regular)
-                                        .fixedSize(horizontal: true, vertical: true)
-                                        .frame(minWidth: DS.Size.proseTableColumn, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(width: widths.indices.contains(column) ? widths[column] : DS.Size.proseTableColumn,
+                                               alignment: .leading)
                                 }
                             }
                             if index == 0 { Divider().gridCellColumns(cells.count) }
                         }
                     }.font(DS.Font.proseSecondary).padding(DS.Space.l)
                 }
-                .frame(height: CGFloat(block.table.count) * (tableLineHeight + DS.Space.gap10) + 2 * DS.Space.l)
-                .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .fixedSize(horizontal: false, vertical: true)
+                .overlay { RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.hairline) }
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
                         .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
@@ -129,6 +137,8 @@ struct ChatRowView: View {
             Hairline(style: DS.Palette.separator).padding(.vertical, DS.Space.s)
         case .plain:
             Text(block.text).font(DS.Font.literal).fixedSize(horizontal: false, vertical: true)
+        case .image(let path):
+            ChatInlineImage(path: path, height: ChatImageBox.height, loader: actions.loadImage)
         }
     }
 
@@ -152,11 +162,22 @@ struct ChatRowView: View {
                 Label("Queued", systemImage: "clock").font(DS.Font.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
             }
-            bubble(row.preview ?? user.text)
+            let images = ChatImages.paths(attachments: user.attachments).prefix(4)
+            if !images.isEmpty {
+                HStack(spacing: DS.Space.s) {
+                    ForEach(Array(images.enumerated()), id: \.offset) { _, path in
+                        ChatInlineImage(path: path, height: ChatImageBox.attachmentHeight, loader: actions.loadImage)
+                    }
+                }
+            }
+            VStack(alignment: .trailing, spacing: 0) {
+                bubble(row.preview ?? user.text)
+                promptFooter(item, text: user.text, canResend: !user.queued && row.preview == nil)
+            }
             if row.preview != nil {
                 Button("Read full prompt") { actions.selectText(user.text) }.font(DS.Font.caption)
             }
-            ForEach(Array(user.attachments.prefix(12).enumerated()), id: \.offset) { _, attachment in
+            ForEach(Array(user.attachments.filter { !images.contains($0.path) }.prefix(12).enumerated()), id: \.offset) { _, attachment in
                 Label((attachment.path as NSString).lastPathComponent, systemImage: "paperclip")
                     .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
@@ -166,7 +187,6 @@ struct ChatRowView: View {
                     actions.selectText(user.attachments.map(\.path).joined(separator: "\n"))
                 }.font(DS.Font.caption)
             }
-            if item.origin == .terminal { fromTerminal }
         }.frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, DS.Space.xxxl)
     }
@@ -174,7 +194,32 @@ struct ChatRowView: View {
     private func bubble(_ text: String) -> some View {
         Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
-            .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
+            .background(DS.Palette.sidebar, in: .rect(cornerRadius: DS.Radius.card, style: .continuous))
+    }
+
+    /// Under a prompt, quietly: where it came from, when, and Copy and Send again.
+    private func promptFooter(_ item: TimelineItem, text: String, canResend: Bool) -> some View {
+        HStack(spacing: 0) {
+            if let time = ChatItemPresentation.promptTime(item.at) {
+                Text(verbatim: item.origin == .terminal ? "From Terminal · " + time : time)
+                    .monospacedDigit().padding(.trailing, DS.Space.xs)
+            } else if item.origin == .terminal {
+                Text("From Terminal").padding(.trailing, DS.Space.xs)
+            }
+            Button { UIPasteboard.general.string = text } label: {
+                Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
+                    .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+            }
+            if canResend, let resend = actions.resend {
+                Button { resend(text) } label: {
+                    Label("Send again", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
+                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                }
+                .accessibilityIdentifier("chat-resend")
+            }
+        }
+        .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+        .buttonStyle(.plain)
     }
 
     private var fromTerminal: some View {
@@ -194,17 +239,17 @@ struct ChatRowView: View {
 
     private func thinkingHeader(_ title: String, hasText: Bool) -> some View {
         Button(action: toggle) {
-            HStack(spacing: DS.Space.s) {
-                Image(systemName: "sparkle")
+            HStack(spacing: DS.Space.xs) {
                 Text(title)
-                Spacer(minLength: DS.Space.s)
                 if hasText {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right").font(DS.Font.captionDetail)
+                    Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
+                Spacer(minLength: DS.Space.s)
             }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
                 .frame(minHeight: DS.Size.touchTarget)
         }.buttonStyle(ChatRowButtonStyle()).disabled(!hasText)
-            .accessibilityValue(hasText ? (isExpanded ? "Expanded" : "Collapsed") : "Text not recorded")
+            .accessibilityValue(hasText ? (isExpanded ? "Expanded" : "Collapsed") : "")
     }
 
     @ViewBuilder private func longTextContent(_ item: TimelineItem, longText: TimelineLongText) -> some View {
@@ -288,6 +333,26 @@ struct ChatRowView: View {
         }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, DS.Space.s)
     }
 
+    private func toolGroupContent(_ group: ChatToolGroup) -> some View {
+        Button(action: toggle) {
+            HStack(spacing: DS.Space.xs) {
+                Text(verbatim: group.summary).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
+                Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Spacer(minLength: DS.Space.xs)
+                if group.additions + group.deletions > 0 {
+                    Text(verbatim: "+\(group.additions)").foregroundStyle(DS.Palette.done)
+                    Text(verbatim: "−\(group.deletions)").foregroundStyle(DS.Palette.error)
+                }
+            }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
+        }
+        .buttonStyle(ChatRowButtonStyle())
+        .accessibilityLabel(group.summary)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityIdentifier("chat-tool-group")
+    }
+
     private func toolContent(_ item: TimelineItem, tool: TimelineTool) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {
             Button(action: toggle) {
@@ -315,6 +380,9 @@ struct ChatRowView: View {
                 .accessibilityLabel(ChatItemPresentation.toolKind(tool) + ": " + ChatItemPresentation.toolTitle(tool))
                 .accessibilityValue([ChatItemPresentation.toolStatus(tool), tool.durationMs.map(duration),
                                      isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
+            if let path = row.imagePath {
+                ChatInlineImage(path: path, height: ChatImageBox.height, loader: actions.loadImage)
+            }
             if isExpanded {
                 if !tool.input.isEmpty {
                     Text(verbatim: String(tool.input.prefix(2_000))).font(DS.Font.literalSmall)
@@ -396,6 +464,7 @@ struct ChatRowView: View {
         case .markdown(let block): markdownSelectionText(block)
         case .omitted: ChatRenderLimits.omittedMessage
         case .showAll(let value): value.content.preview
+        case .toolGroup(let group): group.summary
         case .item(let item):
             switch item.body {
             case .user(let value): value.text

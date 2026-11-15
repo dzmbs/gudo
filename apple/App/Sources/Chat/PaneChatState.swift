@@ -40,6 +40,7 @@ final class PaneChatState {
     let interrupt = ChatInterrupt()
     let dictation: ChatDictation
     let photos = ChatPhotos()
+    let images = ChatImageLoader()
     var detail: ChatDetail?
     var model: TimelineModel? { lease?.model }
     var capabilities: AgentCapabilities {

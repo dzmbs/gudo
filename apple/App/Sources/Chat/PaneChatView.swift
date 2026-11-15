@@ -41,17 +41,37 @@ struct PaneChatView<Terminal: View>: View {
                 .accessibilityHidden(state.presentation != .chat)
             }
             if state.presentation == .chat, state.model?.frame.rows.isEmpty != false {
-                Text(state.model?.isLoading == true ? "Opening Chat…" : "No messages yet")
-                    .font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
-                    .allowsHitTesting(false)
+                emptyState(ChatEmptyState(isLoading: state.model?.isLoading == true, session: state.model?.frame.session))
             }
         }
+    }
+
+    private func emptyState(_ empty: ChatEmptyState) -> some View {
+        VStack(spacing: DS.Space.s) {
+            Text(empty.title).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+            if let detail = empty.detail {
+                Text(detail).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+            if empty.offersTerminal {
+                Button("Open Terminal") { state.show(.terminal, terminal: pane) }
+                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+            }
+        }
+        .padding(.horizontal, DS.Space.xxl)
+        .frame(maxWidth: ChatReadingColumn.maximumWidth)
+        .allowsHitTesting(empty.offersTerminal)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-empty")
     }
 
     var body: some View {
         nativePresentations
         .overlay(alignment: .top) { fallbackNote }
-        .onAppear { state.activate(in: hub) }
+        .onAppear {
+            state.images.read = { [hub] path in try await ChatImageReader.read(path, from: hub) }
+            state.activate(in: hub)
+        }
         .onDisappear { state.deactivate() }
         .onChange(of: state.draft) { _, draft in state.composer.draftChanged(draft) }
         .onChange(of: state.actionContext) { _, _ in
@@ -154,6 +174,7 @@ struct PaneChatView<Terminal: View>: View {
                 .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
                 .contentShape(.rect)
                 .onTapGesture { if !state.dictation.isActive { draftFocused = true } }
+                sessionControls
             } else {
                 if state.capabilities.contains(.read) {
                     Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
@@ -164,8 +185,36 @@ struct PaneChatView<Terminal: View>: View {
             }
         }
         .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
+        .overlay(alignment: .topLeading) {
+            if working {
+                ChatWorkingIndicator()
+                    .alignmentGuide(.top) { $0[.bottom] }
+                    .padding(.leading, DS.Space.xl)
+                    .motionTransition(.fade)
+            }
+        }
+        .animation(DS.Motion.standard, value: working)
         .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
         .foregroundStyle(DS.Palette.text)
+    }
+
+    private var sessionControls: some View {
+        ChatSessionChips(session: state.model?.frame.session,
+                         canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
+                         chooseModel: chooseModel)
+    }
+
+    private func chooseModel(_ command: String) {
+        guard state.capabilities.contains(.send), state.draft.isEmpty, canEditDraft(state.actionContext) else { return }
+        state.draft = command
+        draftFocused = true
+    }
+
+    func resend(_ text: String) {
+        guard state.capabilities.contains(.send), state.draft.isEmpty || state.draft == text,
+              canEditDraft(state.actionContext) else { return }
+        state.draft = text
+        send()
     }
 
     private var composerBar: some View {
@@ -472,7 +521,9 @@ struct PaneChatView<Terminal: View>: View {
             state.presentDetail { _ in .tool(tool) }
         }, showLongText: { longText in
             state.presentDetail { _ in .longText(longText) }
-        }, showDiff: { selectDiffPreview($0) })
+        }, showDiff: { selectDiffPreview($0) },
+        resend: state.capabilities.contains(.send) && permitsSending ? { resend($0) } : nil,
+        loadImage: readsToolDetails ? state.images : nil)
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {
