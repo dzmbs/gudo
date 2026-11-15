@@ -103,7 +103,7 @@ fn status_schema() -> Value {
             "kind": { "type": ["string", "null"], "enum": ["permission", "question", "auth", null] },
             "app": { "type": ["string", "null"] },
             "message": { "type": ["string", "null"] },
-            "progress": { "type": ["integer", "null"] },
+            "progress": { "type": ["integer", "null"], "description": "Percent done, 0-100." },
         },
     })
 }
@@ -135,6 +135,81 @@ fn frame_schema() -> Value {
         },
         "required": ["x", "y", "w", "h"],
         "additionalProperties": false,
+    })
+}
+
+fn placement_schema() -> Value {
+    json!({
+        "type": ["object", "null"],
+        "description": "Where the pane was or is; null before it opened or after it closed.",
+        "properties": {
+            "tab": { "type": "string" },
+            "floating": { "type": "boolean" },
+            "frame": { "anyOf": [frame_schema(), { "type": "null" }] },
+            "minimized": { "type": "boolean" },
+            "pinned": { "type": "boolean" },
+            "focused": { "type": "boolean", "description": "It has its tab's focus." },
+        },
+    })
+}
+
+fn effects_schema() -> Value {
+    json!({
+        "type": "array",
+        "description": "Every pane whose tab, floating window, frame or focus this call changed, yours or not.",
+        "items": {
+            "type": "object",
+            "properties": {
+                "pane": { "type": "string" },
+                "changes": { "type": "array", "items": { "type": "string", "enum": ["opened", "closed", "tab", "float", "frame", "focus"] } },
+                "was": placement_schema(),
+                "now": placement_schema(),
+            },
+            "required": ["pane", "changes"],
+        },
+    })
+}
+
+fn tree_schema() -> Value {
+    json!({
+        "description": "The tab's panes in place: a pane id, or a split {split: horizontal (side by side) or vertical (stacked), ratio: the first side's share, first, second}. Null when every pane floats.",
+    })
+}
+
+fn tab_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "id": { "type": "string", "description": "t3." },
+            "title": { "type": "string", "description": "The tab's title: its fixed title, else its focused pane's." },
+            "fixedTitle": { "type": "boolean", "description": "Set by the user or tab_new; programs cannot change it." },
+            "project": { "type": ["object", "null"], "properties": { "id": { "type": "string" }, "name": { "type": "string" } } },
+            "active": { "type": "boolean", "description": "The tab the user has in front." },
+            "focused": { "type": "string", "description": "The tab's focused pane." },
+            "zoomed": { "type": ["string", "null"] },
+            "tree": tree_schema(),
+            "floats": { "type": "array", "items": float_schema(), "description": "Floating windows over the tab, back to front." },
+            "panes": { "type": "array", "items": { "type": "string" }, "description": "The listed panes in this tab; details in the top-level panes." },
+        },
+        "required": ["id", "title", "focused", "floats", "panes"],
+    })
+}
+
+fn limits_schema() -> Value {
+    let count = json!({ "type": "object", "properties": { "open": { "type": "integer" }, "max": { "type": "integer" } }, "required": ["open", "max"] });
+    json!({
+        "type": "object",
+        "properties": {
+            "maxWaitMs": { "type": "integer" },
+            "maxOutputBytes": { "type": "integer" },
+            "panes": {
+                "type": "object",
+                "description": "Panes open against the caps: the ones you opened yourself, and the ones all agents of this session opened.",
+                "properties": { "yours": count.clone(), "session": count },
+                "required": ["yours", "session"],
+            },
+        },
+        "required": ["maxWaitMs", "maxOutputBytes", "panes"],
     })
 }
 
@@ -171,13 +246,16 @@ fn tools_list() -> Vec<Tool> {
         json!({ "type": "integer", "description": "Cap on the output text (default 16384)." });
     let float = json!({ "type": "boolean", "description": "Open it as a floating window over the tab instead, without taking the user's focus." });
     let close_when_done = json!({ "type": "boolean", "description": "Close the floating window by itself 2.5 s after its work ends: an agent's turn, a done or error status, or the first command run in it." });
-    let pane_result =
-        json!({ "type": "object", "properties": { "pane": pane_schema() }, "required": ["pane"] });
+    let pane_result = json!({
+        "type": "object",
+        "properties": { "pane": pane_schema(), "effects": effects_schema() },
+        "required": ["pane", "effects"],
+    });
     vec![
         Tool {
             name: "whoami",
             title: "Which terminal pane am I in",
-            description: "Get the terminal pane this agent runs in: its id, folder, session and host, and the limits of the terminal tools. Other tools target this pane when no pane is given.",
+            description: "Get the terminal pane this agent runs in: its id, folder, session and host, and the limits of the terminal tools, with how many panes you and this session's agents have open. Other tools target this pane when no pane is given.",
             input: object(json!({}), &[]),
             output: json!({
                 "type": "object",
@@ -185,7 +263,7 @@ fn tools_list() -> Vec<Tool> {
                     "pane": pane_schema(),
                     "session": { "type": ["object", "null"] },
                     "host": { "type": "string" },
-                    "limits": { "type": "object" },
+                    "limits": limits_schema(),
                     "protocol": { "type": "integer" },
                 },
                 "required": ["pane", "host", "limits", "protocol"],
@@ -197,14 +275,22 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_list",
             title: "List terminal panes",
-            description: "List the terminal panes in this session (or only this tab): id, folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close the panes you created; the user's own panes only once they allow it.",
+            description: "List the terminal tabs and panes in this session, by tab: each tab's title, project, focused pane, split layout with sizes and floating windows; each pane's folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close the panes you created; the user's own panes only once they allow it.",
             input: object(
                 json!({
-                    "scope": { "type": "string", "enum": ["session", "tab"], "default": "session" },
+                    "scope": { "type": "string", "enum": ["session", "tab", "mine"], "default": "session", "description": "tab: only your own tab; mine: only panes you created." },
+                    "tab": { "type": "string", "description": "Only this tab (t3)." },
                 }),
                 &[],
             ),
-            output: json!({ "type": "object", "properties": { "panes": { "type": "array", "items": pane_schema() } }, "required": ["panes"] }),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "tabs": { "type": "array", "items": tab_schema() },
+                    "panes": { "type": "array", "items": pane_schema() },
+                },
+                "required": ["tabs", "panes"],
+            }),
             read_only: true,
             destructive: false,
             idempotent: true,
@@ -349,7 +435,7 @@ fn tools_list() -> Vec<Tool> {
                 }),
                 &[],
             ),
-            output: json!({ "type": "object", "properties": { "pane": pane_schema() }, "required": ["pane"] }),
+            output: pane_result.clone(),
             read_only: false,
             destructive: false,
             idempotent: false,
@@ -362,7 +448,7 @@ fn tools_list() -> Vec<Tool> {
                 json!({
                     "cwd": { "type": "string" },
                     "command": { "type": "string" },
-                    "title": { "type": "string" },
+                    "title": { "type": "string", "description": "The tab's fixed title; programs cannot change it." },
                     "focus": { "type": "boolean" },
                     "float": float.clone(),
                     "frame": frame_schema(),
@@ -370,7 +456,7 @@ fn tools_list() -> Vec<Tool> {
                 }),
                 &[],
             ),
-            output: json!({ "type": "object", "properties": { "tab": { "type": "string" }, "pane": pane_schema() }, "required": ["tab", "pane"] }),
+            output: json!({ "type": "object", "properties": { "tab": { "type": "string" }, "pane": pane_schema(), "effects": effects_schema() }, "required": ["tab", "pane", "effects"] }),
             read_only: false,
             destructive: false,
             idempotent: false,
@@ -378,15 +464,18 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_close",
             title: "Close a terminal pane",
-            description: "Close a terminal pane, ending what runs in it. Closing one that is already gone succeeds. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
+            description: "Close a terminal pane, ending what runs in it. Closing one that is already gone succeeds; an id that never existed is not_found. A tab's last pane in place is not closed while windows float over it, unless closeFloats closes them too. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
             input: object(
-                json!({ "pane": pane_ref("A pane you created.") }),
+                json!({
+                    "pane": pane_ref("A pane you created."),
+                    "closeFloats": { "type": "boolean", "description": "When it is its tab's last pane in place, close the windows floating over the tab too (all must be yours)." },
+                }),
                 &["pane"],
             ),
             output: json!({
                 "type": "object",
-                "properties": { "closed": { "type": "boolean" }, "alreadyClosed": { "type": "boolean" } },
-                "required": ["closed", "alreadyClosed"],
+                "properties": { "closed": { "type": "boolean" }, "alreadyClosed": { "type": "boolean" }, "effects": effects_schema() },
+                "required": ["closed", "alreadyClosed", "effects"],
             }),
             read_only: false,
             destructive: true,
@@ -520,7 +609,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_float",
             title: "Float a terminal pane",
-            description: "Float a terminal pane you created as a window over its tab (or move its window to `frame`), optionally pinned over every tab. A tab keeps at least one pane in place. Does not take the user's focus.",
+            description: "Float a terminal pane you created as a window over its tab (or move its window to `frame`), optionally pinned over every tab. Floating it again restores the frame and pin it had when it docked. A tab keeps at least one pane in place. Does not take the user's focus or change which pane has the tab's focus.",
             input: object(
                 json!({
                     "pane": pane_ref("A pane you created."),
@@ -537,16 +626,25 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_dock",
             title: "Dock a floating terminal pane",
-            description: "Put the floating window holding a terminal pane you created back into the tab's layout: where it was, or beside another pane (`beside`, on `side`). The user keeps their focus.",
+            description: "Put the floating window holding a terminal pane you created back into the tab's layout: where it was, or beside another pane (`beside`, on `side`). Beside a pane of another tab it is refused (cross_tab) unless moveTab: true. The user keeps their focus, and every tab its focused pane.",
             input: object(
                 json!({
                     "pane": pane_ref("A floating pane you created."),
                     "beside": pane_ref("Dock beside this pane (not floating); default its own place."),
                     "side": { "type": "string", "enum": ["left", "right", "up", "down"], "default": "right" },
+                    "moveTab": { "type": "boolean", "description": "Allow docking beside a pane in another tab, which moves the pane into that tab." },
                 }),
                 &["pane"],
             ),
-            output: pane_result.clone(),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "pane": pane_schema(),
+                    "effects": effects_schema(),
+                    "moved": { "type": "object", "description": "The tab the pane left and the one it joined, when it moved.", "properties": { "from": { "type": "string" }, "to": { "type": "string" } } },
+                },
+                "required": ["pane", "effects"],
+            }),
             read_only: false,
             destructive: false,
             idempotent: false,
@@ -589,7 +687,7 @@ fn tools_list() -> Vec<Tool> {
                     "state": { "type": "string", "enum": ["working", "blocked", "done", "error", "idle", "clear"] },
                     "kind": { "type": "string", "enum": ["permission", "question", "auth"], "description": "What a blocked agent needs." },
                     "message": { "type": "string" },
-                    "progress": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "progress": { "type": "integer", "minimum": 0, "maximum": 100, "description": "Percent done, 0-100." },
                 }),
                 &["state"],
             ),
@@ -663,6 +761,9 @@ pub fn call(name: &str, args: &Value, backend: &mut dyn Backend) -> Value {
 /// What the model reads: a line about the result, then the output verbatim (no escaped JSON),
 /// then the cursor to read on from.
 fn summary(tool: &str, result: &Value) -> String {
+    if tool == "pane_list" && result["tabs"].is_array() {
+        return list_summary(result);
+    }
     let mut head = Vec::new();
     if let Some(status) = result["status"].as_str() {
         head.push(format!("status: {status}"));
@@ -687,6 +788,22 @@ fn summary(tool: &str, result: &Value) -> String {
         head.push(format!(
             "timed out, command c{id} still running (pane_wait exit: {id} with since: the cursor below)"
         ));
+    }
+    if let Some(effects) = result["effects"].as_array() {
+        if result["alreadyClosed"] == true {
+            head.push("already closed".to_owned());
+        } else if result["closed"] == true {
+            head.push("closed".to_owned());
+        }
+        if let (Some(from), Some(to)) = (
+            result.pointer("/moved/from").and_then(Value::as_str),
+            result.pointer("/moved/to").and_then(Value::as_str),
+        ) {
+            head.push(format!("moved from {from} to {to}"));
+        }
+        let mut lines = vec![head.join(", ")];
+        lines.extend(effects.iter().map(effect_line));
+        return lines.join("\n");
     }
     let Some(output) = result.get("output").filter(|output| output.is_object()) else {
         return if head.is_empty() || matches!(tool, "whoami" | "pane_list" | "events_wait") {
@@ -715,6 +832,203 @@ fn summary(tool: &str, result: &Value) -> String {
     }
     out.push_str(&format!("\ncursor: {cursor}"));
     out
+}
+
+/// One line per tab (title, project, focus, layout, windows), then one per pane. Titles,
+/// folders and commands come from programs, so they are quoted.
+fn list_summary(result: &Value) -> String {
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    let mut lines = Vec::new();
+    for tab in result["tabs"].as_array().into_iter().flatten() {
+        let mut head = format!("{} {:?}", text(&tab["id"]), text(&tab["title"]));
+        if tab["fixedTitle"] == true {
+            head.push_str(" (fixed title)");
+        }
+        if let Some(project) = tab.pointer("/project/name").and_then(Value::as_str) {
+            head.push_str(&format!(", project {project:?}"));
+        }
+        if tab["active"] == true {
+            head.push_str(", in front");
+        }
+        head.push_str(&format!(", focused {}", text(&tab["focused"])));
+        if let Some(zoomed) = tab["zoomed"].as_str() {
+            head.push_str(&format!(", zoomed {zoomed}"));
+        }
+        lines.push(head);
+        if !tab["tree"].is_null() {
+            lines.push(format!("  layout: {}", tree_text(&tab["tree"], true)));
+        }
+        for window in tab["floats"].as_array().into_iter().flatten() {
+            let panes: Vec<String> = window["panes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(text)
+                .collect();
+            let mut line = format!(
+                "  floating {}: {} at {}",
+                text(&window["window"]),
+                panes.join(" "),
+                frame_text(&window["frame"])
+            );
+            for flag in ["minimized", "pinned"] {
+                if window[flag] == true {
+                    line.push_str(&format!(", {flag}"));
+                }
+            }
+            lines.push(line);
+        }
+    }
+    lines.extend(
+        result["panes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(pane_line),
+    );
+    lines.join("\n")
+}
+
+fn pane_line(pane: &Value) -> String {
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    let mut tags = Vec::new();
+    if pane["isSelf"] == true {
+        tags.push("you");
+    }
+    if pane["createdByYou"] == true {
+        tags.push("yours");
+    }
+    let mut head = text(&pane["id"]);
+    if !tags.is_empty() {
+        head.push_str(&format!(" ({})", tags.join(", ")));
+    }
+    let mut what = text(&pane["kind"]);
+    if let Some(cwd) = pane["cwd"].as_str() {
+        what.push_str(&format!(" in {cwd:?}"));
+    }
+    let mut facts = vec![what];
+    if pane["atPrompt"] == true {
+        facts.push("at prompt".to_owned());
+    } else if let Some(name) = pane.pointer("/foreground/name").and_then(Value::as_str) {
+        facts.push(format!("running {name:?}"));
+    }
+    if let Some(multiplexer) = pane["multiplexer"].as_str() {
+        facts.push(format!("inside {multiplexer}"));
+    }
+    for (flag, said) in [
+        ("altScreen", "full screen"),
+        ("secretPrompt", "asking for a password"),
+        ("exited", "exited"),
+    ] {
+        if pane[flag] == true {
+            facts.push(said.to_owned());
+        }
+    }
+    if let Some(command) = pane["lastCommand"].as_object() {
+        let line = command
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or("a command");
+        match command.get("exitCode").and_then(Value::as_i64) {
+            Some(code) => facts.push(format!("last {line:?} exit {code}")),
+            None => facts.push(format!("last {line:?} running")),
+        }
+    }
+    if let Some(state) = pane.pointer("/status/state").and_then(Value::as_str) {
+        facts.push(format!("status {state}"));
+    }
+    if let Some(window) = pane.pointer("/float/window").and_then(Value::as_str) {
+        facts.push(format!("floating in {window}"));
+    }
+    let scopes: Vec<String> = pane["scopes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(text)
+        .collect();
+    format!("{head}: {}; can {}", facts.join(", "), scopes.join(", "))
+}
+
+/// `p1 60% | (p2 / p4)`: `|` side by side, `/` stacked, the first side's share when not half.
+fn tree_text(node: &Value, outermost: bool) -> String {
+    if let Some(pane) = node.as_str() {
+        return pane.to_owned();
+    }
+    let ratio = node["ratio"].as_f64().unwrap_or(0.5);
+    let share = if (ratio - 0.5).abs() < 0.005 {
+        String::new()
+    } else {
+        format!(" {}%", (ratio * 100.0).round())
+    };
+    let divider = if node["split"] == "vertical" {
+        "/"
+    } else {
+        "|"
+    };
+    let inner = format!(
+        "{}{share} {divider} {}",
+        tree_text(&node["first"], false),
+        tree_text(&node["second"], false)
+    );
+    if outermost {
+        inner
+    } else {
+        format!("({inner})")
+    }
+}
+
+fn frame_text(frame: &Value) -> String {
+    let number = |key: &str| frame[key].as_f64().unwrap_or(0.0);
+    format!(
+        "x {} y {} w {} h {}",
+        number("x"),
+        number("y"),
+        number("w"),
+        number("h")
+    )
+}
+
+/// `p3: moved from t1 to t2, docked`.
+fn effect_line(effect: &Value) -> String {
+    let (was, now) = (&effect["was"], &effect["now"]);
+    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+    let said: Vec<String> = effect["changes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|change| match change {
+            "opened" if now["floating"] == true => {
+                format!("opened in {}, floating", text(&now["tab"]))
+            }
+            "opened" => format!("opened in {}", text(&now["tab"])),
+            "closed" => "closed".to_owned(),
+            "tab" => format!("moved from {} to {}", text(&was["tab"]), text(&now["tab"])),
+            "float" if was["floating"] != now["floating"] => if now["floating"] == true {
+                "floating"
+            } else {
+                "docked"
+            }
+            .to_owned(),
+            "float" if was["minimized"] != now["minimized"] => if now["minimized"] == true {
+                "minimized"
+            } else {
+                "restored"
+            }
+            .to_owned(),
+            "float" => if now["pinned"] == true {
+                "pinned"
+            } else {
+                "unpinned"
+            }
+            .to_owned(),
+            "frame" => format!("frame {}", frame_text(&now["frame"])),
+            "focus" if now["focused"] == true => "has its tab's focus".to_owned(),
+            "focus" => "lost its tab's focus".to_owned(),
+            other => other.to_owned(),
+        })
+        .collect();
+    format!("{}: {}", text(&effect["pane"]), said.join(", "))
 }
 
 /// Longer than any backtick run in the text, so printed text cannot close the block and
@@ -853,5 +1167,129 @@ mod tests {
             "{}",
             summary("cmd_run", &result)
         );
+    }
+
+    fn tool(name: &str) -> Value {
+        tools()
+            .into_iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("no {name}"))
+    }
+
+    #[test]
+    fn layout_results_declare_their_effects() {
+        for name in [
+            "pane_split",
+            "tab_new",
+            "pane_float",
+            "pane_dock",
+            "pane_minimize",
+            "pane_raise",
+            "pane_close",
+        ] {
+            let output = &tool(name)["outputSchema"];
+            assert_eq!(output["properties"]["effects"]["type"], "array", "{name}");
+            assert!(
+                output["required"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("effects")),
+                "{name}"
+            );
+        }
+        let dock = tool("pane_dock");
+        assert_eq!(
+            dock["inputSchema"]["properties"]["moveTab"]["type"],
+            "boolean"
+        );
+        assert!(dock["outputSchema"]["properties"]["moved"].is_object());
+        let close = tool("pane_close");
+        assert_eq!(
+            close["inputSchema"]["properties"]["closeFloats"]["type"],
+            "boolean"
+        );
+        let list = tool("pane_list");
+        assert_eq!(
+            list["inputSchema"]["properties"]["scope"]["enum"],
+            json!(["session", "tab", "mine"])
+        );
+        assert_eq!(list["inputSchema"]["properties"]["tab"]["type"], "string");
+        assert_eq!(list["outputSchema"]["properties"]["tabs"]["type"], "array");
+        assert_eq!(
+            tool("whoami")["outputSchema"]["properties"]["limits"]["properties"]["panes"]["required"],
+            json!(["yours", "session"])
+        );
+    }
+
+    #[test]
+    fn status_progress_says_it_is_a_percentage() {
+        let progress = &tool("status_set")["inputSchema"]["properties"]["progress"];
+        assert!(
+            progress["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("0-100")),
+            "{progress}"
+        );
+    }
+
+    #[test]
+    fn pane_listings_read_as_tabs_then_panes() {
+        let result = json!({
+            "tabs": [
+                {
+                    "id": "t1", "title": "api", "fixedTitle": false,
+                    "project": { "id": "web", "name": "Web" }, "active": true,
+                    "focused": "p1", "zoomed": null,
+                    "tree": { "split": "horizontal", "ratio": 0.6, "first": "p1",
+                              "second": { "split": "vertical", "ratio": 0.5, "first": "p2", "second": "p4" } },
+                    "floats": [{ "window": "w1", "panes": ["p3"],
+                                 "frame": { "x": 0.5, "y": 0.1, "w": 0.4, "h": 0.5 },
+                                 "minimized": true, "pinned": false, "closeWhenDone": false }],
+                    "panes": ["p1", "p2", "p4", "p3"],
+                },
+                {
+                    "id": "t2", "title": "build", "fixedTitle": true, "project": null,
+                    "active": false, "focused": "p5", "zoomed": null, "tree": "p5",
+                    "floats": [], "panes": ["p5"],
+                },
+            ],
+            "panes": [
+                { "id": "p1", "tab": "t1", "title": "zsh", "cwd": "/src/api", "kind": "agent",
+                  "isSelf": true, "createdByYou": false, "scopes": ["read"], "atPrompt": false,
+                  "altScreen": true, "secretPrompt": false, "exited": false,
+                  "foreground": { "pid": 5, "name": "claude" }, "multiplexer": null,
+                  "lastCommand": null, "status": { "state": "working" }, "cursor": "c10", "float": null },
+                { "id": "p2", "tab": "t1", "title": "zsh", "cwd": "/src/api", "kind": "shell",
+                  "isSelf": false, "createdByYou": true, "scopes": ["read", "input", "manage"],
+                  "atPrompt": true, "altScreen": false, "secretPrompt": false, "exited": false,
+                  "foreground": null, "multiplexer": null,
+                  "lastCommand": { "id": 3, "pane": "p2", "command": "cargo test", "status": "exited", "exitCode": 1 },
+                  "status": null, "cursor": "c20", "float": null },
+            ],
+        });
+        assert_eq!(
+            summary("pane_list", &result),
+            "t1 \"api\", project \"Web\", in front, focused p1\n  layout: p1 60% | (p2 / p4)\n  floating w1: p3 at x 0.5 y 0.1 w 0.4 h 0.5, minimized\nt2 \"build\" (fixed title), focused p5\n  layout: p5\np1 (you): agent in \"/src/api\", running \"claude\", full screen, status working; can read\np2 (yours): shell in \"/src/api\", at prompt, last \"cargo test\" exit 1; can read, input, manage"
+        );
+    }
+
+    #[test]
+    fn layout_results_say_what_moved() {
+        let placement = |tab: &str, floating: bool, focused: bool| json!({ "tab": tab, "floating": floating, "frame": null, "minimized": false, "pinned": false, "focused": focused });
+        let result = json!({
+            "pane": { "id": "p3" },
+            "moved": { "from": "t1", "to": "t2" },
+            "effects": [
+                { "pane": "p3", "changes": ["tab", "float"], "was": placement("t1", true, false), "now": placement("t2", false, false) },
+                { "pane": "p7", "changes": ["opened"], "was": null, "now": placement("t2", true, false) },
+                { "pane": "p8", "changes": ["closed"], "was": placement("t1", false, true), "now": null },
+            ],
+        });
+        assert_eq!(
+            summary("pane_dock", &result),
+            "pane p3, moved from t1 to t2\np3: moved from t1 to t2, docked\np7: opened in t2, floating\np8: closed"
+        );
+        let closed = json!({ "closed": false, "alreadyClosed": true, "effects": [] });
+        assert_eq!(summary("pane_close", &closed), "already closed");
     }
 }
