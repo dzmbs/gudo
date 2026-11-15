@@ -340,3 +340,68 @@ private let geometry = MouseGeometry(screenWidth: 200, screenHeight: 100, cellWi
     #expect(terminal.hyperlink(atViewport: GridPoint(x: 1, y: 0)) == "https://example.com")
     #expect(terminal.hyperlink(atViewport: GridPoint(x: 6, y: 0)) == nil)
 }
+
+// MARK: Selection to text
+
+@Test func selectionFromScrollbackIntoTheScreenCopiesEveryRow() throws {
+    let (terminal, _) = makeTerminal(cols: 10, rows: 3)
+    for i in 0..<8 { terminal.write(Array("row\(i)\r\n".utf8)) }
+    terminal.write(Array("last".utf8))
+    terminal.scrollViewport(by: -100)
+    let top = try #require(terminal.screenPoint(fromViewport: GridPoint(x: 0, y: 0)))
+    terminal.scrollViewport(by: 100)
+    let bottom = try #require(terminal.screenPoint(fromViewport: GridPoint(x: 3, y: 2)))
+    terminal.setSelection(Selection(anchor: top, head: bottom))
+    #expect(terminal.selectionText() == (0..<8).map { "row\($0)" }.joined(separator: "\n") + "\nlast")
+}
+
+@Test func selectAllReachesIntoScrollback() {
+    let (terminal, _) = makeTerminal(cols: 10, rows: 3)
+    for i in 0..<8 { terminal.write(Array("row\(i)\r\n".utf8)) }
+    terminal.selectAll()
+    #expect(terminal.selectionText()?.hasPrefix("row0\nrow1\n") == true)
+    #expect(terminal.selectionText()?.hasSuffix("row7") == true)
+}
+
+@Test func wrappedLineInScrollbackJoinsWithoutANewline() throws {
+    let (terminal, _) = makeTerminal(cols: 10, rows: 3)
+    terminal.write(Array("0123456789abcdefghij\r\n".utf8))
+    for i in 0..<5 { terminal.write(Array("x\(i)\r\n".utf8)) }
+    let all = try #require(terminal.selectAll())
+    terminal.setSelection(Selection(anchor: all.start, head: GridPoint(x: 9, y: all.start.y + 1)))
+    #expect(terminal.selectionText() == "0123456789abcdefghij")
+}
+
+@Test func trailingSpacesAreTrimmedOnEveryRow() {
+    let (terminal, _) = makeTerminal(cols: 20, rows: 4)
+    terminal.write(Array("one   \r\ntwo\t\r\n   \r\nfour  ".utf8))
+    terminal.setSelection(Selection(anchor: GridPoint(x: 0, y: 0), head: GridPoint(x: 19, y: 3)))
+    #expect(terminal.selectionText() == "one\ntwo\n\nfour")
+}
+
+@Test func wideCharactersCopyOnceAndWholeFromEitherHalf() {
+    let (terminal, _) = makeTerminal(cols: 20, rows: 3)
+    terminal.write(Array("a日本語b".utf8))
+    terminal.setSelection(Selection(anchor: GridPoint(x: 0, y: 0), head: GridPoint(x: 7, y: 0)))
+    #expect(terminal.selectionText() == "a日本語b")
+    // From the right half of 日 to the left half of 語.
+    terminal.setSelection(Selection(anchor: GridPoint(x: 2, y: 0), head: GridPoint(x: 5, y: 0)))
+    #expect(terminal.selectionText() == "日本語")
+}
+
+@Test func emojiSequencesCopyIntact() {
+    let (terminal, _) = makeTerminal(cols: 30, rows: 3)
+    terminal.write(Array("\u{1b}[?2027h".utf8))
+    let text = "ok 👍🏽 👨‍👩‍👧 🇯🇵 ❤️ end"
+    terminal.write(Array(text.utf8))
+    terminal.selectAll()
+    #expect(terminal.selectionText() == text)
+}
+
+@Test func wideCharacterWrappedAtTheEdgeJoinsTheLine() {
+    let (terminal, _) = makeTerminal(cols: 5, rows: 3)
+    // A wide character that does not fit in the last cell wraps whole to the next row.
+    terminal.write(Array("abcd日e".utf8))
+    terminal.selectAll()
+    #expect(terminal.selectionText() == "abcd日e")
+}
