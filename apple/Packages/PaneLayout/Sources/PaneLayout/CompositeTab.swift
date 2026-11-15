@@ -115,9 +115,11 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     public private(set) var tools: [PaneId: ToolMember] = [:]
     /// The tab on each host that holds this composite's panes there.
     public internal(set) var carriers: [String: TabId]
+    /// The host whose tab it was made from: it stands in that tab's place there.
+    public private(set) var home: String?
 
     private enum CodingKeys: String, CodingKey {
-        case layout, members, editors, browsers, tools, carriers
+        case layout, members, editors, browsers, tools, carriers, home
     }
 
     public init(from decoder: any Decoder) throws {
@@ -129,6 +131,7 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         browsers = try container.decodeIfPresent([PaneId: BrowserMember].self, forKey: .browsers) ?? [:]
         tools = try container.decodeIfPresent([PaneId: ToolMember].self, forKey: .tools) ?? [:]
         carriers = try container.decode([String: TabId].self, forKey: .carriers)
+        home = try container.decodeIfPresent(String.self, forKey: .home)
     }
 
     public var id: TabId { layout.id }
@@ -142,6 +145,12 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     public var focusedBrowser: BrowserMember? { browsers[layout.focused] }
     public var isBrowserOnly: Bool { members.isEmpty && editors.isEmpty && tools.isEmpty && !browsers.isEmpty }
     public var focusedTool: ToolMember? { tools[layout.focused] }
+
+    /// The host tab it was made from, while that tab still carries its panes.
+    public var homeTab: CompositeTabs.TabRefParts? {
+        guard let home, let carrier = carriers[home] else { return nil }
+        return CompositeTabs.TabRefParts(hostId: home, tab: carrier)
+    }
 
     public func leaf(forTool id: UUID) -> PaneId? {
         tools.first { $0.value.id == id }?.key
@@ -236,6 +245,7 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
         layout = Tab(id: id, title: tab.title, root: root, focused: leafForPane[tab.focused] ?? root.panes[0])
         self.members = members
         carriers = [hostId: tab.id]
+        home = hostId
     }
 
     public func leaf(for member: HostPane) -> PaneId? {
@@ -277,9 +287,11 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     }
 
     @discardableResult
-    public mutating func insert(browser: BrowserMember, beside leaf: PaneId, axis: Axis) -> PaneId? {
+    public mutating func insert(browser: BrowserMember, beside leaf: PaneId, axis: Axis, focus: NewLeafFocus = .newLeaf) -> PaneId? {
+        let focused = layout.focused
         guard let newLeaf = splitLeaf(leaf, axis: axis) else { return nil }
         browsers[newLeaf] = browser
+        if focus == .unchanged { layout.focused = focused }
         return newLeaf
     }
 
@@ -353,6 +365,13 @@ public struct CompositeTab: Identifiable, Hashable, Sendable, Codable {
     func isLeaf(_ leaf: PaneId) -> Bool {
         members[leaf] != nil || editors[leaf] != nil || browsers[leaf] != nil || tools[leaf] != nil
     }
+}
+
+/// Whether a leaf added to a tab takes the tab's focus: the user's own additions do; what an
+/// agent or a host adds leaves the focus where the user put it.
+public enum NewLeafFocus: Sendable {
+    case newLeaf
+    case unchanged
 }
 
 /// A window's mixed tabs, kept in step with the hosts whose panes they show. The store never
@@ -527,20 +546,28 @@ public final class CompositeTabs {
         return id
     }
 
+    /// A page beside `leaf` (the focused leaf when nil).
     @discardableResult
-    public func addBrowser(_ browser: BrowserMember, to id: TabId, axis: Axis = .horizontal) -> PaneId? {
+    public func addBrowser(
+        _ browser: BrowserMember, to id: TabId, beside leaf: PaneId? = nil, axis: Axis = .horizontal, focus: NewLeafFocus = .newLeaf
+    ) -> PaneId? {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return nil }
         var tab = tabs[index]
-        guard let leaf = tab.insert(browser: browser, beside: tab.focusedLeaf, axis: axis) else { return nil }
+        guard let added = tab.insert(browser: browser, beside: leaf ?? tab.focusedLeaf, axis: axis, focus: focus) else { return nil }
         tabs[index] = tab
-        return leaf
+        return added
     }
 
-    /// A browser page beside a host tab's focused pane: the tab becomes a composite in its place.
+    /// A browser page beside a host tab's pane (its focused one when nil): the tab becomes a
+    /// composite in its place.
     @discardableResult
-    public func addBrowser(_ browser: BrowserMember, besideHost host: String, tab: Tab, axis: Axis = .horizontal) -> TabId {
+    public func addBrowser(
+        _ browser: BrowserMember, besideHost host: String, tab: Tab, pane: PaneId? = nil, axis: Axis = .horizontal,
+        focus: NewLeafFocus = .newLeaf
+    ) -> TabId {
         let id = make(fromHost: host, tab: tab)
-        addBrowser(browser, to: id, axis: axis)
+        let leaf = pane.flatMap { self.tab(id)?.leaf(for: HostPane(hostId: host, pane: $0)) }
+        addBrowser(browser, to: id, beside: leaf, axis: axis, focus: focus)
         return id
     }
 

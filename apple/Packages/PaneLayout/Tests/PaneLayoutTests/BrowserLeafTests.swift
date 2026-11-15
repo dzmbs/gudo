@@ -38,6 +38,34 @@ import Testing
         #expect(hosts.dissolved.first?.1 == CompositeTabs.TabRefParts(hostId: "alpha", tab: TabId(2)))
     }
 
+    /// An agent's page goes beside the agent's pane and leaves the tab's focus where it was.
+    @Test func aPageBesideAnotherPaneLeavesTheFocus() throws {
+        let hosts = Hosts()
+        hosts.sessions["alpha"]!.apply(.split(PaneId(1), .horizontal))
+        let hostTab = hosts.sessions["alpha"]!.tabs[0]
+        let focused = hostTab.focused
+        let agent = try #require(hostTab.root.panes.first { $0 != focused })
+
+        let id = hosts.store.addBrowser(app, besideHost: "alpha", tab: hostTab, pane: agent, focus: .unchanged)
+
+        let tab = hosts.tab(id)
+        #expect(tab.focusedMember == HostPane(hostId: "alpha", pane: focused), "the user's pane keeps the focus")
+        let page = try #require(tab.leaf(forBrowser: app.id))
+        let agentLeaf = try #require(tab.leaf(for: HostPane(hostId: "alpha", pane: agent)))
+        #expect(tab.leaves.firstIndex(of: page) == tab.leaves.firstIndex(of: agentLeaf)! + 1, "beside the agent's pane")
+    }
+
+    /// A composite made from a host tab knows that tab, across a relaunch: the sidebar lists it there.
+    @Test func aCompositeKnowsTheHostTabItStandsFor() throws {
+        let hosts = Hosts()
+        let hostTab = hosts.sessions["alpha"]!.tabs[0]
+        let id = hosts.store.addBrowser(app, besideHost: "alpha", tab: hostTab)
+        #expect(hosts.tab(id).homeTab == CompositeTabs.TabRefParts(hostId: "alpha", tab: hostTab.id))
+        let back = try JSONDecoder().decode([CompositeTab].self, from: JSONEncoder().encode(hosts.store.tabs))
+        #expect(back[0].homeTab == CompositeTabs.TabRefParts(hostId: "alpha", tab: hostTab.id))
+        #expect(hosts.tab(hosts.store.openBrowser(docs)).homeTab == nil, "a browser tab stands for no host tab")
+    }
+
     @Test func aPageKeepsWhereItNavigatedAndIsRestored() throws {
         let hosts = Hosts()
         let id = hosts.store.openBrowser(app)
