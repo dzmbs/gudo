@@ -76,6 +76,8 @@ public extension DS {
         public static let touchTarget: CGFloat = 44
         public static let proseQuoteRule: CGFloat = 3
         public static let proseTableColumn: CGFloat = 80
+        /// A Chat table cell wraps past this; a wider table scrolls inside its own box.
+        public static let proseTableColumnMaximum: CGFloat = 240
         public static let proseTableLineHeight: CGFloat = 24
         public static let proseOutputLineHeight: CGFloat = 16
         public static let proseDiffLineHeight: CGFloat = 20
