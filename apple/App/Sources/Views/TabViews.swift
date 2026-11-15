@@ -355,7 +355,7 @@ struct HostGroupHeaderItem: View {
         VStack(alignment: .leading, spacing: 0) {
             HostGroupHeader(group: group, collapsed: collapsed)
             if group.kind == .daemon || LaunchOptions.fakeUsage {
-                HostUsageMeters(hostId: group.id, hostName: group.name)
+                HostUsageMeters(hostId: group.id, hostName: group.name, onlyNearingLimits: true)
                     .padding(.leading, DS.Space.l + 16 + DS.Space.s)
                     .padding(.trailing, DS.Space.gap10)
                     .padding(.bottom, DS.Space.xs)
@@ -558,6 +558,9 @@ private struct HostAgentsPopover: View {
                         .buttonStyle(.plain)
                     }
                 }
+            }
+            if group.kind == .daemon || LaunchOptions.fakeUsage {
+                HostUsageMeters(hostId: group.id, hostName: group.name)
             }
         }
         .hoverPopoverFrame()

@@ -37,16 +37,24 @@ struct UsageMeterLine: View {
     }
 }
 
-/// A host's meters under its name in the sidebar. Watches the host's usage while on screen;
-/// tapping opens the detail. Absent when nothing is known.
+extension [UsageMeter] {
+    /// The meters near or at their limit: all a host's header says; the rest wait in its popover.
+    var nearingLimits: [UsageMeter] { filter { $0.tone != .quiet } }
+}
+
+/// A host's meters, under its name in the sidebar or in its agents' popover. Watches the host's
+/// usage while on screen; tapping opens the detail. Absent when nothing is known.
 struct HostUsageMeters: View {
     let hostId: String
     let hostName: String
+    /// Only meters near a limit (the sidebar's header).
+    var onlyNearingLimits = false
     @Environment(WindowModel.self) private var model
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            let meters = UsageMeter.compact(model.usage.usage(forHost: hostId), now: context.date)
+            let all = UsageMeter.compact(model.usage.usage(forHost: hostId), now: context.date)
+            let meters = onlyNearingLimits ? all.nearingLimits : all
             if !meters.isEmpty {
                 Button {
                     model.usageDetailHost = hostId
