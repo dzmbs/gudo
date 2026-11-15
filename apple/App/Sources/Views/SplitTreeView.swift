@@ -561,6 +561,8 @@ struct PaneSlot: View {
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
     @AppStorage(TerminalPreferences.Key.resizeOverlay) private var resizeOverlay = TerminalPreferences.ResizeOverlay.afterFirst
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @AppStorage(TerminalPreferences.Key.paneActiveBorder) private var activeBorder = TerminalPreferences.Default.paneActiveBorder
+    @AppStorage(TerminalPreferences.Key.paneInactiveFade) private var inactiveFade = TerminalPreferences.Default.paneInactiveFade
 
     var body: some View {
         let focused = isFocused
@@ -569,6 +571,11 @@ struct PaneSlot: View {
             // A drawing always has its header: its close and pane controls, docked alone or not.
             if isSplit || workspace.canvasTitles[id] != nil {
                 PaneHeader(id: id, workspace: workspace, isFocused: focused, namesHost: namesHost, focus: focus)
+                    .overlay {
+                        if isSplit && !focused && inactiveFade == .header {
+                            UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
+                        }
+                    }
             }
             ZStack {
                 content
@@ -601,8 +608,13 @@ struct PaneSlot: View {
         }
         .overlay {
             // Ghostty unfocused-split-opacity: the background color at 1 - opacity, header included.
-            if isSplit && !focused {
+            if isSplit && !focused && inactiveFade.dimsContent {
                 UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
+            }
+        }
+        .overlay {
+            if isSplit && activeBorder {
+                ActivePaneRing(isActive: focused, cornerRadius: paneStyle == .comfortable ? DS.Radius.pane : 0)
             }
         }
         .background(theme.background, ignoresSafeAreaEdges: [])

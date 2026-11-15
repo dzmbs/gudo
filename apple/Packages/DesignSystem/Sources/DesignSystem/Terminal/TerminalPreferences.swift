@@ -17,6 +17,9 @@ nonisolated public enum TerminalPreferences {
         public static let bellFeatures = "bell-features"
         public static let keyBarWithHardwareKeyboard = "key-bar-with-hardware-keyboard"
         public static let paneStyle = "pane-style"
+        public static let paneActiveBorder = "pane-active-border"
+        public static let paneInactiveFade = "pane-inactive-fade"
+        public static let sidebarTextSize = "sidebar-text-size"
     }
 
     /// Ghostty defaults (src/config/Config.zig).
@@ -25,6 +28,10 @@ nonisolated public enum TerminalPreferences {
         public static let fontSize: Double = 13
         public static let unfocusedSplitOpacity: Double = 0.7
         public static let fontFamily = "JetBrains Mono"
+        /// No ring around the active pane, as in Ghostty.
+        public static let paneActiveBorder = false
+        public static let paneInactiveFade = InactivePaneFade.dim
+        public static let sidebarTextSize = SidebarTextSize.system
     }
 
     /// The font sizes Settings, pinching and the font size shortcuts may reach.
@@ -111,6 +118,38 @@ nonisolated public enum TerminalPreferences {
             case .afterFirst: "After First Resize"
             case .always: "Always"
             case .never: "Never"
+            }
+        }
+    }
+
+    /// How a pane without focus recedes: the whole pane dimmed by `unfocused-split-opacity`
+    /// (Ghostty), only its header, or not at all.
+    public enum InactivePaneFade: String, CaseIterable, Identifiable, Sendable {
+        case dim, header, none
+        public var id: String { rawValue }
+        public var title: String {
+            switch self {
+            case .dim: "Dim"
+            case .header: "Dim Header Only"
+            case .none: "None"
+            }
+        }
+
+        public var dimsContent: Bool { self == .dim }
+        public var dimsHeader: Bool { self != .none }
+    }
+
+    /// The sidebar's text: the Mac's own sidebar size (System Settings › Appearance) or a size of
+    /// its own.
+    public enum SidebarTextSize: String, CaseIterable, Identifiable, Sendable {
+        case system, small, medium, large
+        public var id: String { rawValue }
+        public var title: String {
+            switch self {
+            case .system: "System"
+            case .small: "Small"
+            case .medium: "Medium"
+            case .large: "Large"
             }
         }
     }

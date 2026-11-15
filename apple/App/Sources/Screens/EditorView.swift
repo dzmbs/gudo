@@ -33,6 +33,7 @@ struct EditorPaneView: View {
     @Environment(\.terminalTheme) private var theme
     @Environment(\.openURL) private var openURL
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
+    @AppStorage(TerminalPreferences.Key.paneInactiveFade) private var inactiveFade = TerminalPreferences.Default.paneInactiveFade
 
     private var source: any EditorSource { pane.source }
     /// The editor's own commands in the bar, which has no room for the host's name.
@@ -85,7 +86,7 @@ struct EditorPaneView: View {
             }
         }
         .overlay {
-            if isSplit && !isFocused {
+            if isSplit && !isFocused && inactiveFade.dimsContent {
                 UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background)
             }
         }

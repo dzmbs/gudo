@@ -650,13 +650,17 @@ private struct TabColumn: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.unfocusedSplitOpacity) private var unfocusedOpacity = TerminalPreferences.Default.unfocusedSplitOpacity
+    @AppStorage(TerminalPreferences.Key.paneInactiveFade) private var inactiveFade = TerminalPreferences.Default.paneInactiveFade
 
     var body: some View {
         VStack(spacing: 0) {
             ColumnHeader(ref: ref, isLeft: isLeft, isActive: isActive)
+                .overlay {
+                    if !isActive && inactiveFade == .header { UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background) }
+                }
             content
                 .overlay {
-                    if !isActive { UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background).allowsHitTesting(false) }
+                    if !isActive && inactiveFade.dimsContent { UnfocusedDim(unfocusedSplitOpacity: unfocusedOpacity, fill: theme.background).allowsHitTesting(false) }
                 }
         }
     }
