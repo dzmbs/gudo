@@ -115,8 +115,9 @@ Tab  = { tab_id, name, root, focused: PaneId, zoomed: Option<PaneId> }
   window raises it and brings it back from the tray; directional focus stays within the focused
   pane's layer. A tab always keeps a tiled pane: floating the last one is `Invalid`, and when it
   closes the frontmost window docks. A window opened with `close: Done` closes 2.5 s after its
-  work ends (the agent's turn, a done or failed OSC 7501 report, or a finished command), and
-  keeps an agent's result for `agent_result`. Clients with `Caps::FLOATS` get
+  work ends (the agent ending its turn itself, a done or failed OSC 7501 report from a program
+  that is not an agent, or a finished command), after the agent's result is kept for
+  `agent_result`. Clients with `Caps::FLOATS` get
   `ServerCtl::Floats` (same revision) right after every `LayoutChanged`, cut down to their
   scope (a tab-scoped guest sees its tab's windows, a pane-scoped one none).
 - The daemon is the source of truth. Every change bumps the session's `revision` and is
@@ -2687,9 +2688,10 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
 - **Floating windows.** `pane_split`, `tab_new` and `agent_spawn` take `float: true` to open
   the pane as a floating window over the tab (`tab_new`: over the caller's tab, no title), with
   an optional `frame {x, y, w, h}` (fractions of the tab) and `closeWhenDone: true`: the daemon
-  closes the window 2.5 s after its work ends (an agent's turn, a done or error status, the first
-  command run in it), so a script can pop a window for a run's output and have it go when the run
-  is done; a worker's answer stays readable with `agent_result` after its window closed. Such a
+  closes the window 2.5 s after its work ends (an agent ending its turn, another program's done
+  or error status, the first command run in it), so a script can pop a window for a run's output
+  and have it go when the run is done; a worker's answer stays readable with `agent_result` after
+  its window closed. Such a
   window opens without the focus in the same change (`LayoutOp::NewFloat { focus: false }`), so
   the user's focus never flickers. On panes the caller created: `pane_float {pane, frame?,
   pinned?}` floats one (or moves its window; `pinned` shows it over every tab; floated again
@@ -2708,12 +2710,34 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   -- <command…>` opens a shell in a window and runs the command in it (so its output stays to
   read, and its end closes the window); `gudo float pane|move|dock|min|restore|pin|list` arrange
   and list windows.
-- **Workers.** `agent_spawn` starts Claude or Codex in a pane beside the caller (owned, no
-  focus) and gives it its first prompt once it is idle and its screen has settled; a worker on
-  a dialog (folder trust, an approval) is reported blocked instead. `agent_prompt` refuses a
-  working or blocked worker and can wait for that turn's end; `agent_wait` waits for states
-  across workers; `agent_result` returns the last turn's outcome and final message (from the
-  agent's hooks, up to 16k characters) with its transcript path.
+- **Workers** (`daemon::term::workers`). `agent_spawn` starts Claude or Codex in a pane beside
+  the caller (owned, no focus). Its first prompt is queued until the agent is really ready: its
+  process running (not the pane's shell), its state idle from real evidence (its prompt on
+  screen, its own status report, or a session its hooks reported) and its screen still for
+  400 ms. A dialog first (folder trust, an update) returns `blocked` with `promptDelivery:
+  queued`, and the prompt is typed once the user answers. An agent that exits first (Codex
+  updating itself) gets 10 s to be run again in its pane, else `promptDelivery: failed` with
+  `promptFailure {reason: agent_exited, message}` quoting its screen; `accepted` once typed.
+  A turn ends only on the agent's own end-of-turn report: Claude's Stop (or StopFailure) hook,
+  Codex's `notify` `agent-turn-complete` (or its Stop or Interrupt hook), or `turn/completed`
+  in the app-server lane. Titles, spinners, OSC 7501 and OSC 9 never end one (Codex reports
+  `done` when its MCP servers finish starting). `turns` counts each end once: the same end
+  reported twice (a Stop hook, then `notify`) only fills in what the first lacked. The worker
+  reads `working` from its first sign of work (or a delivered prompt) until that end, or until
+  it has sat neither working nor blocked for 30 s (a turn the user interrupted). `agent_prompt`
+  refuses a working or blocked worker and can wait for that turn's end; `agent_wait` waits for
+  states across workers; `agent_result` returns the last turn's outcome and final message (from
+  the end-of-turn report, up to 16k characters) with its transcript path. When the report has no
+  message, it is read from the transcript (Claude's session JSONL; Codex's rollout, found by the
+  thread id from `notify`, hooks or the app-server, which is also its `transcriptPath`), and
+  until then or if it is not there `messageUnavailable` says why (`reading_transcript`,
+  `no_transcript`, `not_in_transcript`, `cancelled`, `pane_closed`). A worker's last state and
+  result are kept when its pane closes, for the daemon's life (the newest 1024), so
+  `agent_result` and `agent_wait` still answer for it (`state: exited`, `closed: true`); one
+  closed mid-turn reports `outcome: cancelled`, `reason: pane_closed`. A blocked worker's status
+  says what it waits on: `kind` (`permission`, `question`, `auth`, `trust`, `update`,
+  `elicitation`, `other`), `tool`, and `message` (the command to approve, or the dialog's lines
+  from its screen).
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
   Annotations mark the read-only tools. `agents::FREE_TOOLS` (reading, the browser pane, arranging

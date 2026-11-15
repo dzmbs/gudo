@@ -2,8 +2,10 @@
 
 A worker is a coding agent you start in a pane of its own. The user watches it in the app and
 can type into it. Its states: `starting`, `idle`, `working`, `done`, `blocked` (waiting on the
-user: a permission, a question, a sign-in), `error`, `exited`. `turns` counts the turns it has
-finished.
+user: a permission, a question, a sign-in), `error`, `exited`. It is `working` until it ends
+its turn itself, and `turns` counts the turns it has finished. A blocked worker's `status` says
+what it waits on: `kind` (`permission`, `question`, `auth`, `trust`, `update`, ...) and
+`message` (the command to approve, or the dialog on its screen).
 
 Write a worker's prompt so it stands alone. It does not see your conversation. Give it:
 
@@ -16,9 +18,12 @@ Write a worker's prompt so it stands alone. It does not see your conversation. G
 ### `agent_spawn`
 
 Starts `claude` or `codex` in a new pane beside yours (or a floating window), and gives it
-`prompt` once it is ready. `timeoutMs` is how long to wait for it to be ready (60 s by default).
-A worker stopped on a dialog at start (folder trust, an approval) comes back `blocked`: that is
-the user's to answer.
+`prompt` once it is really ready. `promptDelivery` says where the prompt is: `accepted` (typed),
+`queued` or `failed`. A worker stopped on a dialog at start (folder trust, an update) comes back
+`blocked` with the prompt `queued`: the user answers it, and the prompt is typed then. A worker
+that exits instead (Codex updating itself) and is not run again comes back `failed` with
+`promptFailure` saying what happened; start a new one. `timeoutMs` is how long to wait for the
+prompt to be typed (60 s by default); after that it stays queued.
 
 Arguments: `kind` (required), `prompt`, `cwd`, `of`, `direction`, `timeoutMs`, `float`, `frame`,
 `closeWhenDone`.
@@ -42,8 +47,10 @@ Arguments: `panes` (required), `until`, `all`, `timeoutMs`.
 ### `agent_result`
 
 A worker's last answer from the agent itself rather than its screen: how its last turn ended
-(`completed`, `cancelled`, `failed`), its final message, and its transcript file. It still
-answers after a `closeWhenDone` window closed.
+(`completed`, `cancelled`, `failed`), its final message, and its transcript file. Without a
+message, `messageUnavailable` says why. It still answers after the worker's pane closed (a
+`closeWhenDone` window, or `pane_close`); a worker closed mid-turn reports `cancelled` with
+`reason: pane_closed`.
 
 Arguments: `pane` (required).
 

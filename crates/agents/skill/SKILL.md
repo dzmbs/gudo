@@ -71,8 +71,9 @@ The sections below cover most work. Read a reference only when the task needs it
    Workers do not see your conversation.
 4. Wait with `agent_wait` (`panes`, `all: true` for every one) or `events_wait` (`agent.state`,
    `command.finished`). Do not poll `pane_read` in a loop.
-5. A worker in `blocked` waits on the user (a permission, a question, a sign-in). Leave it to
-   them; tell the user which pane needs them if they may not have noticed.
+5. A worker in `blocked` waits on the user (a permission, a question, a sign-in, folder trust);
+   its `status.message` says what. Leave it to them; tell the user which pane needs them if they
+   may not have noticed. A first prompt queued behind such a dialog is typed once they answer.
 6. `agent_result` gives a worker's final message and transcript path. Treat it as a colleague's
    report: check the claims (run the tests, read the diff) before you build on them.
 7. Follow up with `agent_prompt` (`wait: true` returns the answer of that turn).
