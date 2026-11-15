@@ -247,6 +247,11 @@ final class WindowModel {
                 guard let self else { return }
                 toasts.show(Toast(layoutUnavailableHelp, systemImage: "network.slash", style: .neutral))
             }
+            workspace?.onNoRoomToSplit = { [weak self] in
+                self?.toasts.show(Toast(
+                    "No room for another pane here. Close one or make the window bigger.",
+                    systemImage: "rectangle.split.2x1", style: .neutral))
+            }
             workspace?.onHeldInputDropped = { [weak self] in
                 self?.toasts.show(Toast(
                     "What you typed while connecting wasn't sent: the screen had changed.",

@@ -310,6 +310,21 @@ final class Workspace {
     var isLayoutLive: Bool { host?.status.isLive ?? true }
     /// What a layout change does while the host is not live: say so (never a silent no-op).
     @ObservationIgnored var onLayoutUnavailable: (() -> Void)?
+    /// A split would leave a pane too small to use.
+    @ObservationIgnored var onNoRoomToSplit: (() -> Void)?
+
+    /// The smallest pane a split leaves: a prompt and a short command.
+    static let smallestSplitGrid = (cols: 20, rows: 4)
+
+    /// Whether both halves of `pane` split along `axis` keep `smallestSplitGrid`; the new pane's
+    /// header takes a row in a vertical split.
+    func hasRoomToSplit(_ pane: PaneId, _ axis: Axis) -> Bool {
+        guard let grid = panes[pane]?.view.surface.grid else { return true }
+        return switch axis {
+        case .horizontal: Int(grid.cols) >= 2 * Self.smallestSplitGrid.cols + 1
+        case .vertical: Int(grid.rows) >= 2 * Self.smallestSplitGrid.rows + 2
+        }
+    }
     /// Input typed over a saved screen was not sent (the host's screen had changed).
     @ObservationIgnored var onHeldInputDropped: (() -> Void)?
     /// Whether any of this window's panes on the host still shows its saved screen, or the
@@ -329,6 +344,10 @@ final class Workspace {
         }
         if op.opensPane, !isLayoutLive {
             onLayoutUnavailable?()
+            return
+        }
+        if case .split(let source, let axis) = op, !hasRoomToSplit(source, axis) {
+            onNoRoomToSplit?()
             return
         }
         // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`), and a dragged
