@@ -231,6 +231,9 @@ fn tools_list() -> Vec<Tool> {
                     "command": command_schema(),
                     "output": output_schema(),
                     "note": { "type": "string" },
+                    "timedOut": { "type": "boolean", "description": "The timeout passed before the command finished." },
+                    "stillRunning": { "type": "boolean", "description": "The command keeps running; follow it with pane_wait (exit: commandId, since: the cursor)." },
+                    "commandId": { "type": "integer" },
                 },
                 "required": ["pane", "status"],
             }),
@@ -679,6 +682,12 @@ fn summary(tool: &str, result: &Value) -> String {
     if let Some(note) = result["note"].as_str() {
         head.push(note.to_owned());
     }
+    if result["stillRunning"] == true {
+        let id = result["commandId"].as_u64().unwrap_or_default();
+        head.push(format!(
+            "timed out, command c{id} still running (pane_wait exit: {id} with since: the cursor below)"
+        ));
+    }
     let Some(output) = result.get("output").filter(|output| output.is_object()) else {
         return if head.is_empty() || matches!(tool, "whoami" | "pane_list" | "events_wait") {
             serde_json::to_string_pretty(result).unwrap_or_default()
@@ -800,6 +809,23 @@ mod tests {
         assert_eq!(
             summary("cmd_run", &result),
             "status: exited, exit code 1, pane p3\n```\na \"quoted\"\nline\n```\ncursor: c9"
+        );
+    }
+
+    #[test]
+    fn a_timed_out_command_says_it_still_runs() {
+        let result = json!({
+            "pane": "p3",
+            "status": "timeout",
+            "timedOut": true,
+            "stillRunning": true,
+            "commandId": 7,
+            "command": { "id": 7, "pane": "p3", "status": "running" },
+            "output": { "text": "START", "cursor": "c40" },
+        });
+        assert_eq!(
+            summary("cmd_run", &result),
+            "status: timeout, pane p3, timed out, command c7 still running (pane_wait exit: 7 with since: the cursor below)\n```\nSTART\n```\ncursor: c40"
         );
     }
 

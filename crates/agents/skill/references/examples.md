@@ -91,7 +91,8 @@ cmd_run {"command": "npm run dev", "timeoutMs": 2000}
 pane_wait {"pane": "p8", "match": "localhost:(\\d+)", "timeoutMs": 60000}
 ```
 
-`cmd_run` comes back with `timeout` because the server keeps running; that is expected. The
+`cmd_run` comes back with `timeout` and `stillRunning` because the server keeps running; that is
+expected (`pane_wait {"exit": commandId, "since": cursor}` follows a command to its end). The
 match returns the port in its groups. Open the page beside the terminal and read it as text:
 
 ```text
