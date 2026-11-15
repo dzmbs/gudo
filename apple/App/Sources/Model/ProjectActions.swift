@@ -182,8 +182,9 @@ extension WindowModel {
         }
     }
 
-    /// The row of a tab that joined a project lights in its colour a moment, so the join shows.
-    private func flashJoined(_ ref: TabRef) {
+    /// The row of a tab that joined a project (or changed out of sight) lights in its colour a
+    /// moment, so the change shows.
+    func flashJoined(_ ref: TabRef) {
         joinedTab = ref
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
@@ -207,7 +208,7 @@ extension WindowModel {
             guard !refs.isEmpty else { continue }
             let sidebar = groups.repoSidebar(for: group)
             let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for ref in refs {
+            for ref in refs where ref.hostId == group.id {
                 loose.append((ref, tabs[ref.tab].flatMap { projectRoot(of: $0, in: group, sidebar: sidebar) }))
             }
         }

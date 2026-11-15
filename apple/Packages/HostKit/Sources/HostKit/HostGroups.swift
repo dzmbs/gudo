@@ -41,6 +41,9 @@ nonisolated public struct HostGroup: Identifiable, Equatable, Sendable {
     public var failure: String?
     /// The tabs are the ones this device saved, until the host's layout arrives.
     public var isCached = false
+    /// The rows the host lists, in its order: its tabs, and in place of a tab a mixed tab was
+    /// made from, that mixed tab.
+    public var listed: [TabRef] = []
 
     public var isLocal: Bool { kind == .local }
 
@@ -86,8 +89,9 @@ public final class HostGroups {
     public var collapsed: Set<String> = []
     /// Hosts that failed to open, with the reason (shown on the group, cleared on success).
     public private(set) var failures: [String: String] = [:]
-    /// This window's mixed tabs (panes from several hosts in one tab). They lead the unified
-    /// order; the host tabs carrying their panes are left out of their groups.
+    /// This window's mixed tabs (panes from several hosts in one tab). One made from a host tab
+    /// is listed in that tab's place; the host tabs carrying their panes are left out of their
+    /// groups.
     public let composites = CompositeTabs()
 
     private static let log = Logger(subsystem: Log.subsystem, category: "hosts")
@@ -113,10 +117,26 @@ public final class HostGroups {
     private func localGroup(carriers: [String: Set<TabId>]) -> HostGroup? {
         guard let local, !(local.layout.session.tabs.isEmpty && helperServesLocal()) else { return nil }
         let session = local.layout.session
-        return HostGroup(
+        var group = HostGroup(
             id: Self.localId, name: local.name, kind: .local, status: .connected(rtt: nil),
             tabs: session.tabs.filter { !(carriers[Self.localId]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: Self.localId, tab: $0.id)) },
             activeTabId: session.activeTabId, isReady: true)
+        group.listed = listed(session.tabs, of: Self.localId, carriers: carriers)
+        return group
+    }
+
+    /// A host's rows: each tab not hidden, a carrier as the mixed tab made from it (a carrier of
+    /// any other mixed tab is not listed: that tab lists its panes).
+    private func listed(_ tabs: [Tab], of host: String, carriers: [String: Set<TabId>]) -> [TabRef] {
+        let homes = Dictionary(
+            composites.tabs.compactMap { tab in tab.homeTab.flatMap { $0.hostId == host ? ($0.tab, tab.id) : nil } },
+            uniquingKeysWith: { first, _ in first })
+        return tabs.compactMap { tab in
+            if let mixed = homes[tab.id] { return TabRef(hostId: Self.mixedId, tab: mixed) }
+            let ref = TabRef(hostId: host, tab: tab.id)
+            guard !(carriers[host]?.contains(tab.id) ?? false), !hiddenTabs.contains(ref) else { return nil }
+            return ref
+        }
     }
 
     private func hostGroup(_ id: String, carriers: [String: Set<TabId>]) -> HostGroup? {
@@ -127,11 +147,13 @@ public final class HostGroups {
         let session = ready || cached ? connection?.layoutStore.session : nil
         var status = connection?.status ?? .idle
         if connection == nil, let failure = failures[id] { status = .needsAttention(reason: failure) }
-        return HostGroup(
+        var group = HostGroup(
             id: id, name: record.name, kind: record.kind == .daemon ? .daemon : .ssh, status: status,
             tabs: (session?.tabs ?? []).filter { !(carriers[id]?.contains($0.id) ?? false) && !hiddenTabs.contains(TabRef(hostId: id, tab: $0.id)) },
             activeTabId: session?.activeTabId, isReady: ready,
             failure: connection == nil ? failures[id] : nil, isCached: cached)
+        group.listed = listed(session?.tabs ?? [], of: id, carriers: carriers)
+        return group
     }
 
     /// This device's helper first, then the open hosts, then hosts connected elsewhere in the
@@ -159,19 +181,37 @@ public final class HostGroups {
         let projects = projects(in: groups)
         let grouped = Set(projects.flatMap(\.tabs))
         return projects.flatMap(\.tabs)
-            + mixedTabs.filter { !grouped.contains($0) }
+            + windowTabs(in: groups).filter { !grouped.contains($0) }
             + groups.flatMap { looseTabs(of: $0, grouped: grouped) }
     }
 
-    /// A group's tabs that are in no project, in sidebar order.
+    /// A group's rows that are in no project, in sidebar order (a mixed tab made from one of its
+    /// tabs among them).
     public func looseTabs(of group: HostGroup, grouped: Set<TabRef>? = nil) -> [TabRef] {
         let grouped = grouped ?? Set(projects.flatMap(\.tabs))
-        return group.tabs.filter { !grouped.contains(group.ref($0.id)) }.map { group.ref($0.id) }
+        return group.listed.filter { !grouped.contains($0) }
     }
 
-    /// The window's own tabs: VS Code tabs, then mixed tabs, each in the order they were made.
+    /// Every window tab: VS Code tabs, then browser tabs, then mixed tabs, each in the order they
+    /// were made.
     public var mixedTabs: [TabRef] {
         composites.ordered.map { TabRef(hostId: Self.mixedId, tab: $0.id) }
+    }
+
+    /// The window tabs listed apart from any host: those not made from a host tab (or whose host
+    /// tab is gone).
+    public var windowTabs: [TabRef] { windowTabs(in: groups) }
+
+    private func windowTabs(in groups: [HostGroup]) -> [TabRef] {
+        let listed = Set(groups.flatMap(\.listed).filter { $0.hostId == Self.mixedId })
+        return mixedTabs.filter { !listed.contains($0) }
+    }
+
+    /// The host tab `ref` stands for on `host`: itself, or the tab a mixed tab was made from.
+    private func hostTab(_ ref: TabRef, on host: String) -> TabId? {
+        if ref.hostId == host { return ref.tab }
+        guard ref.hostId == Self.mixedId, let home = composites.tab(ref.tab)?.homeTab, home.hostId == host else { return nil }
+        return home.tab
     }
 
     /// A daemon group's tabs grouped by repository and worktree, once the daemon has sent its
@@ -450,7 +490,7 @@ public final class HostGroups {
         let projects = projects(in: groups)
         let grouped = Set(projects.flatMap(\.tabs))
         return projects.map { SidebarSection(.project($0.id), rows: $0.tabs) }
-            + [SidebarSection(.window, rows: mixedTabs.filter { !grouped.contains($0) })]
+            + [SidebarSection(.window, rows: windowTabs(in: groups).filter { !grouped.contains($0) })]
             + groups.map { SidebarSection(.host($0.id), rows: looseTabs(of: $0, grouped: grouped)) }
     }
 
@@ -495,14 +535,14 @@ public final class HostGroups {
         case .insert(let ref, .window, _):
             apply(planner.remove(ref))
         case .insert(let ref, .host(let host), let index):
-            guard ref.hostId == host, let group = group(host) else { return nil }
+            guard let tab = hostTab(ref, on: host), let session = sessionTabs(of: host) else { return nil }
             apply(planner.remove(ref))
             var loose = sections.first { $0.container == .host(host) }?.rows.filter { $0 != ref } ?? []
             loose.insert(ref, at: min(max(index, 0), loose.count))
             if let store = layoutStore(host),
-               let to = SidebarDrop.sessionIndex(for: ref.tab, loose: loose.map(\.tab), session: group.tabs.map(\.id))
+               let to = SidebarDrop.sessionIndex(for: tab, loose: loose.compactMap { hostTab($0, on: host) }, session: session.map(\.id))
             {
-                store.apply(.moveTab(ref.tab, to: to))
+                store.apply(.moveTab(tab, to: to))
             }
         }
         return nil

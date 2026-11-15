@@ -272,4 +272,28 @@ final class FakeConnection: HostConnection {
         #expect(composites.tabs.isEmpty)
         #expect(groups.group(HostGroups.localId)?.tabs.count == 2)
     }
+
+    /// A mixed tab made from a host tab is listed in that tab's place under its host, never with
+    /// the window's own tabs; one that never had a host tab is.
+    @Test func aMixedTabMadeFromAHostTabIsListedInItsPlace() throws {
+        let (groups, _, local) = try fixture()
+        let composites = groups.composites
+        let second = local.session.tabs[1]
+        let page = BrowserMember(hostId: nil, url: "https://example.com/")
+        let id = composites.addBrowser(page, besideHost: HostGroups.localId, tab: second)
+        let mixed = TabRef(hostId: HostGroups.mixedId, tab: id)
+        let browserOnly = TabRef(hostId: HostGroups.mixedId, tab: composites.openBrowser(BrowserMember(hostId: nil, url: "https://example.org/")))
+
+        let localRows = groups.sections.first { $0.container == .host(HostGroups.localId) }?.rows
+        #expect(localRows == [TabRef(hostId: HostGroups.localId, tab: local.session.tabs[0].id), mixed])
+        #expect(groups.sections.first { $0.container == .window }?.rows == [browserOnly])
+        #expect(groups.windowTabs == [browserOnly])
+        #expect(groups.tabs.filter { $0 == mixed }.count == 1, "listed once")
+        #expect(groups.group(HostGroups.localId)?.tabs.map(\.id) == [local.session.tabs[0].id], "the carrier itself stays out")
+
+        // Moved up a row, its host tab moves with it.
+        groups.moveTab(mixed, by: -1)
+        #expect(local.session.tabs.first?.id == second.id)
+        #expect(groups.sections.first { $0.container == .host(HostGroups.localId) }?.rows.first == mixed)
+    }
 }

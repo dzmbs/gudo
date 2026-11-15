@@ -212,7 +212,7 @@ extension WindowModel {
     var switcherSections: [SwitcherSection] {
         let grouped = Set(projects.flatMap(\.tabs))
         var sections = projects.map { SwitcherSection(kind: .project($0.id), tabs: $0.tabs) }
-        let windowTabs = groups.mixedTabs.filter { !grouped.contains($0) }
+        let windowTabs = groups.windowTabs.filter { !grouped.contains($0) }
         if !windowTabs.isEmpty { sections.append(SwitcherSection(kind: .window, tabs: windowTabs)) }
         sections += groups.groups.map { SwitcherSection(kind: .host($0.id), tabs: groups.looseTabs(of: $0, grouped: grouped)) }
         return sections

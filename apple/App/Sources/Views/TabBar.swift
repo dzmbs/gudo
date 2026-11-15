@@ -55,10 +55,10 @@ struct TabBar: View {
         .accessibilityIdentifier("tab-bar")
     }
 
-    /// Every chip in strip order: window tabs, then each host's tabs.
+    /// Every chip in strip order: window tabs, then each host's tabs (a mixed tab where the tab
+    /// it was made from was).
     private var chipRefs: [TabRef] {
-        let windowTabs = model.composites.ordered.map { WindowModel.mixedRef($0.id) }
-        return windowTabs + model.groups.groups.flatMap { group in group.tabs.map { group.ref($0.id) } }
+        model.groups.windowTabs + model.groups.groups.flatMap(\.listed)
     }
 
     private func chips(active: TabRef?) -> some View {
@@ -69,18 +69,18 @@ struct TabBar: View {
         // Tabs name their host only while the window holds more than one host.
         let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
         return HStack(spacing: 0) {
-            ForEach(model.composites.ordered) { tab in
-                let ref = WindowModel.mixedRef(tab.id)
-                MixedTabChip(tab: tab, isActive: ref == active)
-                    .frame(width: width)
-                    .id(ref)
-                    .modifier(ChipFrameReport(ref: ref))
-                    .transition(.opacity)
-                Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
+            ForEach(model.groups.windowTabs, id: \.self) { ref in
+                if let tab = model.composites.tab(ref.tab) {
+                    MixedTabChip(tab: tab, isActive: ref == active)
+                        .frame(width: width)
+                        .id(ref)
+                        .modifier(ChipFrameReport(ref: ref))
+                        .transition(.opacity)
+                    Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
+                }
             }
             ForEach(groups) { group in
-                ForEach(group.tabs) { tab in
-                    let ref = group.ref(tab.id)
+                ForEach(group.listed, id: \.self) { ref in
                     let index = allTabs.firstIndex(of: ref) ?? 0
                     if index > 0 {
                         // Ghostty/AppKit draw no separator next to the selected tab.
@@ -88,11 +88,17 @@ struct TabBar: View {
                             .frame(height: 16)
                             .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
                     }
-                    TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
-                        .frame(width: width)
-                        .id(ref)
-                        .modifier(ChipFrameReport(ref: ref))
-                        .transition(.opacity)
+                    Group {
+                        if let mixed = ref.hostId == HostGroups.mixedId ? model.composites.tab(ref.tab) : nil {
+                            MixedTabChip(tab: mixed, isActive: ref == active)
+                        } else if let tab = group.tabs.first(where: { group.ref($0.id) == ref }) {
+                            TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
+                        }
+                    }
+                    .frame(width: width)
+                    .id(ref)
+                    .modifier(ChipFrameReport(ref: ref))
+                    .transition(.opacity)
                 }
             }
         }
