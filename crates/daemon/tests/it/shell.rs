@@ -3,11 +3,11 @@
 //! the prompt state feeding echo prediction.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use client_core::ClientConfig;
 use client_core::ClientEvent;
-use client_core::proto::{AttentionKind, Prediction};
+use client_core::proto::{AttentionKind, PaneId, PaneSize, Prediction};
 
 use crate::support::{TestClient, start_with, ticket};
 
@@ -475,4 +475,134 @@ PS1='PRIVATE> '
         "completion listing entered metadata: {command}"
     );
     assert!(!command.contains("x199-"));
+}
+
+/// The screen's non-blank rows, trailing blanks trimmed.
+fn screen_rows(client: &TestClient, pane: PaneId) -> Vec<String> {
+    client
+        .text(pane)
+        .lines()
+        .map(str::trim_end)
+        .filter(|row| !row.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Waits until the screen's non-blank rows satisfy `expected`; `after` names the step.
+async fn wait_for_rows(
+    client: &mut TestClient,
+    pane: PaneId,
+    after: &str,
+    expected: impl Fn(&[String]) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    client
+        .until(after, |client| {
+            expected(&screen_rows(client, pane)) || Instant::now() > deadline
+        })
+        .await;
+    let rows = screen_rows(client, pane);
+    assert!(expected(&rows), "after {after}: {rows:#?}");
+}
+
+/// Resizes the pane to `cols` columns (a split) and waits for the mirror to take the size.
+async fn resize_cols(client: &mut TestClient, pane: PaneId, cols: u16) {
+    client.resizes.clear();
+    client.client.resize(
+        pane,
+        PaneSize {
+            cols,
+            rows: 30,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    client
+        .until("the resize", |client| {
+            client
+                .resizes
+                .iter()
+                .any(|(id, size)| *id == pane && size.cols == cols)
+        })
+        .await;
+}
+
+/// A daemon whose pane runs zsh with `zshrc` and Ghostty's zsh integration, in a private home.
+async fn zsh_pane(
+    zsh: PathBuf,
+    zshrc: &str,
+) -> (daemon::Daemon, TestClient, PaneId, [tempfile::TempDir; 2]) {
+    let dir = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(home.path().join(".zshrc"), zshrc).unwrap();
+    let private_home = home.path().to_string_lossy().into_owned();
+    let daemon = start_with(dir.path(), move |config| {
+        config.shell = Some(zsh);
+        config.pane_env = vec![
+            ("HOME".into(), private_home.clone()),
+            ("ZDOTDIR".into(), private_home),
+        ];
+    })
+    .await;
+    let mut client = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = client.attach_and_follow().await;
+    (daemon, client, pane, [dir, home])
+}
+
+/// zsh with a two-sided prompt (a right prompt with a wide emoji): `clear` and the resizes a
+/// split makes leave one prompt at the top, never the old command line or a wrapped copy of the
+/// right prompt.
+#[tokio::test(flavor = "multi_thread")]
+async fn zsh_right_prompt_stays_single_after_clear_and_resize() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let (daemon, mut client, pane, _dirs) = zsh_pane(zsh, "PROMPT='P> '\nRPROMPT='ok 🕒'\n").await;
+    let lone_prompt =
+        |rows: &[String]| matches!(rows, [row] if row.starts_with("P> ") && row.ends_with("ok 🕒"));
+    wait_for_rows(&mut client, pane, "start", lone_prompt).await;
+    client.type_line(pane, "echo one");
+    client.wait_text(pane, "one\n").await;
+
+    client.type_line(pane, "clear");
+    wait_for_rows(&mut client, pane, "clear", lone_prompt).await;
+    resize_cols(&mut client, pane, 50).await;
+    wait_for_rows(&mut client, pane, "clear, then a split", lone_prompt).await;
+
+    client.type_line(pane, "echo two");
+    client.wait_text(pane, "two\n").await;
+    resize_cols(&mut client, pane, 40).await;
+    client.type_line(pane, "clear");
+    wait_for_rows(&mut client, pane, "a split, then clear", lone_prompt).await;
+
+    resize_cols(&mut client, pane, 70).await;
+    wait_for_rows(&mut client, pane, "widening at the prompt", lone_prompt).await;
+    resize_cols(&mut client, pane, 45).await;
+    wait_for_rows(&mut client, pane, "narrowing at the prompt", lone_prompt).await;
+
+    drop(client);
+    daemon.shutdown().await;
+}
+
+/// A two-line prompt whose first line wraps when the pane narrows: zsh redraws from the line
+/// it thinks the prompt starts on, so the terminal clears the whole old prompt first.
+#[tokio::test(flavor = "multi_thread")]
+async fn zsh_two_line_prompt_redraws_cleanly_when_the_pane_narrows() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let first_line = "=".repeat(60);
+    let (daemon, mut client, pane, _dirs) =
+        zsh_pane(zsh, &format!("PROMPT=$'{first_line}\\n> '\n")).await;
+    let wide = [first_line.clone(), ">".to_owned()];
+    wait_for_rows(&mut client, pane, "start", |rows| rows == wide).await;
+
+    resize_cols(&mut client, pane, 50).await;
+    let narrow = ["=".repeat(50), "=".repeat(10), ">".to_owned()];
+    wait_for_rows(&mut client, pane, "a split", |rows| rows == narrow).await;
+
+    drop(client);
+    daemon.shutdown().await;
 }
