@@ -236,6 +236,10 @@ pub(crate) struct MetaState {
     /// Turns the pane's agent has finished, and the last one.
     pub turns: u64,
     pub last_turn: Option<LastTurn>,
+    /// A turn started (the agent worked, or was given a prompt) and the agent has not ended it.
+    pub in_turn: bool,
+    /// Since when the agent has neither worked nor waited on the user.
+    pub idle_since: Option<Instant>,
 }
 
 /// How an agent's last turn ended, for agents waiting on it (`daemon::term`).
@@ -243,8 +247,11 @@ pub(crate) struct MetaState {
 pub(crate) struct LastTurn {
     pub outcome: agents::TurnOutcome,
     pub message: Option<String>,
+    pub message_unavailable: Option<crate::turn_message::MessageUnavailable>,
     pub at: proto::UnixMillis,
     pub transcript: Option<PathBuf>,
+    /// Where in the transcript the message was found, so the next turn's is looked for after.
+    pub transcript_offset: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -859,7 +866,6 @@ impl Core {
                 .window_of(pane)
                 .is_some_and(|window| window.close == proto::CloseWhen::Done);
             if still_wanted {
-                core.term.finished(&core, pane);
                 core.apply_op(LayoutOp::ClosePane { pane_id: pane });
             }
         });
@@ -981,7 +987,11 @@ impl Core {
     /// when what they see changes.
     pub fn set_program(&self, entry: &PaneEntry, status: agents::ProgramStatus) {
         let state = status.state;
+        // An agent's own reports follow its helpers too (its MCP servers starting); its turns
+        // end on its end-of-turn signal instead.
+        let runs_agent = lock(&entry.agent).is_some();
         if self.record_program(entry, status, false)
+            && !runs_agent
             && matches!(
                 state,
                 agents::ProgramState::Done | agents::ProgramState::Error
@@ -1553,6 +1563,7 @@ impl Core {
                 self.mp.forget_pane(*id);
                 if !self.shutting_down.load(Ordering::Acquire) {
                     self.remember_closed(*id, &lock(&entry.record));
+                    self.term.pane_closed(self, *id, &entry);
                     self.term.forget(*id);
                     if let Some((agent, account)) = self.ws.accounts.sign_in_closed(*id) {
                         self.check_account(agent, account);
@@ -2383,6 +2394,7 @@ impl Core {
         if event.subagent.is_some() {
             return;
         }
+        self.follow_turn(id, event);
         match event.kind {
             EventKind::TurnStarted => {
                 // The agent's own directory (from its hooks) first, then the pane's.
@@ -2414,26 +2426,175 @@ impl Core {
             | EventKind::Interrupted
             | EventKind::Error
             | EventKind::SessionEnded => {
-                if let (Some(turn), Some(entry)) = (&event.turn, self.pane(id)) {
-                    let mut meta = lock(&entry.meta);
-                    meta.turns += 1;
-                    meta.last_turn = Some(LastTurn {
-                        outcome: turn.outcome,
-                        message: turn.last_message.clone(),
-                        at: proto::UnixMillis(crate::identity::now_millis()),
-                        transcript: event.session.transcript.clone(),
-                    });
-                }
                 self.ws
                     .turns
                     .record(crate::ws::turns::Boundary::End { pane: id });
-                self.work_done(id);
                 if event.kind == EventKind::SessionEnded {
                     crate::approve::session_over(self, id);
                 }
             }
             _ => {}
         }
+    }
+
+    /// Follows the agent's turns for the agents waiting on it. A turn ends only on the agent's
+    /// own end-of-turn report (a hook, its `notify`, its structured lane): titles, spinners,
+    /// program reports and notifications never end one. The same end reported twice (a Stop
+    /// hook, then `notify`) counts once and only fills in what the first left out.
+    fn follow_turn(&self, id: PaneId, event: &agents::AgentEvent) {
+        use crate::turn_message::MessageUnavailable;
+        use agents::{AgentState, EventKind, Source};
+        let Some(entry) = self.pane(id) else {
+            return;
+        };
+        let from_agent = matches!(event.source, Source::Hook | Source::Structured);
+        let mut meta = lock(&entry.meta);
+        if matches!(
+            event.status.state(),
+            AgentState::Working | AgentState::Blocked
+        ) {
+            meta.in_turn = true;
+            meta.idle_since = None;
+        } else {
+            meta.idle_since.get_or_insert_with(Instant::now);
+        }
+        let Some(turn) = event.turn.as_ref().filter(|_| from_agent) else {
+            let stopped = event.kind == EventKind::Interrupted
+                || (event.kind == EventKind::SessionEnded && event.source == Source::Process)
+                || (event.kind == EventKind::TurnEnded && from_agent);
+            if stopped {
+                meta.in_turn = false;
+            }
+            return;
+        };
+        if !meta.in_turn
+            && let Some(last) = meta.last_turn.as_mut()
+        {
+            if last.message.is_none() && turn.last_message.is_some() {
+                last.message.clone_from(&turn.last_message);
+                last.message_unavailable = None;
+            }
+            if last.transcript.is_none() {
+                last.transcript.clone_from(&event.session.transcript);
+            }
+            return;
+        }
+        let message_unavailable = match (&turn.last_message, turn.outcome) {
+            (Some(_), _) => None,
+            (None, agents::TurnOutcome::Cancelled) => Some(MessageUnavailable::Cancelled),
+            (None, _) => Some(MessageUnavailable::ReadingTranscript),
+        };
+        let transcript_offset = meta
+            .last_turn
+            .as_ref()
+            .filter(|last| last.transcript == event.session.transcript)
+            .map_or(0, |last| last.transcript_offset);
+        meta.in_turn = false;
+        meta.turns += 1;
+        meta.last_turn = Some(LastTurn {
+            outcome: turn.outcome,
+            message: turn.last_message.clone(),
+            message_unavailable,
+            at: proto::UnixMillis(crate::identity::now_millis()),
+            transcript: event.session.transcript.clone(),
+            transcript_offset,
+        });
+        let turn_number = meta.turns;
+        drop(meta);
+        self.read_back_turn(&entry, turn_number, event);
+        self.work_done(id);
+    }
+
+    /// Fills in a finished turn's transcript (Codex's rollout) and, when the agent left it
+    /// out, its final message from that transcript, off the async workers.
+    fn read_back_turn(&self, entry: &Arc<PaneEntry>, turn_number: u64, event: &agents::AgentEvent) {
+        use crate::turn_message::MessageUnavailable;
+        let Some(kind) = lock(&entry.agent).as_ref().map(AgentRuntime::kind) else {
+            return;
+        };
+        let (wants_message, transcript, offset) = {
+            let meta = lock(&entry.meta);
+            let Some(last) = meta.last_turn.as_ref() else {
+                return;
+            };
+            (
+                last.message_unavailable == Some(MessageUnavailable::ReadingTranscript),
+                last.transcript.clone(),
+                last.transcript_offset,
+            )
+        };
+        let thread = event
+            .session
+            .native_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+            .or_else(|| lock(&entry.record).agent.as_ref()?.session_id.clone());
+        let codex_home = (kind == AgentKind::Codex && transcript.is_none())
+            .then(|| agent_dir(self, entry, kind))
+            .flatten();
+        if !wants_message && codex_home.is_none() {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let entry = Arc::clone(entry);
+        runtime.spawn(async move {
+            // Codex may write the turn's end to its rollout a moment after `notify` runs.
+            const ATTEMPTS: usize = 8;
+            const PAUSE: Duration = Duration::from_millis(250);
+            let mut transcript = transcript;
+            let mut found = None;
+            for attempt in 0..ATTEMPTS {
+                if attempt > 0 {
+                    tokio::time::sleep(PAUSE).await;
+                }
+                let (home, thread, known) =
+                    (codex_home.clone(), thread.clone(), transcript.clone());
+                let read = tokio::task::spawn_blocking(move || {
+                    let path =
+                        known.or_else(|| crate::turn_message::codex_rollout(&home?, &thread?))?;
+                    let message = wants_message
+                        .then(|| crate::turn_message::last_message(kind, &path, offset))
+                        .flatten();
+                    Some((path, message))
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some((path, message)) = read {
+                    transcript = Some(path);
+                    found = message;
+                }
+                if transcript.is_some() && (!wants_message || found.is_some()) {
+                    break;
+                }
+            }
+            let mut meta = lock(&entry.meta);
+            if meta.turns != turn_number {
+                return;
+            }
+            let Some(last) = meta.last_turn.as_mut() else {
+                return;
+            };
+            if last.transcript.is_none() {
+                last.transcript = transcript;
+            }
+            if last.message_unavailable != Some(MessageUnavailable::ReadingTranscript) {
+                return;
+            }
+            match found {
+                Some(found) => {
+                    last.message = Some(found.message);
+                    last.message_unavailable = None;
+                    last.transcript_offset = found.end;
+                }
+                None if last.transcript.is_some() => {
+                    last.message_unavailable = Some(MessageUnavailable::NotInTranscript);
+                }
+                None => last.message_unavailable = Some(MessageUnavailable::NoTranscript),
+            }
+        });
     }
 
     /// Turns the agent's notifications into attention items, and retires blocked items once
@@ -3028,22 +3189,7 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
         .filter_map(|(_, other)| lock(&other.record).agent.as_ref()?.session_id.clone())
         .collect();
     let cwd = PathBuf::from(lock(&entry.record).cwd.clone().unwrap_or_default());
-    let (directory_var, default_directory) = match kind {
-        AgentKind::Codex => (agents::CODEX_DIR_VAR, ".codex"),
-        AgentKind::Claude => (agents::CLAUDE_DIR_VAR, ".claude"),
-    };
-    // Sessions are under the pane's account's directory.
-    let agent_dir = core
-        .ws
-        .accounts
-        .context(kind, &account)
-        .and_then(|context| context.dir)
-        .or_else(|| core.cfg.pane_var(directory_var).map(PathBuf::from))
-        .or_else(|| {
-            core.cfg
-                .pane_var("HOME")
-                .map(|home| PathBuf::from(home).join(default_directory))
-        });
+    let agent_dir = account_dir(core, kind, &account);
     let root = entry.pane.pty().pid();
     // Slack for an agent that was running a moment before the pane noticed it.
     let since = lock(&entry.agent)
@@ -3074,6 +3220,43 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
         }
         busy.store(false, Ordering::Release);
     });
+}
+
+/// Whether `foreground` is the pane's own shell, past the `sh -c` that ran its agent.
+pub(crate) fn is_own_shell(entry: &PaneEntry, foreground: Option<&pty::ForegroundProcess>) -> bool {
+    foreground.is_some_and(|process| {
+        process.pid == entry.pane.pty().pid()
+            && !process.argv.is_empty()
+            && !process.argv.iter().any(|arg| arg == "-c")
+    })
+}
+
+/// The directory the pane's agent keeps its sessions in: its account's.
+pub(crate) fn agent_dir(core: &Core, entry: &PaneEntry, kind: AgentKind) -> Option<PathBuf> {
+    let account = lock(&entry.record)
+        .agent
+        .as_ref()
+        .and_then(|agent| agent.account.clone())
+        .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
+    account_dir(core, kind, &account)
+}
+
+/// Sessions are under the account's directory.
+fn account_dir(core: &Core, kind: AgentKind, account: &str) -> Option<PathBuf> {
+    let (directory_var, default_directory) = match kind {
+        AgentKind::Codex => (agents::CODEX_DIR_VAR, ".codex"),
+        AgentKind::Claude => (agents::CLAUDE_DIR_VAR, ".claude"),
+    };
+    core.ws
+        .accounts
+        .context(kind, account)
+        .and_then(|context| context.dir)
+        .or_else(|| core.cfg.pane_var(directory_var).map(PathBuf::from))
+        .or_else(|| {
+            core.cfg
+                .pane_var("HOME")
+                .map(|home| PathBuf::from(home).join(default_directory))
+        })
 }
 
 /// Starts tracking an agent the user launched by hand (no hooks, screen and OSC only).
@@ -3222,14 +3405,8 @@ pub(crate) fn record_agent_started_by_hand(
 /// pane is a shell again, on every client and after a restore.
 fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     let foreground = entry.pane.pty().foreground_process();
-    // A launched agent's pane at its own shell, past the `sh -c` that ran the agent.
     let launched = matches!(lock(&entry.record).launch, PaneLaunch::Agent { .. });
-    let at_shell = launched
-        && foreground.as_ref().is_some_and(|process| {
-            process.pid == entry.pane.pty().pid()
-                && !process.argv.is_empty()
-                && !process.argv.iter().any(|arg| arg == "-c")
-        });
+    let at_shell = launched && is_own_shell(entry, foreground.as_ref());
     let event = {
         let mut agent = lock(&entry.agent);
         let Some(runtime) = agent.as_mut() else {

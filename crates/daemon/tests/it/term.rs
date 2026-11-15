@@ -12,7 +12,7 @@ use tokio::net::UnixStream;
 
 use crate::support::{TestClient, start_with, ticket};
 
-fn zsh() -> Option<PathBuf> {
+pub(crate) fn zsh() -> Option<PathBuf> {
     ["/bin/zsh", "/usr/bin/zsh", "/opt/homebrew/bin/zsh"]
         .into_iter()
         .map(PathBuf::from)
@@ -42,7 +42,7 @@ impl Caller {
         }
     }
 
-    async fn refused(&self, tool: &str, args: Value) -> TermErrorCode {
+    pub(crate) async fn refused(&self, tool: &str, args: Value) -> TermErrorCode {
         match self.call(tool, args.clone()).await {
             TermReply::Error(error) => error.code,
             TermReply::Ok(value) => panic!("{tool} {args} was allowed: {value}"),
@@ -50,7 +50,13 @@ impl Caller {
     }
 }
 
-async fn call(socket: &Path, token: &str, pane: &str, tool: &str, args: Value) -> TermReply {
+pub(crate) async fn call(
+    socket: &Path,
+    token: &str,
+    pane: &str,
+    tool: &str,
+    args: Value,
+) -> TermReply {
     let call = TermCall {
         v: TERM_VERSION,
         token: token.into(),
@@ -422,7 +428,7 @@ async fn an_agent_drives_a_full_screen_program_by_what_it_shows() {
 }
 
 /// Hooks a worker's Claude would send, stamped for `pane`.
-async fn claude_hook(
+pub(crate) async fn claude_hook(
     socket: &Path,
     token: &str,
     pane: &str,
@@ -447,7 +453,7 @@ async fn claude_hook(
     BufReader::new(stream).read_line(&mut answer).await.unwrap();
 }
 
-fn hook_payload(event: &str, extra: Value) -> Value {
+pub(crate) fn hook_payload(event: &str, extra: Value) -> Value {
     let mut payload = json!({
         "session_id": "w1", "transcript_path": "/tmp/w1.jsonl", "cwd": "/tmp",
         "permission_mode": "default", "hook_event_name": event,
@@ -633,7 +639,7 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
 }
 
 /// The floating windows of `pane`'s session as the user last heard them, by their panes.
-fn user_floats(user: &TestClient) -> Vec<(Vec<u64>, bool)> {
+pub(crate) fn user_floats(user: &TestClient) -> Vec<(Vec<u64>, bool)> {
     user.floats
         .last()
         .map(|update| {

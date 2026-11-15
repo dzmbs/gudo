@@ -102,7 +102,7 @@ pub(crate) fn names_an_agent(report: &agents::ProgramStatus) -> bool {
 
 /// What a blocked agent asks, as people see and approve it. It may come from printed text
 /// (OSC 9, OSC 7501) or a prompt-injected tool call: every line kept, nothing invisible.
-fn shown_summary(blocker: &agents::Blocker) -> String {
+pub(crate) fn shown_summary(blocker: &agents::Blocker) -> String {
     let text = blocker.summary.as_ref().or(blocker.tool.as_ref());
     text.map(|text| proto::clean_prompt_text(text, SUMMARY_CHARS))
         .unwrap_or_default()
@@ -287,6 +287,18 @@ impl AgentRuntime {
 
     pub fn is_blocked(&self) -> bool {
         self.arbiter.status().blocked().is_some()
+    }
+
+    /// What the agent waits on, while blocked.
+    pub fn blocker(&self) -> Option<&agents::Blocker> {
+        self.arbiter
+            .status()
+            .blocked()
+            .map(|blocked| &blocked.blocker)
+    }
+
+    pub fn has_exited(&self) -> bool {
+        self.arbiter.has_exited()
     }
 
     fn wire_request(&mut self, id: &agents::RequestId) -> RequestId {

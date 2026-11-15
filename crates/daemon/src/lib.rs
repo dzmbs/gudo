@@ -73,6 +73,7 @@ mod stream;
 mod term;
 mod theme;
 mod timeline;
+mod turn_message;
 mod upgrade;
 mod usage;
 mod ws;

@@ -15,6 +15,7 @@ pub(crate) mod ask;
 pub(crate) mod events;
 mod output;
 mod screen;
+mod workers;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -50,6 +51,8 @@ const PROMPT_WAIT: Duration = Duration::from_secs(10);
 /// no integration.
 const START_WAIT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(50);
+/// How long `agent_result` waits for a finished turn's message to be read from its transcript.
+const MESSAGE_READ_WAIT: Duration = Duration::from_secs(3);
 /// Live panes one agent may have opened itself at once.
 const PANES_PER_AGENT: usize = 32;
 /// Live panes all the agents of one session may have opened at once: a quarter of macOS's
@@ -144,17 +147,13 @@ impl ToolError {
 
 type Result<T> = std::result::Result<T, ToolError>;
 
-/// Results of agents whose floats closed when they finished, kept for `agent_result`.
-const KEPT_RESULTS: usize = 64;
-
 /// Which pane created which, for ownership, the owner's answers to drive requests, and each
 /// pane's calls in progress.
 #[derive(Default)]
 pub(crate) struct Term {
     creators: Mutex<HashMap<PaneId, PaneId>>,
-    /// The last turn of panes closed because their work was done, newest last, with the pane
-    /// that created each (the ownership entry goes when a pane closes).
-    results: Mutex<std::collections::VecDeque<(PaneId, PaneId, Value)>>,
+    /// Workers' first prompts, and the results of workers whose panes closed.
+    pub workers: workers::Workers,
     /// Requests to drive the user's panes, and the panes the owner let an agent drive.
     pub asks: ask::Asks,
     /// The `events_wait` stream.
@@ -229,6 +228,7 @@ impl Term {
         }
         drop(creators);
         self.asks.forget_pane(pane);
+        self.workers.forget(pane);
     }
 
     /// The ownership map as `(pane, creator)` pairs, to save across restarts.
@@ -252,34 +252,21 @@ impl Term {
         );
     }
 
-    /// Keeps `pane`'s last turn before the daemon closes it for being done, so whoever
-    /// started it can still ask for the result.
-    pub fn finished(&self, core: &Core, pane: PaneId) {
-        let Some(entry) = core.pane(pane) else {
-            return;
-        };
-        let turn = last_turn(&entry);
+    /// Keeps a closing worker's state and last result for the agent that started it, for the
+    /// daemon's life (the ownership entry goes when the pane closes).
+    pub fn pane_closed(&self, core: &Core, pane: PaneId, entry: &PaneEntry) {
         let Some(creator) = lock(&self.creators).get(&pane).copied() else {
             return;
         };
-        if turn.is_null() {
-            return;
+        if let Some(worker) = workers::closed_worker(core, pane, creator, entry) {
+            self.workers.keep(worker);
         }
-        let mut results = lock(&self.results);
-        if results.len() == KEPT_RESULTS {
-            results.pop_front();
-        }
-        results.push_back((pane, creator, turn));
     }
 
-    /// The kept result of the closed `pane`, if `caller` created it (or through its workers).
-    fn kept_result(&self, caller: PaneId, pane: PaneId) -> Option<Value> {
-        let (creator, result) = lock(&self.results)
-            .iter()
-            .rev()
-            .find(|(closed, ..)| *closed == pane)
-            .map(|(_, creator, turn)| (*creator, turn.clone()))?;
-        (creator == caller || self.owns(caller, creator)).then_some(result)
+    /// The closed worker `pane`, if `caller` created it (or through its workers).
+    fn kept_worker(&self, caller: PaneId, pane: PaneId) -> Option<workers::KeptWorker> {
+        let worker = self.workers.kept(pane)?;
+        (worker.creator == caller || self.owns(caller, worker.creator)).then_some(worker)
     }
 
     /// Counts a call from `pane`; `None` past [`MAX_CALLS_PER_PANE`] at once.
@@ -845,24 +832,6 @@ fn tree_json(node: &proto::LayoutNode) -> Value {
     }
 }
 
-/// The pane's last agent turn as tools report it, `null` before the first.
-fn last_turn(entry: &PaneEntry) -> Value {
-    let meta = lock(&entry.meta);
-    let Some(turn) = &meta.last_turn else {
-        return Value::Null;
-    };
-    json!({
-        "outcome": match turn.outcome {
-            agents::TurnOutcome::Completed => "completed",
-            agents::TurnOutcome::Cancelled => "cancelled",
-            agents::TurnOutcome::Failed => "failed",
-        },
-        "message": turn.message,
-        "endedAt": turn.at.0,
-        "transcriptPath": turn.transcript.as_ref().map(|path| path.to_string_lossy()),
-    })
-}
-
 fn pane_ref(id: PaneId) -> String {
     format!("p{}", id.0)
 }
@@ -982,7 +951,7 @@ impl CallContext {
             "agent_spawn" => self.agent_spawn(args(value)?).await,
             "agent_prompt" => self.agent_prompt(args(value)?).await,
             "agent_wait" => self.agent_wait(args(value)?).await,
-            "agent_result" => self.agent_result(args(value)?),
+            "agent_result" => self.agent_result(args(value)?).await,
             "pane_float" => self.pane_float(args(value)?),
             "pane_dock" => self.pane_dock(args(value)?),
             "pane_minimize" => self.pane_minimize(args(value)?),
@@ -2122,85 +2091,47 @@ impl CallContext {
         )
     }
 
-    /// A worker agent: its pane, kind, state and finished turns.
     fn agent_info(&self, pane: PaneId, entry: &PaneEntry) -> Value {
-        let kind = match &lock(&entry.record).launch {
-            PaneLaunch::Agent { agent, .. } => Some(crate::agent::program(*agent)),
-            _ => None,
-        };
-        let turns = lock(&entry.meta).turns;
-        let exited = self
-            .core
-            .pane_meta(pane)
-            .and_then(|meta| meta.exit)
-            .is_some();
-        let status = status(&self.core, pane, entry);
-        let state = if exited {
-            "exited"
-        } else {
-            status["state"].as_str().unwrap_or("starting")
-        };
-        json!({
-            "pane": pane_ref(pane),
-            "kind": kind,
-            "state": state,
-            "status": status,
-            "turns": turns,
-        })
-    }
-
-    /// Waits until the agent in `entry` is ready for a prompt: idle, and its screen settled.
-    async fn agent_ready(&self, pane: PaneId, entry: &PaneEntry, deadline: Instant) -> Result<()> {
-        let mut quiet_since = None;
-        let mut head = entry.pane.head();
-        while Instant::now() < deadline {
-            let info = self.agent_info(pane, entry);
-            match info["state"].as_str() {
-                Some("exited") => return Err(closed()),
-                Some("blocked") => return Err(agent_blocked(pane, &info)),
-                Some("idle" | "done") => {
-                    let current = entry.pane.head();
-                    if current != head {
-                        head = current;
-                        quiet_since = None;
-                    }
-                    let since = *quiet_since.get_or_insert_with(Instant::now);
-                    if since.elapsed() >= Duration::from_millis(400) {
-                        return Ok(());
-                    }
-                }
-                _ => quiet_since = None,
-            }
-            tokio::time::sleep(TICK).await;
-        }
-        Err(ToolError::new(
-            ErrorCode::AgentBusy,
-            format!("{} is not ready for a prompt", pane_ref(pane)),
-        )
-        .hint("wait for it with agent_wait, then prompt it"))
-    }
-
-    async fn deliver(&self, entry: &PaneEntry, text: String) -> Result<()> {
-        write(entry, entry.pane.encode_input(InputPayload::Paste(text))).await?;
-        // Let the agent's input box take the paste before Enter arrives.
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        write(entry, b"\r".to_vec()).await?;
-        Ok(())
+        workers::agent_info(&self.core, pane, entry)
     }
 
     async fn agent_spawn(&self, args: SpawnArgs) -> Result<Value> {
         let (of, _) = self.resolve(args.of.as_deref())?;
         self.may_read(of)?;
+        let kind = match args.kind {
+            AgentName::Claude => AgentKind::Claude,
+            AgentName::Codex => AgentKind::Codex,
+        };
         let launch = Self::launch(None, Some(args.kind), reachable_cwd(args.cwd).await);
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
         let pane = self.open(of, args.direction, launch, false, float)?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
-        if let Some(prompt) = args.prompt.filter(|prompt| !prompt.trim().is_empty()) {
-            let deadline = Instant::now() + wait_for(args.timeout_ms.or(Some(60_000)));
-            self.agent_ready(pane, &entry, deadline).await?;
-            self.deliver(&entry, prompt).await?;
+        let Some(prompt) = args.prompt.filter(|prompt| !prompt.trim().is_empty()) else {
+            return Ok(json!({ "agent": self.agent_info(pane, &entry) }));
+        };
+        workers::queue_first_prompt(&self.core, pane, kind, prompt);
+        // Waits for the prompt to be typed, but not on the user: a dialog they must answer
+        // first leaves it queued, and it is typed once they have.
+        let deadline = Instant::now() + wait_for(args.timeout_ms.or(Some(60_000)));
+        loop {
+            let delivery = self
+                .core
+                .term
+                .workers
+                .first_prompt(pane)
+                .unwrap_or(workers::PromptDelivery::Queued);
+            let info = self.agent_info(pane, &entry);
+            let waits_on_user = info["state"] == "blocked";
+            if delivery != workers::PromptDelivery::Queued
+                || waits_on_user
+                || Instant::now() >= deadline
+            {
+                let mut reply = json!({ "agent": info });
+                delivery.describe(&mut reply);
+                return Ok(reply);
+            }
+            tokio::time::sleep(TICK).await;
         }
-        Ok(json!({ "agent": self.agent_info(pane, &entry) }))
     }
 
     async fn agent_prompt(&self, args: PromptArgs) -> Result<Value> {
@@ -2227,19 +2158,36 @@ impl CallContext {
             _ => {}
         }
         let turns = lock(&entry.meta).turns;
-        self.deliver(&entry, args.text).await?;
+        deliver(&entry, args.text).await?;
         if !args.wait {
             return Ok(json!({ "delivered": true, "agent": self.agent_info(pane, &entry) }));
         }
         loop {
+            if self.core.pane(pane).is_none() {
+                let kept = self.core.term.kept_worker(self.caller, pane);
+                return Ok(json!({
+                    "delivered": true,
+                    "status": "exited",
+                    "agent": kept.as_ref().map_or_else(|| self.agent_info(pane, &entry), |worker| worker.agent.clone()),
+                    "result": kept.map(|worker| worker.result),
+                }));
+            }
             let info = self.agent_info(pane, &entry);
             let finished = lock(&entry.meta).turns > turns;
             let stuck = matches!(info["state"].as_str(), Some("blocked" | "exited"));
-            if finished || stuck || Instant::now() >= deadline {
-                let result = finished.then(|| self.last_turn(&entry));
+            let answered = finished && !workers::reading_message(&entry);
+            if answered || stuck || Instant::now() >= deadline {
+                let status = if finished {
+                    "finished"
+                } else if stuck {
+                    info["state"].as_str().unwrap_or("blocked")
+                } else {
+                    "timeout"
+                };
+                let result = finished.then(|| workers::last_turn(&entry));
                 return Ok(json!({
                     "delivered": true,
-                    "status": if finished { "finished" } else if stuck { info["state"].as_str().unwrap_or("blocked") } else { "timeout" },
+                    "status": status,
                     "agent": info,
                     "result": result,
                 }));
@@ -2249,6 +2197,10 @@ impl CallContext {
     }
 
     async fn agent_wait(&self, args: AgentWaitArgs) -> Result<Value> {
+        enum Waited {
+            Live(PaneId, Arc<PaneEntry>),
+            Closed(Value),
+        }
         if args.panes.is_empty() {
             return Err(ToolError::new(
                 ErrorCode::InvalidArgs,
@@ -2265,17 +2217,30 @@ impl CallContext {
         let agents = args
             .panes
             .iter()
-            .map(|target| {
-                let (pane, entry) = self.resolve(Some(target))?;
-                self.may_read(pane)?;
-                Ok((pane, entry))
+            .map(|target| match self.resolve(Some(target)) {
+                Ok((pane, entry)) => {
+                    self.may_read(pane)?;
+                    Ok(Waited::Live(pane, entry))
+                }
+                Err(error) => self
+                    .kept(target)
+                    .map(|worker| Waited::Closed(worker.agent))
+                    .ok_or(error),
             })
             .collect::<Result<Vec<_>>>()?;
         let deadline = Instant::now() + wait_for(args.timeout_ms);
         loop {
             let infos: Vec<Value> = agents
                 .iter()
-                .map(|(pane, entry)| self.agent_info(*pane, entry))
+                .map(|waited| match waited {
+                    Waited::Live(pane, entry) => match self.core.pane(*pane) {
+                        Some(_) => self.agent_info(*pane, entry),
+                        None => self
+                            .kept(&pane_ref(*pane))
+                            .map_or_else(|| self.agent_info(*pane, entry), |worker| worker.agent),
+                    },
+                    Waited::Closed(agent) => agent.clone(),
+                })
                 .collect();
             let reached = |info: &Value| {
                 info["state"]
@@ -2294,6 +2259,12 @@ impl CallContext {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// The closed worker `target` names, if the caller started it.
+    fn kept(&self, target: &str) -> Option<workers::KeptWorker> {
+        let pane = PaneId(target.trim_start_matches('p').parse().ok()?);
+        self.core.term.kept_worker(self.caller, pane)
     }
 
     /// The window holding `pane`, which the caller must have created.
@@ -2490,27 +2461,21 @@ impl CallContext {
         self.pane_result(pane, effects)
     }
 
-    fn agent_result(&self, args: PaneArg) -> Result<Value> {
+    async fn agent_result(&self, args: PaneArg) -> Result<Value> {
         let (pane, entry) = match self.resolve(Some(&args.pane)) {
             Ok(found) => found,
+            // A worker whose pane closed leaves its result to whoever started it.
             Err(error) => {
-                // A float that closed when its run ended leaves its result to whoever opened it.
-                let kept = PaneId(args.pane.trim_start_matches('p').parse().unwrap_or(0));
-                return match self.core.term.kept_result(self.caller, kept) {
-                    Some(result) => Ok(json!({
-                        "agent": { "pane": pane_ref(kept), "state": "exited" },
-                        "result": result,
-                    })),
-                    _ => Err(error),
-                };
+                let worker = self.kept(&args.pane).ok_or(error)?;
+                return Ok(json!({ "agent": worker.agent, "result": worker.result }));
             }
         };
         self.may_read(pane)?;
-        Ok(json!({ "agent": self.agent_info(pane, &entry), "result": self.last_turn(&entry) }))
-    }
-
-    fn last_turn(&self, entry: &PaneEntry) -> Value {
-        last_turn(entry)
+        let deadline = Instant::now() + MESSAGE_READ_WAIT;
+        while workers::reading_message(&entry) && Instant::now() < deadline {
+            tokio::time::sleep(TICK).await;
+        }
+        Ok(json!({ "agent": self.agent_info(pane, &entry), "result": workers::last_turn(&entry) }))
     }
 
     /// Reports the caller's own status, as OSC 7501 would, for agents that cannot print it.
@@ -2641,6 +2606,16 @@ fn status(core: &Core, id: PaneId, entry: &PaneEntry) -> Value {
         proto::AgentState::Done => ("done", None),
     };
     json!({ "state": state, "kind": kind, "app": agent.kind })
+}
+
+/// Types a prompt into an agent: pasted, then submitted.
+async fn deliver(entry: &PaneEntry, text: String) -> Result<()> {
+    write(entry, entry.pane.encode_input(InputPayload::Paste(text))).await?;
+    // Let the agent's input box take the paste before Enter arrives.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    write(entry, b"\r".to_vec()).await?;
+    workers::turn_started(entry);
+    Ok(())
 }
 
 fn position(subscriber: &pty::Subscriber) -> Seq {

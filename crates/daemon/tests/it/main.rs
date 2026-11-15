@@ -45,5 +45,6 @@ mod timeline;
 mod upgrade;
 mod usage;
 mod vscode;
+mod workers;
 mod workflows;
 mod workspace;
