@@ -99,3 +99,38 @@ func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.identity(title: "") == nil)
     #expect(ProgramCatalog.identity(title: "make: building") == nil)
 }
+
+@Test func agentsRunAsScriptsOrBinariesAreNamed() {
+    let words = ProgramCatalog.words(of:)
+    #expect(ProgramCatalog.identity(process: "pi").id == "pi")
+    #expect(ProgramCatalog.identity(process: "opencode").id == "opencode")
+    #expect(ProgramCatalog.identity(process: "amp").id == "amp")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /usr/local/lib/node_modules/@mariozechner/pi-coding-agent/dist/cli.js")) == "pi")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /usr/local/bin/pi --continue")) == "pi")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /usr/local/lib/node_modules/opencode-ai/bin/opencode")) == "opencode")
+    #expect(ProgramCatalog.normalize("bun", arguments: words("bun /opt/opencode/packages/opencode/src/index.ts")) == "opencode")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node --no-warnings /usr/local/lib/node_modules/@sourcegraph/amp/dist/main.js")) == "amp")
+    // Their names inside other words are not them.
+    #expect(ProgramCatalog.normalize("node", arguments: words("node scripts/api-server.js")) == "node")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node examples/sample/main.js")) == "node")
+    #expect(ProgramCatalog.normalize("python", arguments: words("python -m pip install pipx")) == "python")
+    for id in ["pi", "opencode", "amp"] {
+        let identity = ProgramCatalog.identity(process: id)
+        #expect(identity.kind == .agent, "\(id) is an agent")
+        #expect(identity.logo?.template == true, "\(id) draws its glyph in the ink")
+        #expect(identity.logo?.clearance == .original, "\(id)'s glyph is our own drawing")
+    }
+    #expect(ProgramCatalog.identity(title: "pi")?.id == "pi")
+}
+
+/// Our own glyphs are not official artwork: they carry no download record, are drawn in the
+/// ink, and ship in the bundle.
+@Test func ownGlyphsAreTemplatesInTheBundle() {
+    #expect(!ProgramCatalog.glyphs.isEmpty)
+    for (id, glyph) in ProgramCatalog.glyphs {
+        #expect(ProgramCatalog.logos[id] == nil, "\(id) has one mark")
+        #expect(glyph.template && glyph.clearance == .original && glyph.sources.isEmpty, "\(id)")
+        #expect(ProgramLogoImage.exists(glyph.asset), "\(glyph.asset) in ProgramLogos.xcassets")
+        #expect(ProgramCatalog.entry(id: id)?.logo == glyph, "\(id) carries its glyph")
+    }
+}

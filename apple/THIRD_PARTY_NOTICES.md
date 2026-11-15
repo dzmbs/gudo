@@ -68,6 +68,8 @@ use). Each file is the owner's own artwork as downloaded (byte-identical unless 
 colours; where the owner publishes a dark-background variant it is the image set's dark
 appearance. Every logo is switched on by one line in `ProgramCatalog.logos`, which records each
 file's exact source URL, retrieval date and clearance. The same credits appear in Settings ▸ Acknowledgements ▸ Program logos.
+The image sets ending in `Glyph` (pi, opencode, Amp) are our own simple drawings, not those
+programs' artwork, and are listed in `ProgramCatalog.glyphs`.
 
 Trademarks: Claude is a trademark of Anthropic, PBC. OpenAI, Codex and the OpenAI logo are
 trademarks of OpenAI. Gemini and Go are trademarks of Google LLC. GitHub and Copilot are

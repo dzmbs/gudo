@@ -36,6 +36,8 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
             /// The owner's terms ask for permission first. Shipped as nominative use while
             /// permission is requested (apple/THIRD_PARTY_NOTICES.md).
             case ownerApprovedRisk
+            /// Our own drawing (`ProgramCatalog.glyphs`), not the program's artwork.
+            case original
         }
 
         /// The image set's name in `ProgramLogos.xcassets`.
@@ -95,6 +97,9 @@ nonisolated public enum ProgramCatalog {
         entry("codex", "Codex", .agent),
         entry("gemini", "Gemini CLI", .agent),
         entry("copilot", "GitHub Copilot CLI", .agent),
+        entry("pi", "pi", .agent),
+        entry("opencode", "opencode", .agent),
+        entry("amp", "Amp", .agent),
         // Editors
         entry("vim", "Vim", .editor),
         entry("neovim", "Neovim", .editor),
@@ -188,12 +193,22 @@ nonisolated public enum ProgramCatalog {
         "psql": .init("PostgreSQLLogo", sources: ["https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
     ]
 
+    /// Our own simple glyphs for agents without artwork we may ship, drawn in the ink like a
+    /// symbol. Not the programs' logos and not derived from them.
+    public static let glyphs: [String: ProgramIdentity.Logo] = [
+        "pi": .init("PiGlyph", template: true, sources: [], retrieved: "", clearance: .original),
+        "opencode": .init("OpencodeGlyph", template: true, sources: [], retrieved: "", clearance: .original),
+        "amp": .init("AmpGlyph", template: true, sources: [], retrieved: "", clearance: .original),
+    ]
+
     /// Process names that differ from the catalog id.
     static let aliases: [String: String] = [
         "claude-code": "claude",
         "codex-cli": "codex",
         "gemini-cli": "gemini",
         "github-copilot-cli": "copilot",
+        "pi-coding-agent": "pi",
+        "opencode-ai": "opencode",
         "vi": "vim", "view": "vim", "vimdiff": "vim", "gvim": "vim", "mvim": "vim",
         "nvim": "neovim",
         "emacsclient": "emacs",
@@ -233,10 +248,22 @@ nonisolated public enum ProgramCatalog {
     /// Interpreters that run an agent as a script (`node …/claude-code/cli.js`).
     static let scriptHosts: Set<String> = ["node", "bun", "deno", "python"]
 
+    /// Agents named anywhere in their script's path (`…/@anthropic-ai/claude-code/cli.js`).
+    static let scriptAgents = ["claude", "codex", "gemini", "copilot"]
+
+    /// Agents whose names hide inside other words (`pip`, `sample`): named only by a whole
+    /// directory of their package, or a script of their own name (`/usr/local/bin/pi`).
+    static let scriptPackages: [String: String] = [
+        "pi-coding-agent": "pi",
+        "opencode-ai": "opencode",
+        "opencode": "opencode",
+        "@sourcegraph/amp": "amp",
+    ]
+
     private static let byId: [String: ProgramIdentity] = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
 
     private static func entry(_ id: String, _ name: String, _ kind: ProgramIdentity.Kind) -> ProgramIdentity {
-        ProgramIdentity(id: id, displayName: name, kind: kind, logo: logos[id])
+        ProgramIdentity(id: id, displayName: name, kind: kind, logo: logos[id] ?? glyphs[id])
     }
 
     // MARK: Lookup
@@ -281,7 +308,11 @@ nonisolated public enum ProgramCatalog {
         // An agent run as a script by its interpreter: name it, not the interpreter.
         if scriptHosts.contains(base), let script = words.dropFirst().first(where: { !$0.hasPrefix("-") }) {
             let lowered = script.lowercased()
-            for agent in ["claude", "codex", "gemini", "copilot"] where lowered.contains(agent) { return agent }
+            for agent in scriptAgents where lowered.contains(agent) { return agent }
+            let scriptName = canonical(lowered)
+            if Set(scriptPackages.values).contains(scriptName) { return scriptName }
+            let directories = "/" + lowered + "/"
+            for (package, agent) in scriptPackages where directories.contains("/\(package)/") { return agent }
         }
         return base
     }
