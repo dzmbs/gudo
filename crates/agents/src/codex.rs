@@ -57,16 +57,25 @@ fn notify_override(ctx: &LaunchContext) -> String {
 
 /// `-c` overrides that add the daemon's drawings MCP server (docs/DAEMON.md §7.12) for this
 /// run only, next to the user's own `mcp_servers`.
-fn mcp_overrides(ctx: &LaunchContext) -> [String; 2] {
+fn mcp_overrides(ctx: &LaunchContext) -> Vec<String> {
     let name = mcp_server_name();
     let args: Vec<String> = mcp_args(ctx).iter().map(|arg| toml_quote(arg)).collect();
+    // Tools that run or type keep Codex's own rule; the rest never ask.
     [
         format!(
             "mcp_servers.{name}.command={}",
             toml_quote(&ctx.hook_bin.to_string_lossy())
         ),
         format!("mcp_servers.{name}.args=[{}]", args.join(",")),
+        format!(r#"mcp_servers.{name}.default_tools_approval_mode="approve""#),
     ]
+    .into_iter()
+    .chain(
+        crate::RUNNING_TOOLS
+            .iter()
+            .map(|tool| format!(r#"mcp_servers.{name}.tools.{tool}.approval_mode="auto""#)),
+    )
+    .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -493,7 +502,6 @@ mod tests {
     fn launch_turns_on_osc9_notifications() {
         let spec = Codex::new().launch(&test_context(), &LaunchMode::Fresh { session_id: None });
         assert_eq!(
-            spec.display_argv(),
             [
                 "codex",
                 "-c",
@@ -514,8 +522,27 @@ mod tests {
                     r#"mcp_servers.{}.args=["mcp","--state","/state","--pane","p_9f2"]"#,
                     crate::EXPECTED_MCP_SERVER_NAME
                 ),
-            ]
+                "-c",
+                &format!(
+                    r#"mcp_servers.{}.default_tools_approval_mode="approve""#,
+                    crate::EXPECTED_MCP_SERVER_NAME
+                ),
+            ][..],
+            spec.display_argv()[..15]
         );
+        for (flag, tool) in spec.display_argv()[15..]
+            .chunks(2)
+            .zip(crate::RUNNING_TOOLS)
+        {
+            assert_eq!(flag[0], "-c");
+            assert_eq!(
+                flag[1],
+                format!(
+                    r#"mcp_servers.{}.tools.{tool}.approval_mode="auto""#,
+                    crate::EXPECTED_MCP_SERVER_NAME
+                )
+            );
+        }
         assert!(spec.files.is_empty());
         assert!(
             spec.env
@@ -532,7 +559,8 @@ mod tests {
                 session_id: NativeSessionId::new("0199a213"),
             },
         );
-        assert_eq!(spec.display_argv()[13..], ["resume", "0199a213"]);
+        let argv = spec.display_argv();
+        assert_eq!(argv[argv.len() - 2..], ["resume", "0199a213"]);
     }
 
     #[test]

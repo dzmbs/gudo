@@ -2683,8 +2683,11 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   agent's hooks, up to 16k characters) with its transcript path.
 - **MCP.** Every tool has an `outputSchema` and returns `structuredContent` (typed values for
   code-mode harnesses) plus text that leads with a summary and then the output verbatim.
-  Annotations mark the read-only tools; `agents::ACTING_TOOLS` are the ones Claude's permission
-  prompt asks about. The server is `gudo` (`agents::mcp_server_name`); registering with
+  Annotations mark the read-only tools. `agents::FREE_TOOLS` (reading, the browser pane, arranging
+  and closing the agent's own panes) never ask; `agents::RUNNING_TOOLS` follow the agent's own
+  permission mode, as its shell tool does, except that a split or tab with no command and no agent
+  is allowed by the `PermissionRequest` hook (`agents::opens_only_a_shell`). Codex gets the same
+  through per-run `-c` approval modes. The server is `gudo` (`agents::mcp_server_name`); registering with
   an agent removes a registration under the old `gudo_drawings` first. Other harnesses add
   it by hand, e.g. pi: `pi mcp add gudo -- gudo-hook mcp` from a pane.
 - **Tests.** `tests/it/term.rs` (`an_agent_drives_a_full_screen_program_by_what_it_shows`:

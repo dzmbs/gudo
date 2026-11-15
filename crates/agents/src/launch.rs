@@ -256,22 +256,75 @@ pub fn legacy_mcp_server_names() -> [&'static str; 2] {
     brand::legacy::MCP_SERVER_NAMES
 }
 
-/// The MCP server's terminal tools that act (run, type, open, close, start and prompt agents):
-/// an agent's own permission prompt asks before each, as it does for its shell tool. The rest
-/// only read.
-pub const ACTING_TOOLS: &[&str] = &[
-    "cmd_run",
-    "pane_send",
-    "pane_split",
-    "tab_new",
+/// The MCP server's tools an agent uses without asking: they read, drive the browser pane, or
+/// arrange and close panes it opened (the daemon asks the user before an agent touches any other
+/// pane).
+pub const FREE_TOOLS: &[&str] = &[
+    "whoami",
+    "pane_list",
+    "pane_read",
+    "pane_wait",
     "pane_close",
-    "agent_spawn",
-    "agent_prompt",
+    "agent_wait",
+    "agent_result",
+    "events_wait",
     "pane_float",
     "pane_dock",
     "pane_minimize",
     "pane_raise",
+    "status_set",
+    "list_drawings",
+    "get_drawing",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_find",
+    "browser_get_text",
+    "browser_click",
+    "browser_double_click",
+    "browser_hover",
+    "browser_type",
+    "browser_fill",
+    "browser_press",
+    "browser_scroll",
+    "browser_scroll_to",
+    "browser_drag",
+    "browser_wait",
+    "browser_screenshot",
+    "browser_zoom",
+    "browser_tabs",
+    "browser_dialog",
+    "browser_upload",
+    "browser_console",
+    "browser_network",
 ];
+
+/// The MCP server's tools that run or type something: the agent's own permission mode decides
+/// them, as it does its shell tool. A split or tab that opens only a shell never asks
+/// ([`opens_only_a_shell`]).
+pub const RUNNING_TOOLS: &[&str] = &[
+    "cmd_run",
+    "pane_send",
+    "pane_split",
+    "tab_new",
+    "agent_spawn",
+    "agent_prompt",
+];
+
+/// Whether a permission request for `tool_name` (as the agent names it, `mcp__<server>__<tool>`)
+/// only opens a pane or tab with a shell: no command and no agent in it.
+pub fn opens_only_a_shell(tool_name: &str, tool_input: &serde_json::Value) -> bool {
+    let Some(tool) = tool_name
+        .strip_prefix("mcp__")
+        .and_then(|rest| rest.strip_prefix(mcp_server_name().as_str()))
+        .and_then(|rest| rest.strip_prefix("__"))
+    else {
+        return false;
+    };
+    matches!(tool, "pane_split" | "tab_new")
+        && ["command", "agent"]
+            .iter()
+            .all(|field| tool_input.get(field).is_none_or(serde_json::Value::is_null))
+}
 
 /// Returns the hook shim's arguments that run the MCP server for this pane:
 /// `mcp --state <state_dir> --pane <pane>`. The shim reads the socket and token from the state

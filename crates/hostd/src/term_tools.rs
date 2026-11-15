@@ -772,14 +772,6 @@ mod tests {
                 "{description}"
             );
         }
-        // The ones that act are the ones agents ask the user about.
-        let acting: Vec<_> = tools_list()
-            .into_iter()
-            // Reporting its own status touches nothing else.
-            .filter(|tool| !tool.read_only && tool.name != "status_set")
-            .map(|tool| tool.name)
-            .collect();
-        assert_eq!(acting, agents::ACTING_TOOLS);
     }
 
     #[test]

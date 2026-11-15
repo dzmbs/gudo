@@ -25,7 +25,7 @@ const BUNDLED_MANIFEST: &str = include_str!("../manifests/claude.toml");
 
 /// Version of the hook settings file we generate. Bump when its contents change so a running
 /// session keeps the file it was launched with.
-const SETTINGS_VERSION: u32 = 3;
+const SETTINGS_VERSION: u32 = 4;
 
 /// Seconds a `PermissionRequest` hook may wait for a phone decision. Claude's own limit is 600.
 const PERMISSION_TIMEOUT_SECS: u32 = 590;
@@ -198,11 +198,10 @@ impl ClaudeCode {
         };
         let short = Some(HOOK_TIMEOUT_SECS);
         json!({
-            // The server's tools that act ask like Claude's own Bash tool; the rest are allowed.
+            // Tools that run or type are left to Claude's own mode, like its Bash tool.
             // Permission arrays merge with the user's own.
             "permissions": {
-                "allow": [format!("mcp__{}", mcp_server_name())],
-                "ask": crate::ACTING_TOOLS
+                "allow": crate::FREE_TOOLS
                     .iter()
                     .map(|tool| format!("mcp__{}__{tool}", mcp_server_name()))
                     .collect::<Vec<_>>(),
@@ -755,7 +754,7 @@ mod tests {
                 "--mcp-config",
                 "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v3.json"
+                "/state/claude/settings.v4.json"
             ]
         );
         assert_eq!(spec.cwd, ctx.cwd);
@@ -776,9 +775,16 @@ mod tests {
             settings["hooks"]["PreToolUse"][0]["matcher"],
             "AskUserQuestion"
         );
-        assert_eq!(
-            settings["permissions"]["allow"],
-            json!([format!("mcp__{}", crate::EXPECTED_MCP_SERVER_NAME)])
+        let allowed = settings["permissions"]["allow"].as_array().unwrap();
+        let tool = |name: &str| json!(format!("mcp__{}__{name}", crate::EXPECTED_MCP_SERVER_NAME));
+        assert!(allowed.contains(&tool("pane_dock")) && !allowed.contains(&tool("pane_split")));
+        assert!(
+            !allowed.contains(&tool("cmd_run")),
+            "running tools follow Claude's own mode"
+        );
+        assert!(
+            settings["permissions"].get("ask").is_none(),
+            "nothing overrides auto mode"
         );
     }
 
@@ -871,7 +877,7 @@ mod tests {
                 "--mcp-config",
                 "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v3.json"
+                "/state/claude/settings.v4.json"
             ]
         );
     }

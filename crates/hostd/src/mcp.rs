@@ -881,6 +881,30 @@ mod tests {
     }
 
     #[test]
+    fn every_tool_is_free_or_left_to_the_agents_own_mode() {
+        let mut names: Vec<String> = tools()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| {
+                let name = tool["name"].as_str().unwrap();
+                if tool["annotations"]["readOnlyHint"] == true {
+                    assert!(agents::FREE_TOOLS.contains(&name), "{name} only reads");
+                }
+                name.to_owned()
+            })
+            .collect();
+        let mut grouped: Vec<String> = agents::FREE_TOOLS
+            .iter()
+            .chain(agents::RUNNING_TOOLS)
+            .map(|name| (*name).to_owned())
+            .collect();
+        names.sort();
+        grouped.sort();
+        assert_eq!(names, grouped);
+    }
+
+    #[test]
     fn tools_are_listed_with_the_daemons_formats() {
         let reply = rpc(&mut Fake::default(), "tools/list", Value::Null);
         let tools = reply["result"]["tools"].as_array().unwrap();
