@@ -145,20 +145,7 @@ enum SidebarWidth {
         case .xxxLarge: 44
         default: 72
         }
-        return min(max(stored, range.lowerBound) + extra + systemSizeExtra, range.upperBound + 72)
-    }
-
-    /// The Mac's sidebar size (System Settings › Appearance) scales the column with its text.
-    @MainActor private static var systemSizeExtra: Double {
-        #if os(macOS)
-        switch SidebarSize.shared.mode {
-        case 1: -24
-        case 3: 36
-        default: 0
-        }
-        #else
-        0
-        #endif
+        return min(max(stored, range.lowerBound) + extra + SidebarSize.shared.metrics.widthExtra, range.upperBound + 72)
     }
 }
 
@@ -246,58 +233,40 @@ private struct SidebarRowStyle: ViewModifier {
     }
 }
 
-/// The sidebar's text at Apple's sidebar sizes. Touch: the body and subheadline text styles, so
-/// Dynamic Type applies. Mac: the sidebar size chosen in System Settings (11, 13 or 15 pt rows,
-/// as the system's source lists draw them). Weight never changes with selection; the fill shows it.
+/// The sidebar's text at Apple's sidebar sizes, through `DS.Font.sidebar`: the size chosen in
+/// Settings (`sidebar-text-size`), or by default the Mac's own sidebar size from System Settings
+/// (11, 13 or 15 pt rows, as the system's source lists draw them) and the body and subheadline
+/// text styles on touch, so Dynamic Type applies. Weight never changes with selection; the fill
+/// shows it.
 @MainActor
 enum SidebarFont {
-    #if os(macOS)
-    static var title: Font { .system(size: SidebarSize.shared.metrics.title) }
-    static var subtitle: Font { .system(size: SidebarSize.shared.metrics.subtitle) }
-    static var section: Font { .system(size: SidebarSize.shared.metrics.section, weight: .semibold) }
-    static var project: Font { .system(size: SidebarSize.shared.metrics.title, weight: .semibold) }
-    static var number: Font { .system(size: SidebarSize.shared.metrics.subtitle).monospacedDigit() }
+    static var title: Font { SidebarSize.shared.metrics.title }
+    static var subtitle: Font { SidebarSize.shared.metrics.subtitle }
+    static var section: Font { SidebarSize.shared.metrics.section }
+    static var project: Font { SidebarSize.shared.metrics.project }
+    static var number: Font { SidebarSize.shared.metrics.number }
     static var icon: CGFloat { SidebarSize.shared.metrics.icon }
-    static var projectMark: CGFloat { (SidebarSize.shared.metrics.icon * 0.6).rounded() }
-    #else
-    static let title = Font.body
-    static let subtitle = Font.subheadline
-    static let section = Font.subheadline.weight(.semibold)
-    static let project = Font.headline
-    static let number = Font.subheadline.monospacedDigit()
-    static let icon: CGFloat = 24
-    static let projectMark: CGFloat = 14
-    #endif
+    static var projectMark: CGFloat { SidebarSize.shared.metrics.projectMark }
 }
 
-#if os(macOS)
-/// System Settings › Appearance › Sidebar icon size, kept current while the app runs.
+/// The sidebar's text size, kept current while the app runs: the Settings choice, and on the Mac
+/// System Settings › Appearance › Sidebar icon size behind its System choice.
 @MainActor
 @Observable
 final class SidebarSize {
     static let shared = SidebarSize()
 
-    struct Metrics: Equatable {
-        var title: CGFloat
-        var subtitle: CGFloat
-        var section: CGFloat
-        /// The program glyph's slot leading each tab row.
-        var icon: CGFloat
-    }
+    private(set) var size = SidebarSize.storedSize
 
-    /// `NSTableViewDefaultSizeMode`: 1 small, 2 medium (also when unset), 3 large.
-    private(set) var mode = SidebarSize.storedMode
-
-    var metrics: Metrics {
-        switch mode {
-        case 1: Metrics(title: 11, subtitle: 10, section: 10, icon: 15)
-        case 3: Metrics(title: 15, subtitle: 13, section: 13, icon: 20)
-        default: Metrics(title: 13, subtitle: 11, section: 11, icon: 17)
-        }
-    }
+    var metrics: DS.Font.Sidebar { DS.Font.sidebar(size) }
 
     private init() {
-        for name in [UserDefaults.didChangeNotification, NSApplication.didBecomeActiveNotification] {
+        #if os(macOS)
+        let names = [UserDefaults.didChangeNotification, NSApplication.didBecomeActiveNotification]
+        #else
+        let names = [UserDefaults.didChangeNotification]
+        #endif
+        for name in names {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
                 MainActor.assumeIsolated { SidebarSize.shared.refresh() }
             }
@@ -305,15 +274,22 @@ final class SidebarSize {
     }
 
     private func refresh() {
-        let stored = Self.storedMode
-        if stored != mode { mode = stored }
+        let stored = Self.storedSize
+        if stored != size { size = stored }
     }
 
-    private static var storedMode: Int {
-        UserDefaults.standard.integer(forKey: "NSTableViewDefaultSizeMode")
+    private static var storedSize: DS.Font.SidebarSize {
+        let preference = UserDefaults.standard.string(forKey: TerminalPreferences.Key.sidebarTextSize)
+            .flatMap(TerminalPreferences.SidebarTextSize.init(rawValue:)) ?? TerminalPreferences.Default.sidebarTextSize
+        #if os(macOS)
+        // `NSTableViewDefaultSizeMode`: 1 small, 2 medium, 3 large; 0 when never set.
+        let systemMode = UserDefaults.standard.integer(forKey: "NSTableViewDefaultSizeMode")
+        #else
+        let systemMode = DS.Font.SidebarSize.medium.rawValue
+        #endif
+        return DS.Font.SidebarSize(preference, systemMode: systemMode)
     }
 }
-#endif
 
 /// The highlight behind a selected sidebar row.
 struct SelectionFill: View {

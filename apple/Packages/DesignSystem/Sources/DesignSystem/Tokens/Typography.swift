@@ -42,5 +42,77 @@ public extension DS {
         public static let menuShortcut = SwiftUI.Font.subheadline.monospacedDigit()
         /// The cols × rows readout and the exit bar.
         public static let overlay = SwiftUI.Font.system(.callout).monospacedDigit()
+
+        /// The sidebar's text at one of its three sizes (`sidebar-text-size`).
+        public static func sidebar(_ size: SidebarSize) -> Sidebar { Sidebar(size: size) }
+    }
+}
+
+public extension DS.Font {
+    /// The sidebar's sizes. On the Mac they are the system sidebar's own point sizes (small,
+    /// medium and large in System Settings › Appearance); on touch, text styles a step apart so
+    /// Dynamic Type still applies.
+    nonisolated enum SidebarSize: Int, CaseIterable, Sendable {
+        case small = 1, medium, large
+
+        /// What `sidebar-text-size` asks for, `system` meaning the Mac's sidebar size
+        /// (`NSTableViewDefaultSizeMode`: 1, 2, 3; 0 when unset) or medium on touch.
+        public init(_ preference: TerminalPreferences.SidebarTextSize, systemMode: Int) {
+            switch preference {
+            case .small: self = .small
+            case .medium: self = .medium
+            case .large: self = .large
+            case .system: self = SidebarSize(rawValue: systemMode) ?? .medium
+            }
+        }
+    }
+
+    nonisolated struct Sidebar: Equatable, Sendable {
+        public let size: SidebarSize
+
+        #if os(macOS)
+        private var points: (title: CGFloat, subtitle: CGFloat, icon: CGFloat) {
+            switch size {
+            case .small: (11, 10, 15)
+            case .medium: (13, 11, 17)
+            case .large: (15, 13, 20)
+            }
+        }
+
+        public var title: SwiftUI.Font { .system(size: points.title) }
+        public var subtitle: SwiftUI.Font { .system(size: points.subtitle) }
+        public var section: SwiftUI.Font { .system(size: points.subtitle, weight: .semibold) }
+        public var project: SwiftUI.Font { .system(size: points.title, weight: .semibold) }
+        public var number: SwiftUI.Font { .system(size: points.subtitle).monospacedDigit() }
+        /// The program glyph's slot leading each tab row.
+        public var icon: CGFloat { points.icon }
+        #else
+        private var styles: (title: SwiftUI.Font.TextStyle, subtitle: SwiftUI.Font.TextStyle, project: SwiftUI.Font.TextStyle, icon: CGFloat) {
+            switch size {
+            case .small: (.subheadline, .footnote, .subheadline, 20)
+            case .medium: (.body, .subheadline, .headline, 24)
+            case .large: (.title3, .body, .title3, 28)
+            }
+        }
+
+        public var title: SwiftUI.Font { .system(styles.title) }
+        public var subtitle: SwiftUI.Font { .system(styles.subtitle) }
+        public var section: SwiftUI.Font { .system(styles.subtitle).weight(.semibold) }
+        public var project: SwiftUI.Font { .system(styles.project).weight(.semibold) }
+        public var number: SwiftUI.Font { .system(styles.subtitle).monospacedDigit() }
+        public var icon: CGFloat { styles.icon }
+        #endif
+
+        /// A project's folder mark, in proportion to the row's glyph.
+        public var projectMark: CGFloat { (icon * 0.6).rounded() }
+
+        /// How much wider the sidebar column grows (or narrows) for its text.
+        public var widthExtra: Double {
+            switch size {
+            case .small: -24
+            case .medium: 0
+            case .large: 36
+            }
+        }
     }
 }
