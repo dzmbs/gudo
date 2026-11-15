@@ -61,7 +61,7 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   right before typing, whatever was allowed.
 - **No focus stealing.** Panes and tabs an agent opens never take focus.
 - **Bounded.** Requests lapse after two minutes; a caller that hangs up withdraws its request;
-  one agent tree may have 32 panes open.
+  one agent may have 32 panes of its own open, and the agents of a session 128 together.
 - **Audit.** Every answer (allow once, for this pane, deny) is a signed `Approval` record in
   the hash-chained audit log.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its

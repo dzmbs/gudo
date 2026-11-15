@@ -101,8 +101,10 @@ device, host, repository and command hash (docs/security/apple-client.md); the d
 what an owner or driver sends, as it would run what they type.
 
 **Terminal tools.** The pane ids in calls are typed integers, and no shell is built from tool
-arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One agent,
-together with every worker it starts, may have at most 32 panes open. A wait holds at most
+arguments: `cmd_run` types into a pane the agent owns, which is its purpose. One agent
+may have at most 32 panes it opened itself open, and all the agents of a session 128 together,
+so a tree of workers opening workers stops well short of the host's pseudo-terminals (511 by
+default on macOS). A wait holds at most
 1 MiB of output, and results are capped at 256 KiB.
 
 **Shared agent configuration.** Automatic hook and MCP registration is restricted to the
@@ -326,7 +328,8 @@ Made:
   the owner's prompt names them.
 - **Repository commands.** Trust-on-first-use for `setup` and `teardown`, per repository and
   hash, granted from the app by the owner only.
-- **Pane limit.** 32 panes per agent tree stays a constant.
+- **Pane limit.** 32 panes per agent stays a constant; the session cap of 128 is
+  `Config::agent_panes_per_session` only so tests can lower it.
 
 Open:
 
@@ -365,7 +368,11 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   host supplies the PID boundary rather than depending on its basename.
 - `term::a_panes_environment_reaches_only_that_pane` (it): a pane's environment holds no
   `hook.token`; its own token cannot speak for the pane that opened it on the pull or browser
-  channels; the agent tree stops at 32 panes, workers included.
+  channels; a worker stops at 32 panes of its own while the agent that started it keeps its
+  own count.
+- `layout_tools::agents_share_a_session_cap_well_under_the_hosts_pty_limit` (it): the agents
+  of a session together stop at the session cap, and the refusal says whose panes are open.
+- `term::parallel_opens_stay_within_the_pane_budget` (it): parallel opens pass neither cap.
 - `term::an_agent_runs_waits_reads_and_stays_in_its_lane` (it): term tools with another
   pane's token, and driving a pane the caller did not open.
 - `browser::a_driving_guest_never_gets_the_hosts_browser_calls` (it): browser calls never

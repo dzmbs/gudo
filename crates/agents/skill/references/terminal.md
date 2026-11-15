@@ -7,18 +7,24 @@ when it is long; `maxBytes` raises the cap (16 KiB by default).
 
 ### `whoami`
 
-Your own pane: its id, folder, session and host, and the limits of these tools.
+Your own pane: its id, folder, session and host, and the limits of these tools, with
+`limits.panes`: how many panes you have open of your 32, and the session's agents of their 128.
 
 Arguments: none.
 
 ### `pane_list`
 
-The panes of this session (or only this tab): folder, whether a shell waits at its prompt, the
+The tabs of this session and their panes. Each of `tabs` has its `title` (fixed when
+`fixedTitle`), `project`, whether it is the tab the user has in front (`active`), its `focused`
+pane, `tree` (its panes in place: an id, or a `split` that is `horizontal` (side by side) or
+`vertical` (stacked) with the first side's `ratio`), its floating windows (`floats`, with frames)
+and its `panes`. `panes` gives each pane's folder, whether a shell waits at its prompt, the
 running program, the last command and its exit code, `createdByYou`, and `scopes`: `read`,
 `input` and `manage` where you may act, `ask` where the user must agree first. `scope` is
-`session` (the default) or `tab`.
+`session` (the default), `tab` (your own tab) or `mine` (only panes you created); `tab: "t3"`
+lists one tab.
 
-Arguments: `scope`.
+Arguments: `scope`, `tab`.
 
 ### `cmd_run`
 

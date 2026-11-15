@@ -2585,12 +2585,32 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   the state directory holds, speaks for any pane. Every hook-socket caller is checked this way,
   and the socket (0600, in the 0700 state dir or a fresh 0700 temporary dir) refuses peers of
   another uid, or of unknown uid, before reading a byte.
-- **Limits.** One agent, with every worker it started, may have 32 panes open at once; a wait
-  holds at most 1 MiB of output.
+- **Limits.** One agent may have 32 panes it opened itself open at once, and all the agents of
+  a session 128 together (`Config::agent_panes_per_session`): a quarter of macOS's default 511
+  pseudo-terminals, so workers opening workers leave the host room. Refusals say how many are
+  the caller's, the session's total and which panes hold the rest; `whoami` reports
+  `limits.panes {yours, session}`, each `{open, max}`. A wait holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
   `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
-  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. `pane_list` scopes:
-  `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes.
+  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. Pane `scopes`:
+  `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes. Errors say
+  the reason in `message` itself; `hint` only suggests what to do next.
+- **Listing.** `pane_list {scope?, tab?}` returns `tabs` and `panes`. Each tab has `id`,
+  `title` (its fixed title, set by the user or `tab_new {title}`, which programs' titles never
+  replace; else its focused pane's title) with `fixedTitle`, `project {id, name}` (or `null`),
+  `active`, `focused`, `zoomed`, `tree` (its panes in place: a pane id or `{split: horizontal |
+  vertical, ratio, first, second}`, horizontal being side by side), `floats` (its windows, back
+  to front) and `panes` (the listed ids). `panes` holds every listed pane's details, flat, as it
+  always did. `scope` is `session` (default), `tab` (the caller's) or `mine` (panes it created);
+  `tab: "t3"` lists one tab. The MCP text is one line per tab and per pane, not the JSON.
+- **Effects.** `pane_split`, `tab_new`, `pane_close`, `pane_float`, `pane_dock`,
+  `pane_minimize` and `pane_raise` return `effects`: every pane of the session whose tab,
+  window, frame or focus the call changed, `{pane, changes, was, now}` with `changes` from
+  `opened`, `closed`, `tab`, `float`, `frame`, `focus` and `was`/`now` as `{tab, floating,
+  frame, minimized, pinned, focused}` (`null` before opening or after closing). After the
+  change the daemon puts back the tab in front and every tab's focused pane (unless the pane
+  is gone, or now in the tray), so these tools never move anyone's focus unless asked with
+  `focus: true` (`Layout::restore_focus`).
 - **Rules.** Read any pane of the caller's session; type into, run in and close the panes it
   created (or that those created) at once, never its own; the user's panes (any other pane of
   its session) only once the owner allows it (below); nothing it opens takes the user's focus;
@@ -2672,11 +2692,17 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   is done; a worker's answer stays readable with `agent_result` after its window closed. Such a
   window opens without the focus in the same change (`LayoutOp::NewFloat { focus: false }`), so
   the user's focus never flickers. On panes the caller created: `pane_float {pane, frame?,
-  pinned?}` floats one (or moves its window; `pinned` shows it over every tab), `pane_dock {pane,
-  beside?, side?}` docks its window where it was or beside a pane (`side` left, right (default),
-  up or down) and gives the user's focus back, `pane_minimize {pane, minimized = true}` sends it
-  to the tab's tray or restores it, and `pane_raise {pane}` brings it to the front and out of the
-  tray. There is no tool that focuses a pane: the keyboard is the user's. Every pane listing
+  pinned?}` floats one (or moves its window; `pinned` shows it over every tab; floated again
+  after docking, it gets the frame and pin its window had, `Session.docked` in `layout.json`),
+  `pane_dock {pane, beside?, side?, moveTab?}` docks its window where it was or beside a pane
+  (`side` left, right (default), up or down); beside a pane of another tab it fails
+  `cross_tab`, naming both tabs, unless `moveTab: true`, and then the result's `moved {from,
+  to}` says so. `pane_minimize {pane, minimized = true}` sends it to the tab's tray or restores
+  it, and `pane_raise {pane}` brings it to the front and out of the tray. `pane_close` of a
+  tab's last pane in place while windows float over the tab is refused (closing it would dock
+  one of them and lose its frame) unless `closeFloats: true`, which closes the tab, windows
+  included, when the caller may close every one of them; of an id the daemon never handed out
+  it is `not_found`, of a pane that is gone `alreadyClosed`. There is no tool that focuses a pane: the keyboard is the user's. Every pane listing
   carries `float` (the window's id, panes, frame, `minimized`, `pinned`, `closeWhenDone`, or
   `null`). From a shell, `gudo float run [--close-when-done] [--frame x,y,w,h] [--focus] [--over P]
   -- <command…>` opens a shell in a window and runs the command in it (so its output stays to
