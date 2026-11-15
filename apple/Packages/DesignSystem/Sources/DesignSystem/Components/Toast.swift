@@ -143,7 +143,7 @@ public struct Banner: View {
                     .imageScale(.small)
                     .foregroundStyle(tint)
                     .frame(width: 24, height: 24)
-                    .background(tint.opacity(0.16), in: .circle)
+                    .background(DS.Palette.container(tint), in: .circle)
                     .accessibilityHidden(true)
             }
             Text(toast.message)

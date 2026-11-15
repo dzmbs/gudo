@@ -107,15 +107,16 @@ private struct RowActionsModifier<Menu: View>: ViewModifier {
 }
 
 extension RowTint {
-    /// The system colours, so a swipe looks like every other app's.
-    var color: Color {
+    /// The theme's signals in Mail's vocabulary: red ends, amber stops, blue goes, green is done,
+    /// violet edits, the theme's bright yellow pins.
+    var color: ChromeStyle {
         switch self {
-        case .red: .red
-        case .orange: .orange
-        case .yellow: .yellow
-        case .green: .green
-        case .blue: .blue
-        case .indigo: .indigo
+        case .ends: DS.Palette.error
+        case .stops: DS.Palette.attention
+        case .pins: DS.Palette.ansi(11)
+        case .completes: DS.Palette.done
+        case .goes: DS.Palette.info
+        case .edits: DS.Palette.working
         }
     }
 }

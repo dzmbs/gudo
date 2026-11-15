@@ -76,7 +76,7 @@ private struct Shimmering: ViewModifier {
                     // Ink at the band's strength over ink at the secondary level is exactly the
                     // per-glyph mix the band stands for.
                     ShimmerBandLayer(ink: ink.resolve(in: environment).cgColor, glyphs: glyphs)
-                        .mask { content.foregroundStyle(.black) }
+                        .mask { content.foregroundStyle(.black) } // style-exempt: a mask, only its alpha counts
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }

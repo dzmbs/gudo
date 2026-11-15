@@ -34,12 +34,7 @@ public struct KeyCap: View {
             .font(DS.Font.keyCap)
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: DS.Radius.chip)
-                    .fill(DS.Palette.raised)
-                    .shadow(color: .black.opacity(0.12), radius: 0.5, y: 0.5))
-            .overlay(
-                RoundedRectangle(cornerRadius: DS.Radius.chip)
-                    .strokeBorder(DS.Palette.separator, lineWidth: 0.5))
+            .background(DS.Palette.raised, in: .rounded(DS.Radius.chip))
+            .hairlineBorder(RoundedRectangle.rounded(DS.Radius.chip), style: DS.Palette.separator)
     }
 }

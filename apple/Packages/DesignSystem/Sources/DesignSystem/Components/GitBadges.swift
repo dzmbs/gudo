@@ -219,7 +219,8 @@ public struct SectionDot: View {
 
     public var body: some View {
         Circle()
-            .fill(color.opacity(0.6))
+            .fill(color)
+            .opacity(DS.Opacity.mutedGlyph)
             .overlay(Circle().strokeBorder(color, lineWidth: DS.Size.hairline(scale: scale)))
             .frame(width: 6, height: 6)
             .accessibilityHidden(true)

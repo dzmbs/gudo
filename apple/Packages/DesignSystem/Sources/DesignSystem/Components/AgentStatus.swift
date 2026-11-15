@@ -125,14 +125,14 @@ public struct StatusPill: View {
             StatusIndicator(state, size: 10)
             Text(state.title)
             if let detail {
-                Text(detail).foregroundStyle(state.color.opacity(0.75))
+                Text(detail).fontWeight(.regular)
             }
         }
         .font(DS.Font.badge.monospacedDigit())
         .foregroundStyle(state.color)
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
-        .background(state.color.opacity(0.10), in: .rect(cornerRadius: DS.Radius.chip))
+        .background(DS.Palette.container(state.color), in: .rounded(DS.Radius.chip))
         .accessibilityElement(children: .combine)
     }
 }
@@ -151,9 +151,7 @@ public struct CountBadge: View {
         if count > 0 {
             Text(count > 99 ? "99+" : "\(count)")
                 .font(.caption2.weight(.semibold).monospacedDigit())
-                // The window's base colour on the amber: dark text on a dark theme's light amber,
-                // light on a light theme's deep one.
-                .foregroundStyle(urgent ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(DS.Palette.textSecondary))
+                .foregroundStyle(urgent ? DS.Palette.on(DS.Palette.blocked) : DS.Palette.textSecondary)
                 .padding(.horizontal, 5)
                 .frame(minWidth: 16, minHeight: 16)
                 .background(urgent ? AnyShapeStyle(DS.Palette.blocked) : AnyShapeStyle(DS.Palette.selectedFill), in: .capsule)

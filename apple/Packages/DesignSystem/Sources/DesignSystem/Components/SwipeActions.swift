@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// One action behind a row: its word, symbol and system tint (red ends something, orange stops or
-/// puts away, blue goes somewhere; never grey, which reads as disabled).
+/// One action behind a row: its word, symbol and tint from the theme's signals (red ends
+/// something, amber stops or puts away, blue goes somewhere; never grey, which reads as disabled).
 public struct SwipeAction: Identifiable, Hashable, Sendable {
     public var id: String
     /// The one short word under the symbol.
@@ -9,9 +9,9 @@ public struct SwipeAction: Identifiable, Hashable, Sendable {
     /// What VoiceOver says (the menu title).
     public var label: String
     public var systemImage: String
-    public var tint: Color
+    public var tint: ChromeStyle
 
-    public init(id: String, title: String, label: String? = nil, systemImage: String, tint: Color) {
+    public init(id: String, title: String, label: String? = nil, systemImage: String, tint: ChromeStyle) {
         self.id = id
         self.title = title
         self.label = label ?? title
@@ -21,7 +21,7 @@ public struct SwipeAction: Identifiable, Hashable, Sendable {
 }
 
 /// The actions a swipe reveals beside a hand-drawn row, drawn as the system's own `List` swipe
-/// actions are since iOS 26: a tinted circle per action with its symbol in white, the word under
+/// actions are since iOS 26: a tinted circle per action with its symbol in the label that reads on it, the word under
 /// it when the row is tall enough, the circles growing in with the reveal. Armed (a full swipe),
 /// the outermost stretches into a capsule across the whole reveal. `actions` run from the row's
 /// edge outwards.
@@ -78,7 +78,7 @@ public struct SwipeActionTray: View {
                             .overlay {
                                 Image(systemName: action.systemImage)
                                     .font(.system(size: diameter * 0.4, weight: .semibold))
-                                    .foregroundStyle(.white)
+                                    .foregroundStyle(DS.Palette.on(action.tint))
                             }
                         if Self.showsTitle(rowHeight: rowHeight) {
                             Text(action.title)

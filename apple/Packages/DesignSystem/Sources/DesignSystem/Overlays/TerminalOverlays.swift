@@ -174,10 +174,13 @@ public struct SecureInputBadge: View {
     @State private var gradientOpacity = 0.5
     @State private var isExplaining = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.terminalTheme) private var theme
 
     public init() {}
 
     public var body: some View {
+        // Ghostty's cyan, blue and yellow sweep, in the theme's own ANSI hues.
+        let sweep = [6, 4, 3, 4, 6].map { theme.ansiRGB($0).color }
         Image(systemName: "lock.shield.fill")
             .resizable()
             .scaledToFit()
@@ -189,8 +192,9 @@ public struct SecureInputBadge: View {
                     .fill(DS.Palette.raised)
                     .overlay(
                         Rectangle()
-                            .fill(AngularGradient(colors: [.cyan, .blue, .yellow, .blue, .cyan], center: .center, angle: gradientAngle))
+                            .fill(AngularGradient(colors: sweep, center: .center, angle: gradientAngle))
                             .blur(radius: 4, opaque: true)
+                            // style-exempt: a mask, only its alpha counts
                             .mask(RadialGradient(colors: [.clear, .black], center: .center, startRadius: 0, endRadius: 25))
                             .opacity(gradientOpacity)))
             .mask(RoundedRectangle(cornerRadius: DS.Radius.secureBadge))

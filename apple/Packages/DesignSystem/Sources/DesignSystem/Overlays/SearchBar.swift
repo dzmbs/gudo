@@ -89,11 +89,10 @@ public struct TerminalSearchBar: View {
                     } label: {
                         Text(verbatim: "Aa")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(caseSensitive.wrappedValue ? AnyShapeStyle(.tint) : AnyShapeStyle(DS.Palette.textSecondary))
+                            .foregroundStyle(caseSensitive.wrappedValue ? DS.Palette.accent : DS.Palette.textSecondary)
                             .frame(minWidth: 22)
                             .background(
-                                RoundedRectangle(cornerRadius: DS.Radius.field)
-                                    .fill(Color.accentColor.opacity(caseSensitive.wrappedValue ? 0.18 : 0))
+                                ControlFillShape(state: ControlState(isSelected: caseSensitive.wrappedValue, tint: .accent), shape: .rounded(DS.Radius.field))
                                     .padding(-3))
                     }
                     .accessibilityLabel("Match Case")

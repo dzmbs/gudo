@@ -80,12 +80,12 @@ nonisolated enum RowAction: String, Hashable, CaseIterable, Sendable {
     /// disabled.
     var tint: RowTint {
         switch self {
-        case .closeTab, .closeEditor, .stopAgent, .deleteWorktree, .removeHost: .red
-        case .stopServer, .disconnect, .archiveWorktree: .orange
-        case .markRead, .open, .openInNewWindow: .blue
-        case .markDone: .green
-        case .rename: .indigo
-        case .pin, .unpin: .yellow
+        case .closeTab, .closeEditor, .stopAgent, .deleteWorktree, .removeHost: .ends
+        case .stopServer, .disconnect, .archiveWorktree: .stops
+        case .markRead, .open, .openInNewWindow: .goes
+        case .markDone: .completes
+        case .rename: .edits
+        case .pin, .unpin: .pins
         }
     }
 
@@ -93,7 +93,7 @@ nonisolated enum RowAction: String, Hashable, CaseIterable, Sendable {
     var identifier: String { "row-action-\(rawValue)" }
 }
 
-nonisolated enum RowTint: Sendable { case red, orange, yellow, green, blue, indigo }
+nonisolated enum RowTint: Sendable { case ends, stops, pins, completes, goes, edits }
 
 /// A row's actions: what each swipe edge shows (outermost first) and what a full swipe does.
 nonisolated struct RowActions: Equatable, Sendable {

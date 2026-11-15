@@ -66,7 +66,7 @@ public struct PresenceAvatar: View {
     /// Black or white, whichever has more contrast with the fill (its components are linear).
     static func ink(on fill: Color.Resolved) -> Color {
         let luminance = 0.2126 * Double(fill.linearRed) + 0.7152 * Double(fill.linearGreen) + 0.0722 * Double(fill.linearBlue)
-        return 1.05 / (luminance + 0.05) >= (luminance + 0.05) / 0.05 ? .white : .black
+        return 1.05 / (luminance + 0.05) >= (luminance + 0.05) / 0.05 ? .white : .black // style-exempt: the extreme that reads on an ANSI hue
     }
 }
 

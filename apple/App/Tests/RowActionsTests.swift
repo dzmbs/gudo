@@ -74,7 +74,7 @@ final class RowActionsTests: XCTestCase {
         for action in RowAction.allCases {
             XCTAssertFalse(action.title.isEmpty)
             XCTAssertLessThanOrEqual(action.shortTitle.count, 10, "a swipe button holds one short word")
-            XCTAssertEqual(action.tint == .red, action.isDestructive && action != .stopServer, "\(action): red means it ends something")
+            XCTAssertEqual(action.tint == .ends, action.isDestructive && action != .stopServer, "\(action): red means it ends something")
         }
         XCTAssertEqual(RowAction.closeTab.systemImage, RowAction.closeEditor.systemImage)
         XCTAssertEqual(RowAction.removeHost.confirmation("studio").title, "Remove “studio”?")
