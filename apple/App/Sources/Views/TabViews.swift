@@ -38,8 +38,7 @@ struct WorkspaceSidebar: View {
         List {
             Group {
                 if showsDestinations {
-                    // One line for both, so the tabs start high in the column.
-                    HStack(spacing: 0) {
+                    VStack(spacing: 0) {
                         destinationRow(.inbox) {
                             CountBadge(model.needsYouCount)
                         }
@@ -118,14 +117,10 @@ struct WorkspaceSidebar: View {
         return Button {
             withAnimation(DS.Motion.standard) { model.destination = destination }
         } label: {
-            HStack(spacing: DS.Space.s) {
+            ListRow(Text(destination.title), titleFont: SidebarFont.title) {
                 Image(systemName: destination.systemImage)
                     .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
-                Text(destination.title)
-                    .font(SidebarFont.title)
-                    .lineLimit(1)
-                    .fixedSize()
-                Spacer(minLength: DS.Space.xs)
+            } trailing: {
                 trailing()
             }
             .sidebarRow(selected: selected)
