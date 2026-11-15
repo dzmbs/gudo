@@ -258,6 +258,7 @@ private struct DirectoryListing: View {
     @State private var trashing: FileEntry?
     @State private var transfer: Transfer?
     @State private var shared: SharedFile?
+    @State private var repositoryRoot: String?
     /// `-screen file-preview`: Cargo.toml opened once the root is listed.
     @State private var fixtureFile: FileEntry?
 
@@ -434,7 +435,12 @@ private struct DirectoryListing: View {
             if !entry.isDirectory {
                 Button(downloadTitle, systemImage: "square.and.arrow.down") { download(entry) }
             }
-            Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
+            if !entry.isDirectory {
+                Button("Copy File Contents", systemImage: "doc.on.clipboard") { copyContents(entry) }
+            }
+            ForEach(FileCopyAction.actions(path: entry.path, contents: nil, repositoryRoot: repositoryRoot)) { action in
+                Button(action.title, systemImage: action.systemImage) { FilesPasteboard.copy(action.text) }
+            }
             Divider()
             Button("Rename…", systemImage: "pencil") {
                 draftName = entry.name
@@ -672,11 +678,27 @@ private struct DirectoryListing: View {
         do {
             let loaded = await FileListingRows.sortedInBackground(try await source.list(directory))
             withAnimation(entries == nil ? nil : DS.Motion.standard) { entries = loaded }
+            repositoryRoot = await source.repositoryRoot(of: directory)
             for path in navigator?.expanded ?? [] where path.hasPrefix(directory + "/") {
                 await loadChildren(path)
             }
         } catch {
             problem = ToolProblem(error, path: directory)
+        }
+    }
+
+    private func copyContents(_ entry: FileEntry) {
+        Task {
+            do {
+                guard case .text(let text, truncated: false) = try await source.preview(entry.path) else {
+                    model.toasts.show(Toast("\(entry.name) isn't text under 1 MB. Download it instead.", systemImage: "doc", style: .neutral))
+                    return
+                }
+                FilesPasteboard.copy(text)
+            } catch {
+                model.toasts.show(Toast(
+                    "Couldn't read \(entry.name): \(ScreenError.describe(error))", systemImage: "exclamationmark.triangle.fill", style: .failure))
+            }
         }
     }
 
@@ -715,6 +737,7 @@ struct FilePreviewScreen: View {
     @State private var problem: ToolProblem?
     @State private var shared: SharedFile?
     @State private var downloading: Double?
+    @State private var repositoryRoot: String?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.toolLeaf) private var leaf
 
@@ -771,15 +794,22 @@ struct FilePreviewScreen: View {
             .disabled(downloading != nil)
             .accessibilityIdentifier("file-download")
         Menu("More", systemImage: "ellipsis") {
-            Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
-            Button("Insert Path in Terminal", systemImage: "text.insert") { actions.insertPath(entry.path) }
-            if case .text(let text, _)? = preview {
-                Button("Copy Contents", systemImage: "doc.on.clipboard") { FilesPasteboard.copy(text) }
+            ForEach(copyActions) { action in
+                Button(action.title, systemImage: action.systemImage) { FilesPasteboard.copy(action.text) }
             }
+            Divider()
+            Button("Insert Path in Terminal", systemImage: "text.insert") { actions.insertPath(entry.path) }
         }
         .menuIndicator(.hidden)
         .help("More")
         .accessibilityIdentifier("file-more")
+    }
+
+    /// The contents only when the whole file is shown.
+    private var copyActions: [FileCopyAction] {
+        var contents: String?
+        if case .text(let text, truncated: false)? = preview { contents = text }
+        return FileCopyAction.actions(path: entry.path, contents: contents, repositoryRoot: repositoryRoot)
     }
 
     /// The editor pane's strip, for a file: its kind, name, folder and what is shown of it,
@@ -865,6 +895,7 @@ struct FilePreviewScreen: View {
                 lineCount = await Task.detached(priority: .userInitiated) { Self.lineCount(text) }.value
             }
             preview = loaded
+            repositoryRoot = await source.repositoryRoot(of: (entry.path as NSString).deletingLastPathComponent)
         } catch {
             problem = ToolProblem(error, path: entry.path)
         }
@@ -899,8 +930,16 @@ private struct TextPreview: View {
     let text: String
     let truncated: Bool
     var body: some View {
-        NativeTextPreview(text: text, truncated: truncated)
-            .accessibilityIdentifier("file-text-preview")
+        VStack(alignment: .leading, spacing: 0) {
+            CodeTextView(text)
+            if truncated {
+                Text("Showing the first MiB. Download the file or open it in VS Code for the rest.")
+                    .font(DS.Font.rowSubtitle)
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .padding(DS.Space.l)
+            }
+        }
+        .accessibilityIdentifier("file-text-preview")
     }
 }
 

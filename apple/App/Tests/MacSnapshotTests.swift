@@ -760,6 +760,9 @@ final class MacSnapshotTests: XCTestCase {
                     actions: FileActions(openInEditor: { _ in }, revealInTerminal: { _ in }, insertPath: { _ in }))
             }
         }
+        try await tool("file-viewer-code") {
+            NavigationStack { FileViewerScreen(target: FileTarget(hostId: "studio", path: "~/projects/gudo/src/main.rs", line: 20)) }
+        }
     }
 
     private func tool(_ name: String, size: CGSize = CGSize(width: 960, height: 680), _ content: () -> some View) async throws {

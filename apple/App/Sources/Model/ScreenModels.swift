@@ -411,10 +411,13 @@ protocol FileSource: AnyObject {
     func watch(_ directory: String, onChange: @escaping @MainActor () -> Void) async -> FileWatch?
     /// A path as the user reads it: the host's home as `~`.
     func display(_ path: String) -> String
+    /// The repository holding `directory`, spelled as listed paths are; nil outside one.
+    func repositoryRoot(of directory: String) async -> String?
 }
 
 extension FileSource {
     func display(_ path: String) -> String { path }
+    func repositoryRoot(of directory: String) async -> String? { nil }
 }
 
 // MARK: - Diffs

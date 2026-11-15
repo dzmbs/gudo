@@ -13,11 +13,19 @@ import AppKit
 protocol FileReading {
     func stat(_ path: String) async throws -> FileFacts
     func read(_ path: String, offset: UInt64, length: UInt32) async throws -> FileBytes
+    /// The repository holding `folder`, nil outside one.
+    func repositoryRoot(of folder: String) async -> String?
+}
+
+extension FileReading {
+    func repositoryRoot(of folder: String) async -> String? { nil }
 }
 
 struct FileFacts: Equatable {
     var isDirectory: Bool
     var size: UInt64
+    /// The path as the host spells it (`~` expanded), when it says.
+    var path: String?
 }
 
 struct FileBytes: Equatable {
@@ -30,12 +38,17 @@ struct DaemonFileReader: FileReading {
 
     func stat(_ path: String) async throws -> FileFacts {
         let stat = try await api().fsStat(path: path)
-        return FileFacts(isDirectory: stat.kind == .dir || stat.targetKind == .dir, size: stat.size)
+        return FileFacts(isDirectory: stat.kind == .dir || stat.targetKind == .dir, size: stat.size, path: stat.path)
     }
 
     func read(_ path: String, offset: UInt64, length: UInt32) async throws -> FileBytes {
         let chunk = try await api().fsRead(path: path, offset: offset, len: length)
         return FileBytes(data: chunk.data, isEnd: chunk.eof)
+    }
+
+    func repositoryRoot(of folder: String) async -> String? {
+        guard let api = try? api() else { return nil }
+        return await api.repositoryRoot(of: folder)
     }
 }
 
@@ -44,7 +57,11 @@ struct LocalFileReader: FileReading {
         let expanded = (path as NSString).expandingTildeInPath
         let attributes = try FileManager.default.attributesOfItem(atPath: expanded)
         let isDirectory = (attributes[.type] as? FileAttributeType) == .typeDirectory
-        return FileFacts(isDirectory: isDirectory, size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0)
+        return FileFacts(isDirectory: isDirectory, size: (attributes[.size] as? NSNumber)?.uint64Value ?? 0, path: expanded)
+    }
+
+    func repositoryRoot(of folder: String) async -> String? {
+        await Task.detached(priority: .userInitiated) { RepositoryPath.localRoot(of: folder) }.value
     }
 
     func read(_ path: String, offset: UInt64, length: UInt32) async throws -> FileBytes {
@@ -54,17 +71,6 @@ struct LocalFileReader: FileReading {
         let data = try handle.read(upToCount: Int(length)) ?? Data()
         return FileBytes(data: data, isEnd: data.count < Int(length))
     }
-}
-
-/// Colours for a file's lines. Plain until a highlighter is plugged in.
-struct CodeHighlighter: Sendable {
-    var attributedLines: @MainActor @Sendable (_ lines: [String], _ fileExtension: String) -> [AttributedString]?
-
-    static let plain = CodeHighlighter { _, _ in nil }
-}
-
-extension EnvironmentValues {
-    @Entry var codeHighlighter = CodeHighlighter.plain
 }
 
 /// A run of a file's lines: all of it, or the part around the line asked for.
@@ -92,6 +98,8 @@ final class FileViewerModel {
     let target: FileTarget
     private let reader: any FileReading
     private(set) var content = FileViewerContent.loading
+    private(set) var resolvedPath: String?
+    private(set) var repositoryRoot: String?
 
     static let chunkSize: UInt32 = 1 << 20
     /// Chunks read, at most, looking for a line.
@@ -105,11 +113,13 @@ final class FileViewerModel {
     func load() async {
         do {
             let facts = try await reader.stat(target.path)
+            resolvedPath = facts.path
             if facts.isDirectory {
                 content = .directory
                 return
             }
             content = try await window(size: facts.size)
+            repositoryRoot = await reader.repositoryRoot(of: ((facts.path ?? target.path) as NSString).deletingLastPathComponent)
         } catch let error as WorkspaceError {
             if case .NotFound = error { content = .missing } else { content = .failed(ToolProblem(error, path: target.path)) }
         } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
@@ -117,6 +127,17 @@ final class FileViewerModel {
         } catch {
             content = .failed(ToolProblem(error, path: target.path))
         }
+    }
+
+    /// What the menu copies. The contents only when the whole file is shown.
+    var copyActions: [FileCopyAction] {
+        var contents: String?
+        if case .text(let window) = content, !window.hasEarlier, !window.hasLater {
+            contents = window.lines.joined(separator: "\n")
+        }
+        return FileCopyAction.actions(
+            path: target.path, resolvedPath: resolvedPath, line: target.line, column: target.column,
+            contents: contents, repositoryRoot: repositoryRoot)
     }
 
     private func window(size: UInt64) async throws -> FileViewerContent {
@@ -278,10 +299,10 @@ private struct FileViewerBody: View {
                 Divider()
             }
             #endif
-            Button("Copy Path", systemImage: "doc.on.doc") { FileViewerPasteboard.copy(target.path) }
-            if target.line != nil {
-                Button("Copy Path and Line", systemImage: "number") { FileViewerPasteboard.copy(target.pathWithLine) }
+            ForEach(model.copyActions) { action in
+                Button(action.title, systemImage: action.systemImage) { FileViewerPasteboard.copy(action.text) }
             }
+            Divider()
             Button("Show in Files", systemImage: "folder") { window.revealInFiles(target.folder, hostId: target.hostId) }
             Button("Insert in Terminal", systemImage: "text.insert") { window.insertInTerminal(target.path) }
             Divider()
@@ -303,64 +324,15 @@ struct FileLinesView: View {
     let window: FileWindow
     let target: FileTarget
     @Environment(\.terminalTheme) private var theme
-    @Environment(\.chrome) private var chrome
-    @Environment(\.codeHighlighter) private var highlighter
-
-    private static let rowHeight: CGFloat = 18
 
     var body: some View {
-        let styled = highlighter.attributedLines(window.lines, target.fileExtension)
-        let numberWidth = CGFloat(max(3, String(window.lastLine).count)) * 9 + DS.Space.l
-        ScrollViewReader { proxy in
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    if window.hasEarlier { notice("Earlier lines aren't shown.") }
-                    ForEach(window.lines.indices, id: \.self) { index in
-                        row(index: index, styled: styled?[safe: index], numberWidth: numberWidth)
-                            .id(window.firstLine + index)
-                    }
-                    if window.hasLater { notice("Showing part of the file. Open it in VS Code for the rest.") }
-                }
-                .padding(.vertical, DS.Space.s)
-                .textSelection(.enabled)
-            }
-            .defaultScrollAnchor(.topLeading)
-            .defaultScrollAnchor(.topLeading, for: .alignment)
-            .onAppear { scroll(proxy) }
-            .onChange(of: target) { scroll(proxy) }
+        VStack(alignment: .leading, spacing: 0) {
+            if window.hasEarlier { notice("Earlier lines aren't shown.") }
+            CodeTextView(window.lines.joined(separator: "\n"), firstLine: window.firstLine, markedLine: target.line)
+            if window.hasLater { notice("Showing part of the file. Open it in VS Code for the rest.") }
         }
         .background(theme.background)
         .accessibilityIdentifier("file-viewer-lines")
-    }
-
-    private func scroll(_ proxy: ScrollViewProxy) {
-        guard let line = target.line, line >= window.firstLine, line <= window.lastLine else { return }
-        proxy.scrollTo(line, anchor: .center)
-    }
-
-    private func row(index: Int, styled: AttributedString?, numberWidth: CGFloat) -> some View {
-        let number = window.firstLine + index
-        let isTarget = number == target.line
-        let text = window.lines[index]
-        return HStack(spacing: 0) {
-            Text(verbatim: "\(number)")
-                .font(DS.Font.literal.monospacedDigit())
-                .foregroundStyle(isTarget ? DS.Palette.text : DS.Palette.textQuaternary)
-                .frame(width: numberWidth, alignment: .trailing)
-                .padding(.trailing, DS.Space.m)
-            Group {
-                if let styled { Text(styled) } else { Text(verbatim: text.isEmpty ? " " : text) }
-            }
-            .font(DS.Font.literal)
-            .foregroundStyle(theme.foreground)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.trailing, DS.Space.l)
-        }
-        .frame(height: Self.rowHeight, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(DS.Palette.accentDim.opacity(isTarget ? 1 : 0))
-        .accessibilityAddTraits(isTarget ? .isSelected : [])
     }
 
     private func notice(_ words: String) -> some View {
@@ -434,16 +406,18 @@ struct MockFileReader: FileReading {
 
     func stat(_ path: String) async throws -> FileFacts {
         guard let text = Self.files[path] else { throw WorkspaceError.NotFound(message: path) }
-        return FileFacts(isDirectory: false, size: UInt64(text.utf8.count))
+        return FileFacts(isDirectory: false, size: UInt64(text.utf8.count), path: path)
     }
+
+    func repositoryRoot(of folder: String) async -> String? {
+        PathMatch.isInside(folder, Self.repositoryRoot) ? Self.repositoryRoot : nil
+    }
+
+    static let repositoryRoot = "~/projects/gudo"
 
     func read(_ path: String, offset: UInt64, length: UInt32) async throws -> FileBytes {
         guard let text = Self.files[path] else { throw WorkspaceError.NotFound(message: path) }
         let bytes = Data(text.utf8).dropFirst(Int(offset)).prefix(Int(length))
         return FileBytes(data: Data(bytes), isEnd: Int(offset) + bytes.count >= text.utf8.count)
     }
-}
-
-private extension Array {
-    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }

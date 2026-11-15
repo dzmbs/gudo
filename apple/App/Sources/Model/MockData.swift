@@ -279,6 +279,7 @@ final class MockFileSource: FileSource {
         return url
     }
     func watch(_ directory: String, onChange: @escaping @MainActor () -> Void) async -> FileWatch? { nil }
+    func repositoryRoot(of directory: String) async -> String? { PathMatch.isInside(directory, root) ? root : nil }
 }
 
 /// The editor as the first run shows it (`-screen editor -mock`): VS Code being set up.

@@ -876,6 +876,11 @@ final class LiveFileSource: FileSource {
         }
     }
 
+    func repositoryRoot(of directory: String) async -> String? {
+        guard let api = try? api() else { return nil }
+        return await api.repositoryRoot(of: directory)
+    }
+
     func read(_ path: String) async throws -> String {
         let chunk = try await api().fsRead(path: path, offset: 0, len: 1 << 20)
         return String(decoding: chunk.data, as: UTF8.self)
