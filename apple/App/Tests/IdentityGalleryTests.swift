@@ -68,13 +68,16 @@ final class IdentityGalleryTests: XCTestCase {
 
     private static func arrange(_ model: WindowModel, selecting selectedIndex: Int) {
         guard let workspace = model.workspace else { return }
+        // The mock host keeps its tabs across windows: start every capture from these alone.
+        let earlierTabs = workspace.session.tabs.map(\.id)
         var fixture: [String: (program: String, state: AgentState?)] = [:]
-        for (index, tab) in tabs.enumerated() {
-            if index > 0 { workspace.apply(.newTab) }
+        for tab in tabs {
+            workspace.apply(.newTab)
             guard let id = workspace.session.activeTabId, let pane = workspace.focusedPane else { continue }
             workspace.apply(.rename(id, tab.name))
             fixture[pane.description] = (tab.program, tab.state)
         }
+        for id in earlierTabs { workspace.apply(.closeTab(id)) }
         if let first = workspace.session.tabs.first {
             workspace.selectTab(first.id)
             for (index, split) in splitPanes.enumerated() {
