@@ -35,6 +35,12 @@ struct WorkspaceSidebar: View {
         #if DEBUG
         let _ = ChromeRenders.note("sidebar")
         #endif
+        ScrollViewReader { proxy in
+            list.background(ActiveRowReveal(geometry: geometry, scroll: scroll, proxy: proxy))
+        }
+    }
+
+    private var list: some View {
         List {
             Group {
                 if showsDestinations {
@@ -64,9 +70,12 @@ struct WorkspaceSidebar: View {
         .contentMargins(.all, 0, for: .scrollContent)
         .coordinateSpace(name: "sidebar-list")
         // Written here, read only by the pinned header, so scrolling never rebuilds the list.
-        .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y, $0.contentInsets.top] } action: { _, values in
+        .onScrollGeometryChange(for: [CGFloat].self) {
+            [$0.contentOffset.y, $0.contentInsets.top, $0.containerSize.height - $0.contentInsets.bottom]
+        } action: { _, values in
             scroll.offset = values[0]
             scroll.top = values[1]
+            scroll.bottom = values[2]
         }
         .overlay(alignment: .top) {
             if listStyle == .plain {
@@ -128,6 +137,23 @@ struct WorkspaceSidebar: View {
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("sidebar-\(destination.rawValue)")
+    }
+}
+
+/// Keeps the active tab's row in view; a view of its own so a tab change re-renders only this.
+private struct ActiveRowReveal: View {
+    let geometry: SidebarGeometry
+    let scroll: SidebarScroll
+    let proxy: ScrollViewProxy
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        Color.clear
+            .onChange(of: model.destination == .terminal ? model.currentTab : nil) { _, ref in
+                guard let ref else { return }
+                // Once the list has laid out the row a new tab adds.
+                Task { @MainActor in geometry.reveal(ref, scroll: scroll, proxy: proxy) }
+            }
     }
 }
 

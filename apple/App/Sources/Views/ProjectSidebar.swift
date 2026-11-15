@@ -106,6 +106,8 @@ final class SidebarDragState {
 final class SidebarGeometry {
     var frames: [String: CGRect] = [:]
     var items: [String: SidebarItem] = [:]
+    /// The items' ids in list order.
+    var order: [String] = []
     var sections: [SidebarSection] = []
 
     func item(at point: CGPoint) -> (SidebarItem, CGRect)? {
@@ -286,6 +288,7 @@ private extension SidebarItem {
 private extension SidebarGeometry {
     func record(_ items: [SidebarItem], _ sections: [SidebarSection]) {
         self.items = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        order = items.map(\.id)
         frames = frames.filter { self.items[$0.key] != nil }
         self.sections = sections
     }
@@ -590,6 +593,60 @@ final class SidebarScroll {
     var offset: CGFloat = 0
     /// Where the list's content starts under the window's bars.
     var top: CGFloat = 0
+    /// Where it ends over the footer, in the list's own space.
+    @ObservationIgnored var bottom: CGFloat = 0
+}
+
+/// Which way the list scrolls to show a row: not at all while the row shows whole.
+enum SidebarReveal: Equatable {
+    case none, up, down
+
+    /// `frames` holds only the rows the list has laid out; a row without one lies past the
+    /// shown rows on one side, read from `order`.
+    static func move(to target: String, in order: [String], frames: [String: CGRect], visible: ClosedRange<CGFloat>) -> SidebarReveal {
+        if let frame = frames[target] {
+            if frame.minY < visible.lowerBound { return .up }
+            if frame.maxY > visible.upperBound { return .down }
+            return .none
+        }
+        guard let index = order.firstIndex(of: target) else { return .none }
+        let shown = order.indices.filter { frames[order[$0]].map { $0.maxY > visible.lowerBound && $0.minY < visible.upperBound } ?? false }
+        guard let firstShown = shown.first, let lastShown = shown.last else { return .none }
+        if index < firstShown { return .up }
+        if index > lastShown { return .down }
+        return .none
+    }
+
+    /// Where the row lands: at the bottom edge going down; going up, at the top just under
+    /// what covers it (a pinned project header). An anchor aligns the same point of the row
+    /// and of the viewport, so the row's top sits `covered` below the viewport's top.
+    static func anchor(for move: SidebarReveal, covered: CGFloat, viewport: CGFloat, rowHeight: CGFloat) -> UnitPoint? {
+        switch move {
+        case .none: return nil
+        case .down: return .bottom
+        case .up:
+            guard covered > 0, viewport > rowHeight else { return .top }
+            return UnitPoint(x: 0.5, y: min(1, covered / (viewport - rowHeight)))
+        }
+    }
+}
+
+extension SidebarGeometry {
+    /// Scrolls `proxy` so `ref`'s row shows whole, the least way, when it does not.
+    func reveal(_ ref: TabRef, scroll: SidebarScroll, proxy: ScrollViewProxy) {
+        guard let item = items.values.first(where: { if case .row(let row, _) = $0 { row == ref } else { false } }) else { return }
+        let header: String? = if case .row(_, .project(let project)) = item { SidebarItem.projectHeader(project).id } else { nil }
+        let covered = header.flatMap { frames[$0]?.height } ?? 0
+        let visible = scroll.top + covered...max(scroll.top + covered, scroll.bottom)
+        let move = SidebarReveal.move(to: item.id, in: order, frames: frames, visible: visible)
+        let rowHeight = frames[item.id]?.height ?? frames.values.map(\.height).min() ?? 0
+        // The list's own least travel, which leaves a row in view where it is; only a row
+        // under the pinned header needs an anchor of ours. Frames of rows the list has
+        // scrolled away can be stale, so they never veto the scroll.
+        let anchor = move == .up && covered > 0
+            ? SidebarReveal.anchor(for: move, covered: covered, viewport: scroll.bottom - scroll.top, rowHeight: rowHeight) : nil
+        withAnimation(DS.Motion.standard) { proxy.scrollTo(item.id, anchor: anchor) }
+    }
 }
 
 /// The header of the project whose rows run under the list's top edge, pinned there until the
