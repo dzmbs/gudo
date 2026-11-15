@@ -30,6 +30,8 @@ struct ChatRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.Space.xl)
             .padding(.vertical, DS.Space.s)
+            .frame(maxWidth: ChatReadingColumn.maximumWidth)
+            .frame(maxWidth: .infinity)
             .foregroundStyle(DS.Palette.text)
             .buttonStyle(ChatRowButtonStyle())
             .contextMenu {

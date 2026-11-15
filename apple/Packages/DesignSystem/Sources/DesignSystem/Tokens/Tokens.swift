@@ -79,6 +79,8 @@ public extension DS {
         public static let proseTableLineHeight: CGFloat = 24
         public static let proseOutputLineHeight: CGFloat = 16
         public static let proseDiffLineHeight: CGFloat = 20
+        /// Chat's reading column: about 75 characters of body text, the comfortable line length.
+        public static let proseReadingWidth: CGFloat = 680
         /// macOS 26 titlebar tabs are 28 inside a 36 bar.
         public static let tabBar: CGFloat = 36
         public static let tab: CGFloat = 28

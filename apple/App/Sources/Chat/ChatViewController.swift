@@ -429,7 +429,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             let height: CGFloat
             if let cached = heights.peek(key(row)) { height = cached }
             else if old.contentWidth == width, let index = old.indices[row.id.storageKey] { height = old.rows[index].height }
-            else { height = ChatRowEstimate.height(for: row, rowWidth: width, scale: scale) }
+            else { height = ChatRowEstimate.height(for: row, rowWidth: ChatReadingColumn.rowWidth(in: width), scale: scale) }
             return NativeListRow(id: row.id.storageKey, height: max(1, height))
         }
         if kept > 0 { document.replaceRows(from: kept, with: tail) }

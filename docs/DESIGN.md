@@ -129,6 +129,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
 | Strip chip width | an equal share of the strip, 160 to 240 pt; more tabs scroll | - |
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
+| Chat reading column | 680 pt of text, centred; full width on iPhone | about 75 characters of body text |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
 | Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
 
