@@ -14,6 +14,7 @@ struct ReplaySettingsSection: View {
                 .settingAnchor("record-agent-sessions")
             LabeledContent("Saved Replays") {
                 Text(store.sessions.isEmpty ? "None" : "\(store.sessions.count) · \(ByteCountFormatter.string(fromByteCount: Int64(store.totalSize), countStyle: .file))")
+                    .monospacedDigit()
             }
             Button("Delete All Replays", role: .destructive) { confirmDelete = true }
                 .buttonStyle(.formAction)

@@ -239,6 +239,7 @@ private struct ControlChip: View {
                 TimelineView(.periodic(from: pending.since, by: 1)) { context in
                     let secondsLeft = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(pending.since)))
                     Text(secondsLeft > 0 ? "· yours if idle \(secondsLeft) s" : "· waiting for an answer")
+                        .monospacedDigit()
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .contentTransition(.numericText(countsDown: true))
@@ -298,6 +299,7 @@ private struct LeaseRequestCard: View {
                     TimelineView(.periodic(from: request.at, by: 1)) { context in
                         let secondsLeft = max(0, Int((session.leaseIdle / .seconds(1)).rounded()) - Int(context.date.timeIntervalSince(request.at)))
                         Text(secondsLeft > 0 ? "Hands over in \(secondsLeft) s if you stay idle" : "Hands over when you stop typing")
+                            .monospacedDigit()
                             .font(DS.Font.meta)
                             .foregroundStyle(DS.Palette.textSecondary)
                             .lineLimit(1)

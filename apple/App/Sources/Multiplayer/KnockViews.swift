@@ -165,6 +165,7 @@ struct KnockBanner: View {
                         .font(.callout.weight(.semibold))
                         .lineLimit(1)
                     Text(session.knocks.count > 1 ? "\(session.knocks.count - 1) more in Agents" : "Their link offers \(roleWords(knock.roles))")
+                        .monospacedDigit()
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)

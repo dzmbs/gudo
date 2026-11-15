@@ -89,7 +89,7 @@ struct PRPopover: View {
         (Text(pr.stateWord + " ").foregroundStyle(DS.Palette.textSecondary)
             + Text(pr.title)
             + Text(" #\(pr.number)").foregroundStyle(DS.Palette.textSecondary))
-            .font(.headline)
+            .font(.headline.monospacedDigit())
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
         Text(summary(pr))

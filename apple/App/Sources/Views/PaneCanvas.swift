@@ -979,6 +979,7 @@ private struct TrayChip: View {
                     .lineLimit(1)
                 if chip.panes.count > 1 {
                     Text("+\(chip.panes.count - 1)")
+                        .monospacedDigit()
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
                 }

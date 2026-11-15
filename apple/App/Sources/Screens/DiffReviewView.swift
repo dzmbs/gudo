@@ -211,6 +211,7 @@ struct DiffReviewView: View {
                 .foregroundStyle(theme.foreground)
             HStack(spacing: DS.Space.xs) {
                 Text("\(files.count) \(files.count == 1 ? "file" : "files")")
+                    .monospacedDigit()
                     .foregroundStyle(DS.Palette.textSecondary)
                 Text("·").foregroundStyle(DS.Palette.textTertiary)
                 Text("+\(additions)").foregroundStyle(theme.ansi(2))
@@ -321,7 +322,7 @@ struct DiffReviewView: View {
             HStack(spacing: DS.Space.m) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(notes.count) \(notes.count == 1 ? "note" : "notes")")
-                        .font(DS.Font.rowTitleEmphasis)
+                        .font(DS.Font.rowTitleEmphasis.monospacedDigit())
                     Text(reviewer.map { "Goes to \($0) as one prompt" } ?? "No agent runs in this repository")
                         .font(DS.Font.rowSubtitle)
                         .foregroundStyle(DS.Palette.textSecondary)

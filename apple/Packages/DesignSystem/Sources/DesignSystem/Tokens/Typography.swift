@@ -26,7 +26,8 @@ public extension DS {
         public static let section = SwiftUI.Font.subheadline.weight(.semibold)
         /// Monospaced digits so columns do not jitter.
         public static let meta = SwiftUI.Font.caption.monospacedDigit()
-        public static let badge = SwiftUI.Font.caption2.weight(.medium)
+        /// Pills and badges: counts and ages, so monospaced digits.
+        public static let badge = SwiftUI.Font.caption2.weight(.medium).monospacedDigit()
         /// Paths, commands, host names, diff and file content.
         public static let literal = SwiftUI.Font.system(.callout, design: .monospaced)
         public static let literalSmall = SwiftUI.Font.system(.caption, design: .monospaced)

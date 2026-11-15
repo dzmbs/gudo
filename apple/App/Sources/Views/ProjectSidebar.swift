@@ -700,6 +700,7 @@ private struct ProjectHeader: View {
             Spacer(minLength: DS.Space.xs)
             if collapsed, !project.tabs.isEmpty {
                 Text(project.tabs.count == 1 ? "1 tab" : "\(project.tabs.count) tabs")
+                    .monospacedDigit()
                     .font(SidebarFont.number)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .contentTransition(.numericText())

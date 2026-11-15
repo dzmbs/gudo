@@ -125,7 +125,7 @@ private struct ReplaySessionRow: View {
                     .font(DS.Font.rowTitleEmphasis)
                     .lineLimit(1)
                 Text("\(session.actions.count) steps · \(session.started.formatted(date: .abbreviated, time: .shortened))")
-                    .font(DS.Font.rowSubtitle)
+                    .font(DS.Font.rowSubtitle.monospacedDigit())
                     .foregroundStyle(DS.Palette.textSecondary)
                     .monospacedDigit()
             }

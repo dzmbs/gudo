@@ -19,7 +19,7 @@ struct ChatOutputPager: View {
             if let page = reader.page {
                 let end = page.offset + UInt64(page.text.utf8.count)
                 Text("Bytes \(page.offset.formatted()) to \(end.formatted()) of \(page.totalBytes.formatted())")
-                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .font(DS.Font.caption.monospacedDigit()).foregroundStyle(DS.Palette.textSecondary)
                     .padding(.horizontal, DS.Space.l).frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier(messages.identifier + "-range")
                 if page.text.isEmpty {

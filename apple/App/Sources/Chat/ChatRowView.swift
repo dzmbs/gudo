@@ -275,7 +275,7 @@ struct ChatRowView: View {
     private func turnEndContent(_ item: TimelineItem, end: TimelineTurnEnd) -> some View {
         HStack(spacing: DS.Space.s) {
             Text("Worked for \(duration(end.durationMs))")
-            if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens") }
+            if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens").monospacedDigit() }
             Spacer(minLength: 0)
             if actions.supportsDiffs {
                 Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }

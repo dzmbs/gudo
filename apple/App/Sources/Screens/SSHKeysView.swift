@@ -105,6 +105,7 @@ struct SSHKeysSettingsSection: View {
                 LabeledContent("SSH Keys") {
                     Text(keys.keys.isEmpty ? "None" : "\(keys.keys.count)")
                         .monospacedDigit()
+                        .monospacedDigit()
                 }
             }
             .accessibilityIdentifier("settings-ssh-keys")

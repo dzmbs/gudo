@@ -45,6 +45,7 @@ public struct PeopleSwitcher: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(people.count == 1 ? "1 person here" : "\(people.count) people here")
+                .monospacedDigit()
                 .font(DS.Font.sectionSmall)
                 .foregroundStyle(DS.Palette.textSecondary)
                 .padding(.horizontal, DS.Space.m + DS.Space.xxs)

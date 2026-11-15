@@ -147,7 +147,7 @@ struct RepoFoldRow: View {
                         .lineLimit(1)
                     Text("\(fold.folded.count) more")
                         .fixedSize()
-                        .font(SidebarFont.subtitle)
+                        .font(SidebarFont.subtitle.monospacedDigit())
                         .lineLimit(1)
                     Spacer(minLength: DS.Space.xs)
                 }

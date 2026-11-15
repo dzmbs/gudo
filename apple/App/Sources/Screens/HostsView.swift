@@ -408,10 +408,12 @@ private struct HostRow: View {
                     HStack(spacing: 3) {
                         StatusIndicator(state, size: 11)
                         Text("\(host.agentCounts[state] ?? 0)")
+                            .monospacedDigit()
                     }
                 }
                 if host.sessionCount > 0 {
                     Text(host.sessionCount == 1 ? "1 tab" : "\(host.sessionCount) tabs")
+                        .monospacedDigit()
                 }
             }
             .font(DS.Font.meta)
@@ -431,6 +433,7 @@ private struct HostRow: View {
     @ViewBuilder private var detail: some View {
         if let progress = host.progress {
             Text(progress)
+                .monospacedDigit()
                 .font(.footnote)
                 .foregroundStyle(DS.Palette.working)
                 .monospacedDigit()
