@@ -173,6 +173,7 @@ private struct GallerySheet: View {
         let chrome = ChromePalette(theme: theme)
         VStack(alignment: .leading, spacing: DS.Space.xxl) {
             GallerySection("Surfaces and text") { SurfaceRamp() }
+            GallerySection("Surface recipe") { SurfaceRecipe() }
             GallerySection("Accent and states") { AccentAndStates() }
             GallerySection("Control states") { ControlStateLadder() }
             GallerySection("Buttons") { ButtonMatrix() }
@@ -232,6 +233,22 @@ private struct SurfaceRamp: View {
                 .overlay(RoundedRectangle(cornerRadius: DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
             }
         }
+    }
+}
+
+private struct SurfaceRecipe: View {
+    var body: some View {
+        HStack(spacing: DS.Space.l) {
+            ForEach(Surface.allCases, id: \.self) { surface in
+                Text(String(describing: surface))
+                    .font(DS.Font.meta)
+                    .foregroundStyle(DS.Palette.text)
+                    .frame(width: 110, height: surface == .selection ? 28 : 72)
+                    .surface(surface, in: RoundedRectangle.rounded(surface == .selection ? DS.Radius.field : DS.Radius.pane))
+            }
+        }
+        .padding(DS.Space.xxl)
+        .background(DS.Palette.sidebar)
     }
 }
 

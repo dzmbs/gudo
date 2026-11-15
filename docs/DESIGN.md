@@ -57,7 +57,9 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `accentDim` / `accentRing` | the accent at 12 % (the container strength) / 25 % | a pressed accent control, a lit pane-header button, drop targets, a note under review / a field's focus halo outside its solid accent edge |
 | `doneContainer` … `infoContainer`, `container(_:)` | a signal over the surface under it at one strength, 12 %: the weakest tint that stands apart from its surface (1.2:1 on average over all 771 Ghostty themes). The signal moves just far enough to read on its own container at 4.5:1 (0.04 OKLab lightness on average) | status chips, the toast's and update card's disc, git status letters, project drop targets |
 | `scrollbar` / `scrollbarActive` | foreground at 25 % / at the tertiary level (≥ 3:1) | a hand-drawn scrollbar at rest / scrolling or under the pointer |
-| `edge` | foreground at 8 % (light) / 16 % plus-lighter (dark), one physical pixel | glass edges, lifted panes, float cards |
+| `edge` | foreground at 8 % (light) / 16 % plus-lighter (dark), one physical pixel | every surface's inner edge (Surfaces) |
+| `outline` | the scrim's darker ink at 10 % (light) / 50 % (dark), one physical pixel | every floating or pane surface's outer edge |
+| `topLight` | white at 60 % (light) / the lighter ink at 14 % plus-lighter (dark), one physical pixel fading out within 24 pt | the light along a surface's top |
 | `scrim` | the darker ink taken halfway to black, at 10 % (light) / 28 % (dark) | behind the command palette |
 | `veil` | the terminal background at 40 % | over a saved screen, a pane being moved, a pane shielded while sketching |
 | `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue. Where that falls short of 4.5:1, its OKLab lightness moves away from the surfaces with the hue kept | state glyphs and words, status chips (on their container, radius `chip`), diff counts, PR states |
@@ -234,21 +236,57 @@ layout.
 
 ### Shadows and edges
 
-Two shadows (`.shadow(DS.Shadow.float)`, or `.shadow(_:visible:)` for one that comes and goes: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12,
-16 % / 45 %), never a third. Every floating glass surface (`floatingPanel`,
-`floatingCapsule`) carries `glassEdge`: one physical pixel of `edge` (the ink at 16 % plus-lighter on dark, 8 % on light)
-(as Ghostty's key pill), and turns opaque under Reduce Transparency.
+Two shadows (`.float`: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12, 16 % / 45 %),
+never a third, and only through a surface (below). Edges are one physical pixel: `edge` inside
+(as Ghostty's key pill), `outline` outside.
+
+### Surfaces
+
+Depth comes from one recipe, `Surface` (`Tokens/Surface.swift`), applied with
+`.surface(_:in:)`: a fill, one physical pixel of `edge` inside the shape, one of `outline` just
+outside it, a faint `topLight` along its top (a stroke masked to fade out within 24 pt, not
+another shadow) and at most one of the two shadows, on continuous corners. No surface draws its
+own stroke or shadow (`StyleLintTests`).
+
+| Surface | Fill | Inner edge | Outer edge | Top light | Shadow | Use |
+|---|---|---|---|---|---|---|
+| `tile` | the terminal | - | - | - | - | a compact pane (its boundary is the split's line), a docked pane |
+| `pane` | the terminal | ✓ | ✓ | ✓ | - | a comfortable pane: opaque, never glass |
+| `window` | the terminal | ✓ | ✓ | ✓ | `panel` | a floating pane and the card under a window of several, picture in picture |
+| `card` | glass | ✓ | ✓ | ✓ | `float` | `floatingCapsule`, `floatingPanel`: toasts, notices, the update card, reconnect, control-request, knock and secret cards, a sidebar row being dragged |
+| `panel` | glass | ✓ | ✓ | ✓ | `panel` | `floatingPanel(elevated:)`: the command palette, workflow forms |
+| `selection` | `selectedFill` | ✓ | - | ✓ | - | the selected tab's pill in the strip |
+
+- **Light and dark.** On dark chrome the edge and the top light add light (plus-lighter: the ink
+  at 16 % and 14 %); on light chrome the edge is the ink at 8 % and the top light white at 60 %,
+  a bevel that only shows on a surface darker than paper, so light themes get the subtler one.
+  `outline` is the scrim's darker ink at 10 % (light) / 50 % (dark).
+- **Increase Contrast.** The inner edge is `border` (the ink at 20 %) at full strength, even in an
+  inactive window, and the top light goes: firm, flat edges.
+- **Reduce Transparency.** Glass is the chrome's paper, opaque (`GlassSurface`); edges, light and
+  shadow stay.
+- **Inactive window.** A window that is not key (`appearsActive`: the Mac's key window, the iPad
+  scene that is not foreground active) recedes: edges at half strength, no top light, `panel`
+  becomes `float`, the selected tab's pill drops to the hover fill, the selected sidebar row to
+  the soft accent, and unfocused panes dim further (their opacity × 0.85). The terminal grid's
+  own colours never change.
 
 ### Checks
 
 - `StyleLintTests` (DesignSystem) reads every source file of the app and the packages and fails on
   a raw or system colour, a literal opacity on a colour, a literal corner radius, a corner that
-  is not continuous or a half-point line outside the token files. Content that is not chrome
+  is not continuous or a half-point line outside the token files, and on a shadow, glass or a
+  surface edge drawn outside `Surface` (the recipe's own files); `everyNamedSurfaceIsBuiltByTheRecipe`
+  checks that each surface named in Surfaces is built with `.surface` (or `floatingPanel` and
+  `floatingCapsule`, which are surfaces). Content that is not chrome
   (the camera, a QR code, the pencil's ink, the system keyboard's keys, masks) says why on the
   line: `// style-exempt: <reason>`.
 - `ThemeStressTests` holds the colour guarantees above over every Ghostty theme.
-- `DesignGalleryTests` (AppTests, Mac) renders the tokens, every control state, chips, toasts,
-  the update card and the palette, and the window in the compact and comfortable pane styles,
+- `SurfaceTests` holds the recipe: which surfaces are edged, lit, opaque or glass, the two
+  shadows, and the inactive, Increase Contrast and Reduce Transparency variants.
+- `DesignGalleryTests` (AppTests, Mac) renders the tokens, every surface of the recipe, every
+  control state, chips, toasts, the update and reconnect cards and the palette, and the window
+  (with a floating pane too) in the compact and comfortable pane styles,
   dark and light, active and inactive, with and without Increase Contrast:
   `TEST_RUNNER_GUDO_DESIGN_GALLERY_DIR=<dir> TEST_RUNNER_GUDO_MOCK=1`.
 - `InteractionGalleryTests` (AppTests, Mac) renders the palette, the switchers, toasts (each
@@ -271,10 +309,10 @@ Two shadows (`.shadow(DS.Shadow.float)`, or `.shadow(_:visible:)` for one that c
 | `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), hover and press from `ControlState`, radius `field`. Glass stays on bars and floating surfaces |
 | `ControlState`, `controlFill(_:in:)`, `ControlFillShape`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | the one interaction scale every button style and hand-drawn control uses: rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `micro`. The accent variant (`tint: .accent`) keeps hover neutral, presses with `accentDim` and selects with `selection`. A push button's bezel is its selected state. Disabled drops the fill (keeping a selection) and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why. No component has its own alphas |
 | `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and the `accentRing` halo while focused; typed literals in SF Mono, the prompt in prose |
-| `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
+| `Surface`, `.surface(_:in:fill:interactive:)` | `Tokens/Surface.swift` | the one recipe for depth; see Surfaces |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in the label that reads on it (`on(_:)`), the word under it on tall rows, the theme's signals in Mail's vocabulary (red ends, amber stops, blue goes, green completes, violet edits, bright yellow pins; never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it; ↩ chooses, esc closes, the key hint bar at its foot; a host that needs you carries an amber dot, an amber ! under Differentiate Without Color |
-| `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
+| `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass `Surface.card` (`Surface.panel` when elevated); bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
 | `ChromeAccessibility`, `\.chromeAccessibility` | `Components/ChromeAccessibility.swift` | the one reading of Reduce Motion, Reduce Transparency, Increase Contrast and Differentiate Without Color for hand-drawn controls: `transition(_:)` (only the fade under Reduce Motion), `travel(_:)` (no animation for a highlight sliding between rows under Reduce Motion), `surface(for:)` (opaque under Reduce Transparency), `style(_:)`, `ring` and `ringPixels` (the accent at two pixels under Increase Contrast), `marksStateWithShape` (a state in a hue also gets its own shape and word) |
 | `KeyHintBar`, `KeyHint` | `Components/KeyHintBar.swift` | the foot of every list popover (palette, host and people switchers): a hairline, then key caps and a caption in `meta`, ↑ ↓ Move and ↩ plus what it does on the highlighted row (Run, Switch, Connect, Open, Follow, Stop Following) leading, esc Close trailing; 30 pt; only where there is a keyboard (always on the Mac, a hardware keyboard on touch); one element for VoiceOver with the keys named |
@@ -440,8 +478,8 @@ Equal-width tabs across the row; centered title led by the same slot as the side
 (program mark, the agent glyph instead on unfocused tabs); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
-tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill of the ink at 10 %
-(radius `field`, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
+tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill, `Surface.selection`
+(the ink at 10 %, its edge and top light, radius `field`; the ink at 5 % in an inactive window), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
 After a close under the pointer the tabs keep their width until the pointer leaves the strip;
 ⌘ hints appear after ⌘ is held 750 ms; a path title keeps its end; the tooltip is the
 title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).
@@ -474,7 +512,9 @@ tabs to reorder.
   the feedback, and while the software keyboard moves); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
   scrollback search bar top-right (draggable to any corner).
-- Comfortable pane style (Settings → Panes): inset rounded panes on a divider-colored field.
+- Comfortable pane style (Settings → Panes): inset rounded panes on a divider-colored field,
+  each a `Surface.pane` (opaque, its edges and top light, no shadow). Compact panes are tiles:
+  the split's one-pixel line is their only boundary.
 
 ### Floating panes, rearranging, zoom
 
@@ -502,8 +542,8 @@ minimizing only move and resize views in one `structural` spring, and no termina
   it was let go. Over itself: nothing. A zone holds until the hand is 12 pt past its boundary,
   so it never flickers between two. On drop the preview stays until the host has moved the
   pane, then the region fades; nothing moves, since it is already there.
-- **Floating windows.** A card over the tab: corners `pane` (10), the glass rim, the `panel`
-  shadow, an accent rim at 70 % while it has the focus; a window of several panes draws its
+- **Floating windows.** A `Surface.window` over the tab: corners `pane` (12), opaque, its edges,
+  top light and the `panel` shadow, a one-point accent rim while it has the focus; a window of several panes draws its
   panes on a divider-coloured backdrop with a 14 pt grip on top. The header of a one-pane
   window moves it; edges and corners resize it (system resize pointers, 6/14 pt on the Mac,
   14/28 on touch, never under 240 × 140). It snaps (10 pt) to the tab's edges at an 8 pt
