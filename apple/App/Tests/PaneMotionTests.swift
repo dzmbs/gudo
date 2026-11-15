@@ -173,6 +173,24 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertEqual(Set(drawn.leaves.map(\.pane)), [PaneId(1), PaneId(2), PaneId(3)])
     }
 
+    // MARK: Sidebar
+
+    /// Showing the sidebar keeps the detail's width until it has slid in, then narrows it once;
+    /// hiding widens it once, at the start, under held frames.
+    func testTheSidebarSlidesAndTheDetailResizesOnce() {
+        let window: CGFloat = 1200, sidebar: CGFloat = 260
+        let showing = [(false, true), (true, false), (true, true)].map {
+            SidebarSlide.detailWidth(window: window, sidebar: sidebar, shown: $0.0, resting: $0.1)
+        }
+        XCTAssertEqual(showing, [1200, 1200, 940])
+        let hiding = [(true, true), (false, false), (false, true)].map {
+            SidebarSlide.detailWidth(window: window, sidebar: sidebar, shown: $0.0, resting: $0.1)
+        }
+        XCTAssertEqual(hiding, [940, 1200, 1200])
+        XCTAssertEqual(SidebarSlide.detailOffset(sidebar: sidebar, shown: true), sidebar)
+        XCTAssertEqual(SidebarSlide.sidebarOffset(sidebar: sidebar, shown: false), -sidebar)
+    }
+
     // MARK: Drawing
 
     func testATravellingPaneKeepsItsSizeAndIsCutToWhereItIsShown() {

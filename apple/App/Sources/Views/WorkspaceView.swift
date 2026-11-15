@@ -41,6 +41,8 @@ struct WorkspaceView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The layout's frame in window points: where the fold falls within it.
     @State private var frame = CGRect.zero
+    /// Whether the sidebar shows, once its last show or hide has settled.
+    @State private var sidebarRests = true
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     @AppStorage(ToastPosition.key) private var toastPosition = ToastPosition.standard
@@ -159,30 +161,46 @@ struct WorkspaceView: View {
             .flatMap { $0 >= FoldLayout.minimumDeck && frame.height - $0 - layout.gutter >= FoldLayout.minimumDeck ? $0 : nil }
         let shown = model.isSidebarShown && !model.isEditorFullScreen && deck == nil
         let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
+        let gutter = shown && page != nil ? layout.gutter : 0
         return VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                // Always mounted and revealed by one animated width: inserting it with a
-                // transition rebuilds its navigation stack and toolbar mid-animation, which stutters.
-                SidebarColumn(workspace: workspace)
-                    .frame(width: width)
-                    .frame(width: shown ? width : 0, alignment: .trailing)
-                    .clipped()
-                    // The bar over the column is the sidebar's own surface, up to the window's
-                    // top edge: the clip above stops the column's background at the bar.
-                    .background { Rectangle().fill(DS.Palette.sidebar).ignoresSafeArea(edges: .top) }
-                    .overlay(alignment: .trailing) {
-                        // A page ends at the fold: no divider to drag there.
-                        if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    // Laid out at its resting width, so its terminals resize once: at the end
+                    // when the sidebar comes in (it slides out past the edge meanwhile), at the
+                    // start when it goes (held on their last frame until it settles).
+                    NavigationStack {
+                        DetailColumn(workspace: workspace)
                     }
-                    .allowsHitTesting(shown)
-                    .disabled(!shown)
-                    .accessibilityHidden(!shown)
-                if shown, page != nil {
-                    FoldGutter().frame(width: layout.gutter)
+                    .frame(width: SidebarSlide.detailWidth(
+                        window: geometry.size.width, sidebar: width + gutter, shown: shown, resting: sidebarRests == shown))
+                    .transaction(value: sidebarRests == shown) { $0.animation = nil }
+                    .offset(x: SidebarSlide.detailOffset(sidebar: width + gutter, shown: shown))
+                    if shown, page != nil {
+                        FoldGutter().frame(width: layout.gutter).offset(x: width)
+                    }
+                    // Always mounted and slid in by its offset: inserting it with a transition
+                    // rebuilds its navigation stack and toolbar mid-animation, which stutters.
+                    SidebarColumn(workspace: workspace)
+                        .frame(width: width)
+                        // The bar over the column is the sidebar's own surface, up to the window's
+                        // top edge.
+                        .background { Rectangle().fill(DS.Palette.sidebar).ignoresSafeArea(edges: .top) }
+                        .overlay(alignment: .trailing) {
+                            // A page ends at the fold: no divider to drag there.
+                            if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
+                        }
+                        .offset(x: SidebarSlide.sidebarOffset(sidebar: width, shown: shown))
+                        .allowsHitTesting(shown)
+                        .disabled(!shown)
+                        .accessibilityHidden(!shown)
                 }
-                NavigationStack {
-                    DetailColumn(workspace: workspace)
-                }
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+                .clipped()
+            }
+            .task(id: shown) {
+                try? await Task.sleep(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
+                guard !Task.isCancelled else { return }
+                sidebarRests = shown
             }
             .frame(height: deck)
             // The keyboard rises over the deck, never the screen above: no reflow as it comes up.
@@ -205,6 +223,18 @@ struct WorkspaceView: View {
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
         #endif
     }
+}
+
+/// Where the sidebar and the detail column go as the sidebar shows or hides: both slide by
+/// their offsets, and the detail keeps the width it had until the sidebar has come in.
+enum SidebarSlide {
+    static func detailWidth(window: CGFloat, sidebar: CGFloat, shown: Bool, resting: Bool) -> CGFloat {
+        shown && resting ? max(0, window - sidebar) : window
+    }
+
+    static func detailOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? sidebar : 0 }
+
+    static func sidebarOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? 0 : -sidebar }
 }
 
 private struct TabsEmptied: Equatable {
