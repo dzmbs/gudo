@@ -148,7 +148,7 @@ local to the screen; drafts do not cross hosts.
 On iOS, tracked Claude/Codex panes have a title-bar Chat/Terminal control. New iPhone panes
 prefer Chat; iPad panes prefer Terminal. Explicit choices persist by host and pane, not native
 session, and temporary availability fallbacks do not overwrite them. Other agents and the Mac
-remain Terminal-only. Codex currently falls back until its same-process adapter is connected.
+remain Terminal-only.
 
 `PaneChatState` owns the draft independently of the evictable render model. Visible panes lease
 a bounded model and route the same workspace/pane's `TimelineChannel` into it. Both presentation
@@ -639,6 +639,28 @@ rollout, its record offset. A live item's handle has offset zero and is found by
 last 64 MiB; until Codex saves it, the read answers that it is not saved yet. A page's text is
 exactly the item's full text: the reply, the user's text with attachment markers, the summary and
 content joined by line breaks, or the command's recorded output (Codex keeps 64 KiB of it).
+
+Rollouts also record MCP tool calls, file changes, image views and web searches. Chat shows them
+as tool rows (Mcp, Edit, Read, WebSearch) whose output is the call's text result or the recorded
+edits; the live stream still shows them as one notice per turn.
+
+### Codex without the native path
+
+A Codex pane without a Chat-ready native source (started by hand, a version other than the native
+one, or a native conversation whose projection was lost) is read from its rollout, tailed as Codex
+writes it. The thread comes from the runtime session, the pane record or the rollout a process in
+the pane holds open; the rollout is found by that id under the pane account's `CODEX_HOME/sessions`
+and opened with the same checks as above. Until Codex saves the first turn, Chat waits with no rows
+and opens the rollout on a later pane or agent event. A native file watch on the rollout's folder
+wakes the reader; each refresh reads at most 8 MiB past the last record and upserts the new items.
+A recorded rollback, another thread or another home starts a new epoch with a fresh snapshot.
+
+This source is read-only, plus Send through the terminal for a pane the daemon launched (it has an
+exit fence); a Codex started by hand gets no controls. It has no streaming deltas, Stop or
+approvals, and since-join guests use Terminal. Where Chat cannot read the conversation the refusal
+says why and what to do: a rollout in the older history format asks to update Codex, a forked
+conversation and a missing Codex home point to Terminal, and a native source that loses the
+conversation asks to open Chat again, which then reads the rollout.
 
 Resume/fork history must be complete, with unambiguous turn/item identities. When the TUI requests
 `excludeTurns`, an independent, read-only connection to the same owned app-server initializes and
