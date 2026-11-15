@@ -48,24 +48,37 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `sidebar` / `raised` / `overlay` | background + foreground at 5 / 10 / 15 % | sidebar; cards, popovers, palette glass tint, command blocks, fields; menus |
 | `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
-| `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | rows, tabs, the selected tab pill |
-| `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | 1 px lines (`Hairline`), the sidebar edge, tab strip rule |
+| `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | every interaction state through `ControlState` (below): rows, tabs, the selected tab pill, bar, quiet and form buttons, lit toggles |
+| `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | one-physical-pixel lines (`Hairline`, `hairlineBorder`), the sidebar edge, tab strip rule |
 | `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
 | `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
 | `prominent` / `onProminent` | the accent deepened toward the darker ink until the lighter ink reads on it at 4.5:1 | the one primary button (`.primaryGlass`) |
-| `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue. Where that falls short of 4.5:1, its OKLab lightness moves away from the surfaces with the hue kept | state glyphs and words, status chips (10 %, radius 4), diff counts, PR states |
+| `onAccent`, `on(_:)` | on a solid fill: the theme's `cursor-text` when it reads at 4.5:1 (on the accent, the theme's own pairing), else the chrome background or ink, else white or black, the first that reads | a latched key, a count badge on amber, swipe action discs, a presence name tag |
+| `accentDim` / `accentRing` | the accent at 12 % (the container strength) / 25 % | a pressed accent control, a lit pane-header button, drop targets, a note under review / a field's focus halo outside its solid accent edge |
+| `doneContainer` … `infoContainer`, `container(_:)` | a signal over the surface under it at one strength, 12 %: the weakest tint that stands apart from its surface (1.2:1 on average over all 771 Ghostty themes). The signal moves just far enough to read on its own container at 4.5:1 (0.04 OKLab lightness on average) | status chips, the toast's and update card's disc, git status letters, project drop targets |
+| `scrollbar` / `scrollbarActive` | foreground at 25 % / at the tertiary level (≥ 3:1) | a hand-drawn scrollbar at rest / scrolling or under the pointer |
+| `edge` | foreground at 8 % (light) / 16 % plus-lighter (dark), one physical pixel | glass edges, lifted panes, float cards |
+| `scrim` | the darker ink taken halfway to black, at 10 % (light) / 28 % (dark) | behind the command palette |
+| `veil` | the terminal background at 40 % | over a saved screen, a pane being moved, a pane shielded while sketching |
+| `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue. Where that falls short of 4.5:1, its OKLab lightness moves away from the surfaces with the hue kept | state glyphs and words, status chips (on their container, radius `chip`), diff counts, PR states |
 | `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
-| `bell` | `#FFCC00` 50 % | bell border (Ghostty `BellBorderOverlay`) |
+| `bell` | `attention` at 50 % | bell border (Ghostty `BellBorderOverlay`, in the theme's own amber) |
 | split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
 | unfocused dim | background at 30 % | over unfocused panes (`unfocused-split-opacity` 0.7) |
 
-Guarantees (unit-tested over all 464 bundled themes, in the theme's scheme and forced to the
-other): main text ≥ 4.5:1 on every surface (the ink moves toward white or black only as far as
-needed; for a garish mid-tone background the chrome's background steps away from the terminal's),
-secondary text ≥ 4.5:1 and tertiary ≥ 3:1 on every surface and on a selected row (tertiary is
-the third step of meta text; at 4.5:1 it would reach the secondary level on menus), state colours
-≥ 4.5:1 on every surface (they are words too), the accent ≥ 3:1 on base, sidebar and overlay,
-selection text ≥ 4.5:1, and a program's symbol, dimmed in the style it inherits, ≥ 3:1.
+Guarantees (unit-tested over all 464 bundled themes, and in `ThemeStressTests` over all 771
+themes Ghostty ships upstream, read from `reference/` and never bundled; in the theme's scheme and
+forced to the other, with and without Increase Contrast): main text ≥ 4.5:1 on every surface and
+on every control state over it (rest, hover, selected, pressed on base, sidebar and raised; the
+ink moves toward white or black only as far as needed; for a garish mid-tone background the
+chrome's background steps away from the terminal's), secondary text ≥ 4.5:1 and tertiary ≥ 3:1
+on the same (tertiary is the third step of meta text; at 4.5:1 it would reach the secondary level
+on menus), state colours ≥ 4.5:1 on every surface and on their own container (they are words
+too), main text ≥ 4.5:1 on every container and on `accentDim`, the accent ≥ 3:1 on every surface
+and on its dim fill, selection text ≥ 4.5:1 over every surface, `onAccent` and every `on(_:)`
+label ≥ 4.5:1, `scrollbarActive` ≥ 3:1, and a program's symbol, dimmed in the style it inherits,
+≥ 3:1. Menus (`overlay`) are the system's and carry no hand-drawn states. Setting
+`GUDO_DESIGN_GALLERY_DIR` writes the worst pairing per token and the container sweep as CSV.
 
 `window-theme`: Match Terminal (default) takes the theme's scheme; Light/Dark/System that
 differ from the theme put the chrome on a neutral near-white (tinted 3 % with the theme) or
@@ -83,7 +96,10 @@ terminal background.
 | `rowSubtitle` | subheadline | second lines |
 | `section` | subheadline semibold, sentence case | section headers (never uppercase) |
 | `meta` | caption, monospaced digits | ages, counts, ⌘N hints |
-| `badge` | caption2 medium | pills (Ghostty palette badge) |
+| `badge` | caption2 medium, monospaced digits | pills (Ghostty palette badge) |
+
+Every number that changes (counts, countdowns, progress, ages, PR numbers, ⌘N, cols × rows) uses
+monospaced digits, through `meta`, `badge`, `overlay` or `.monospacedDigit()`.
 | `literal` / `literalSmall` | SF Mono callout / caption | paths, commands, hosts, code |
 | `sidebarTitle` / `sidebarSubtitle` | body / caption (Mac), subheadline / footnote (touch) | sidebar rows |
 | `tabTitle` | callout (Mac), subheadline (touch) | tab strip |
@@ -105,7 +121,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 
 | Size | Value | Source |
 |---|---|---|
-| Divider visible / hit (pointer) / hit (touch) | 1 / +6 / 20 pt | Ghostty `SplitView` (1 + 6); touch is ours |
+| Divider visible / hit (pointer) / hit (touch) | one physical pixel / +6 / 20 pt | Ghostty `SplitView` (1 + 6), drawn at `1 / displayScale` as every chrome line; touch is ours |
 | Pane header | 24 pt | Ghostty-quiet |
 | Tab strip / tab | 34 / 28 pt (selected pill inset 3) | macOS 26 titlebar tabs, Ghostty native tabs |
 | Strip chip width | an equal share of the strip, 160 to 240 pt; more tabs scroll | - |
@@ -113,18 +129,18 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
 | Window padding | 2 pt, balanced | Ghostty `window-padding-x/y` = 2, `window-padding-balance` |
 
-| Radius | Value | Source |
+Six radii, nothing in between, every one with continuous corners: chrome rounds a rectangle with
+`.rounded(DS.Radius.x)` (or `style: .continuous`), never a literal and never circular corners
+(`StyleLintTests`).
+
+| Radius | Value | Use |
 |---|---|---|
-| `chip` | 4 | resize overlay, key caps (Ghostty) |
-| `field` | 6 | search field, bar buttons (Ghostty) |
-| `control` | 8 | row highlights, inline code blocks |
-| `paletteRow` | 8 | command palette rows, concentric with the 16 pt panel at an 8 pt inset |
-| `pane` | 10 | comfortable panes |
-| `tabPill` | 7 | Ghostty/AppKit selected tab |
-| `secureBadge` | 12 | Ghostty's secure-input badge |
-| `searchPanel` | 14 | scrollback search bar glass |
+| `chip` | 4 | status chips, key caps, the resize overlay |
+| `field` | 6 | fields, bar, quiet and form buttons, pane-header buttons, the selected tab pill |
+| `control` | 8 | rows and row highlights, code blocks, palette rows (concentric with the 16 pt panel at an 8 pt inset) |
+| `pane` | 12 | comfortable panes, the search bar, the secure-input badge, drop regions, sidebar cards |
 | `panel` | 16 | floating glass panels (palette); glass reads smaller than an opaque edge |
-| `card` / `largeCard` | 20 / 22 | glass cards over the terminal (secret prompt, knock) / reconnect and control-request cards |
+| `card` | 20 | glass cards over the terminal: secret prompts, knocks, reconnect and control requests |
 
 ### Materials (Liquid Glass) rules
 
@@ -216,29 +232,43 @@ layout.
 
 ### Shadows and edges
 
-Two shadows (`.shadow(DS.Shadow.float)`: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12,
+Two shadows (`.shadow(DS.Shadow.float)`, or `.shadow(_:visible:)` for one that comes and goes: r 16, y 6, 12 % light / 35 % dark; `.panel`: r 28, y 12,
 16 % / 45 %), never a third. Every floating glass surface (`floatingPanel`,
-`floatingCapsule`) carries `glassEdge`: 0.5 pt, white 16 % plus-lighter on dark, black 8 % on light
+`floatingCapsule`) carries `glassEdge`: one physical pixel of `edge` (the ink at 16 % plus-lighter on dark, 8 % on light)
 (as Ghostty's key pill), and turns opaque under Reduce Transparency.
+
+### Checks
+
+- `StyleLintTests` (DesignSystem) reads every source file of the app and the packages and fails on
+  a raw or system colour, a literal opacity on a colour, a literal corner radius, a corner that
+  is not continuous or a half-point line outside the token files. Content that is not chrome
+  (the camera, a QR code, the pencil's ink, the system keyboard's keys, masks) says why on the
+  line: `// style-exempt: <reason>`.
+- `ThemeStressTests` holds the colour guarantees above over every Ghostty theme.
+- `DesignGalleryTests` (AppTests, Mac) renders the tokens, every control state, chips, toasts,
+  the update card and the palette, and the window in the compact and comfortable pane styles,
+  dark and light, active and inactive, with and without Increase Contrast:
+  `TEST_RUNNER_GUDO_DESIGN_GALLERY_DIR=<dir> TEST_RUNNER_GUDO_MOCK=1`.
 
 ## Components (DesignSystem)
 
 | Component | File | Notes / reference |
 |---|---|---|
 | `StatusIndicator`, `Spinner`, `StatusPill`, `CountBadge`, `AgentState` | `Components/AgentStatus.swift` | OSC 7501 states: idle ring, working spinner, blocked `!`, done ✓, error ✕, no contact dashed ring. Shape carries meaning, not only color. |
-| `ListRow`, `SectionTitle`, `EmptyState`, `Hairline` | `Components/Rows.swift` | dense rows with fixed leading slot; empty states (glyph `title` large, 12, `title3` semibold + `subheadline` 4 apart, then the next step); 1 px lines |
+| `ListRow`, `SectionTitle`, `EmptyState`, `Hairline` | `Components/Rows.swift` | dense rows with fixed leading slot; empty states (glyph `title` large, 12, `title3` semibold + `subheadline` 4 apart, then the next step); one-physical-pixel lines |
+| `.rounded(_:)`, `hairlineBorder(_:style:)` | `Tokens/Shapes.swift` | the one continuous rounded rectangle; a one-physical-pixel edge inside any shape |
 | `HoverPopover`, `hoverPopoverFrame()` | `Components/HoverPopover.swift` | opens on pointer hover, closes 150 ms after the pointer leaves anchor and popover, tap toggles, a medium sheet on iPhone; system padding, 260-480 × ≤ 400 |
-| `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the ink at 20 % behind the glyph (T4) |
-| `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | Ghostty `SearchButtonStyle` hover/press fills; iPad pointer highlight |
-| `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), ink 8 % hover / 15 % press, radius 6. Glass stays on bars and floating surfaces |
-| `ControlState`, `controlFill(_:in:)`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | hand-drawn controls (pane header glyphs, sidebar rows): rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `micro`; disabled drops the fill and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why |
-| `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and a soft 25 % halo while focused; typed literals in SF Mono, the prompt in prose |
+| `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the selected state (the ink at 10 %) behind the glyph |
+| `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | hover/press fills from `ControlState` (rows in its accent variant); iPad pointer highlight |
+| `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), hover and press from `ControlState`, radius `field`. Glass stays on bars and floating surfaces |
+| `ControlState`, `controlFill(_:in:)`, `ControlFillShape`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | the one interaction scale every button style and hand-drawn control uses: rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `micro`. The accent variant (`tint: .accent`) keeps hover neutral, presses with `accentDim` and selects with `selection`. A push button's bezel is its selected state. Disabled drops the fill (keeping a selection) and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why. No component has its own alphas |
+| `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and the `accentRing` halo while focused; typed literals in SF Mono, the prompt in prose |
 | `glassEdge(_:)`, `.shadow(DS.Shadow)` | `Components/Glass.swift`, `Tokens/Tokens.swift` | see Shadows and edges |
-| `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in white, the word under it on tall rows, system tints (never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
+| `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in the label that reads on it (`on(_:)`), the word under it on tall rows, the theme's signals in Mail's vocabulary (red ends, amber stops, blue goes, green completes, violet edits, bright yellow pins; never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
 | `HostSwitcher`, `HostSwitcherLabel`, `HostSwitcherHost`, `HostSwitcherCommand` | `Components/HostSwitcher.swift` | a session popup for hosts: "Filter or connect…", hosts with ⌃⌘N and ✓, a highlight that follows ↑/↓ and the pointer, then commands with their shortcuts; typing an unknown address offers Connect to it |
 | `floatingPanel`, `floatingCapsule`, `phoneDetents` | `Components/Glass.swift`, `Sheets.swift` | glass rules above; bottom sheets only on iPhone |
 | `ShortcutLabel`, `KeyCap` | `Components/KeyCaps.swift` | Ghostty `ShortcutSymbolsView`, `KeyCap` |
-| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom leading edge, 16 pt from the content edges (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc tinted at 16 %; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
+| `Toast`, `ToastCenter`, `toastHost`, `Banner` | `Components/Toast.swift` | one at a time; a `person` (joined, left) leads with their avatar instead of the symbol; a glass capsule at the bottom leading edge, 16 pt from the content edges (never over a pane's top bar: address bar, editor bar, pane headers; above the dev-server offer, the iPhone tab bar and cards at the bottom of a pane such as someone's draft, `toastObstacle()`), edge and float shadow; the symbol in a 24 pt disc on its container; one line (failures two); the action in accent semibold after a hairline; tap or flick down dismisses; taps beside it pass through |
 | `ShimmerMath`, `.shimmering(_:text:)` | `Components/Shimmer.swift` | "working" on a title instead of a spinner |
 | `PresenceAvatar`, `PresenceStack`, `Participant` | `Components/Presence.swift` | initials on ANSI hues, typing ring, +N; stacks at any size, each avatar cutting a thin gap out of the one under it so they read on any background |
 | `PeopleSwitcher`, `PeopleSwitcherPerson` | `Components/PeopleSwitcher.swift` | the presence button's popover in the host switcher's form: "4 people here", one row per person (avatar, what they are doing, ✓ on the one followed; a tap follows or stops), then Share Session… |
@@ -400,7 +430,7 @@ Equal-width tabs across the row; centered title led by the same slot as the side
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill of the ink at 10 %
-(radius 7, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
+(radius `field`, hairline edge), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
 After a close under the pointer the tabs keep their width until the pointer leaves the strip;
 ⌘ hints appear after ⌘ is held 750 ms; a path title keeps its end; the tooltip is the
 title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).
@@ -445,8 +475,8 @@ minimizing only move and resize views in one `structural` spring, and no termina
 - **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
   glass chip with its mark, name and directory follows the hand, and the canvas shows the drop
   before it happens: the other panes make room in the `standard` spring (as pictures of their
-  last frame) and the dragged pane sits where it will land, lit by a region in the accent at
-  20 % with a 1.5 pt rim (radius `pane`, inset 4). That region is exactly the frame the drop
+  last frame) and the dragged pane sits where it will land, lit by a region in `accentDim`
+  with a 1.5 pt accent rim (radius `pane`, inset 4). That region is exactly the frame the drop
   gives (worked out by applying the op to a copy of the session), so a pane dragged out of a
   two-pane split onto its sibling's left half lights the tab's whole left half, as it will be.
   The zones are the panes as they were when the drag began, so panes making room never move
@@ -490,7 +520,7 @@ minimizing only move and resize views in one `structural` spring, and no termina
   ⌃⌘ arrows (a window grows a twenty-fourth), Split Best Fit ⌘↩, Zoom ⇧⌘↩.
 - **iPhone: picture in picture.** In compact width the focused pane shows alone and each other
   window is a 176 × 120 live miniature (the grid drawn at half size, never resized) resting in
-  a corner, radius `searchPanel`, glass edge, `panel` shadow, its mark and state on top. Drag
+  a corner, radius `pane`, glass edge, `panel` shadow, its mark and state on top. Drag
   or flick it to any corner; tap brings it full screen. On a foldable no corner crosses the
   fold: they sit in the half the window's centre is on.
 
