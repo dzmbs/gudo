@@ -99,10 +99,11 @@ fn status_schema() -> Value {
         "type": ["object", "null"],
         "description": "What the program says it is doing (OSC 7501, or an agent integration).",
         "properties": {
-            "state": { "type": "string", "enum": ["idle", "working", "done", "blocked", "error"] },
-            "kind": { "type": ["string", "null"], "enum": ["permission", "question", "auth", null] },
+            "state": { "type": "string", "enum": ["starting", "idle", "working", "done", "blocked", "error"] },
+            "kind": { "type": ["string", "null"], "enum": ["permission", "question", "auth", "trust", "update", "elicitation", "other", null], "description": "What a blocked program waits on." },
             "app": { "type": ["string", "null"] },
-            "message": { "type": ["string", "null"] },
+            "message": { "type": ["string", "null"], "description": "Its words; for a blocked agent, what it asks (the command to approve, or the dialog on its screen)." },
+            "tool": { "type": ["string", "null"], "description": "The tool a blocked agent asks to use." },
             "progress": { "type": ["integer", "null"], "description": "Percent done, 0-100." },
         },
     })
@@ -219,9 +220,12 @@ fn agent_schema() -> Value {
         "properties": {
             "pane": { "type": "string" },
             "kind": { "type": ["string", "null"] },
-            "state": { "type": "string", "enum": ["starting", "idle", "working", "done", "blocked", "error", "exited"] },
+            "state": { "type": "string", "enum": ["starting", "idle", "working", "done", "blocked", "error", "exited"], "description": "working until the agent itself ends its turn." },
             "status": status_schema(),
-            "turns": { "type": "integer", "description": "Turns finished so far." },
+            "turns": { "type": "integer", "description": "Turns finished so far, each counted once when the agent ends it." },
+            "closed": { "type": "boolean", "description": "Its pane closed; this is what it left." },
+            "promptDelivery": prompt_delivery_schema(),
+            "promptFailure": prompt_failure_schema(),
         },
         "required": ["pane", "state", "turns"],
     })
@@ -233,8 +237,28 @@ fn result_schema() -> Value {
         "properties": {
             "outcome": { "type": "string", "enum": ["completed", "cancelled", "failed"] },
             "message": { "type": ["string", "null"], "description": "Its final message (or error)." },
+            "messageUnavailable": { "type": "string", "enum": ["reading_transcript", "no_transcript", "not_in_transcript", "cancelled", "pane_closed"], "description": "Why message is null." },
+            "reason": { "type": "string", "enum": ["pane_closed"], "description": "Why a turn was cancelled by the daemon." },
             "endedAt": { "type": "integer" },
             "transcriptPath": { "type": ["string", "null"], "description": "The full transcript on the host." },
+        },
+    })
+}
+
+fn prompt_delivery_schema() -> Value {
+    json!({
+        "type": "string",
+        "enum": ["queued", "accepted", "failed"],
+        "description": "The first prompt: queued until the agent is ready (a dialog the user answers first), accepted (typed into the agent) or failed (see promptFailure).",
+    })
+}
+
+fn prompt_failure_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "reason": { "type": "string", "enum": ["agent_exited", "pane_closed", "not_ready"] },
+            "message": { "type": "string", "description": "What happened, with what the agent's screen said." },
         },
     })
 }
@@ -245,7 +269,7 @@ fn tools_list() -> Vec<Tool> {
     let max_bytes =
         json!({ "type": "integer", "description": "Cap on the output text (default 16384)." });
     let float = json!({ "type": "boolean", "description": "Open it as a floating window over the tab instead, without taking the user's focus." });
-    let close_when_done = json!({ "type": "boolean", "description": "Close the floating window by itself 2.5 s after its work ends: an agent's turn, a done or error status, or the first command run in it." });
+    let close_when_done = json!({ "type": "boolean", "description": "Close the floating window by itself 2.5 s after its work ends: an agent ending its turn (its own end-of-turn signal, after its result is kept), another program's done or error status, or the first command run in it." });
     let pane_result = json!({
         "type": "object",
         "properties": { "pane": pane_schema(), "effects": effects_schema() },
@@ -484,7 +508,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "agent_spawn",
             title: "Start a worker agent",
-            description: "Start a coding agent (claude or codex) as a worker in a new terminal pane beside you, or in a floating window (float; closeWhenDone closes it when its turn ends, and agent_result still answers), without taking the user's focus, and optionally give it its first prompt once it is ready. The user watches it in the app. Follow it with agent_wait and agent_result.",
+            description: "Start a coding agent (claude or codex) as a worker in a new terminal pane beside you, or in a floating window (float; closeWhenDone closes it 2.5 s after it ends its turn, and agent_result still answers), without taking the user's focus, and optionally give it its first prompt once it is really ready. The prompt waits behind a dialog the user must answer first (promptDelivery queued, then typed once they have); if the agent exits instead (to update itself) and is not run again, promptDelivery is failed with the reason. The user watches it in the app. Follow it with agent_wait and agent_result.",
             input: object(
                 json!({
                     "kind": { "type": "string", "enum": ["claude", "codex"] },
@@ -492,14 +516,14 @@ fn tools_list() -> Vec<Tool> {
                     "cwd": { "type": "string" },
                     "of": pane_ref("Open beside this pane; default yours."),
                     "direction": { "type": "string", "enum": ["right", "down"], "default": "right" },
-                    "timeoutMs": { "type": "integer", "description": "How long to wait for it to be ready for the prompt (default 60000)." },
+                    "timeoutMs": { "type": "integer", "description": "How long to wait for the prompt to be typed (default 60000); after that it stays queued." },
                     "float": float.clone(),
                     "frame": frame_schema(),
                     "closeWhenDone": close_when_done.clone(),
                 }),
                 &["kind"],
             ),
-            output: json!({ "type": "object", "properties": { "agent": agent_schema() }, "required": ["agent"] }),
+            output: json!({ "type": "object", "properties": { "agent": agent_schema(), "promptDelivery": prompt_delivery_schema(), "promptFailure": prompt_failure_schema() }, "required": ["agent"] }),
             read_only: false,
             destructive: false,
             idempotent: false,
@@ -534,7 +558,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "agent_wait",
             title: "Wait for worker agents",
-            description: "Wait until worker agents in their terminal panes reach a state: by default until any of them is idle, done, blocked on the user, failed or exited (`all` waits for every one). Returns each agent's state.",
+            description: "Wait until worker agents in their terminal panes reach a state: by default until any of them is idle, done, blocked on the user, failed or exited (`all` waits for every one). An agent is working until it ends its turn itself. A worker whose pane closed answers as exited. Returns each agent's state.",
             input: object(
                 json!({
                     "panes": { "type": "array", "items": { "type": "string" } },
@@ -559,7 +583,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "agent_result",
             title: "Read a worker agent's answer",
-            description: "Get a worker agent's last answer, from the agent itself rather than its terminal pane's screen: how its last turn ended, its final message, and its transcript file.",
+            description: "Get a worker agent's last answer, from the agent itself rather than its terminal pane's screen: how its last turn ended, its final message (or messageUnavailable saying why there is none), and its transcript file. Answers after its pane closed too, for as long as the host runs; a worker closed mid-turn reports cancelled, reason pane_closed.",
             input: object(json!({ "pane": pane_ref("The worker's pane.") }), &["pane"]),
             output: json!({
                 "type": "object",
