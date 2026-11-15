@@ -75,6 +75,7 @@ struct SettingsView: View {
                         Form { detail(navigation.pane).chromeRows() }
                             .formStyle(.grouped)
                             .chromeGrouped()
+                            .titleBarEdge()
                             .navigationTitle(navigation.pane.title)
                             .environment(\.settingsHighlight, highlight)
                             .navigationDestination(for: SettingsPage.self) { SettingsPageView(page: $0) }
@@ -85,8 +86,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-                // Rows pass under the title bar's edge, never over the title.
-                .scrollEdgeEffectStyle(.hard, for: .top)
             }
             .onAppear(perform: followLink)
             .onChange(of: SettingsLink.shared.pending) { followLink() }
@@ -109,7 +108,7 @@ struct SettingsView: View {
                 }
             }
             // A pinned ideal size: the window opens at one size whichever pane's form is longer.
-            .frame(minWidth: 720, idealWidth: 720, minHeight: 480, idealHeight: 560)
+            .frame(minWidth: 720, idealWidth: 760, minHeight: 480, idealHeight: 720)
             .chromeWindow()
         }
         #else
@@ -734,7 +733,8 @@ private struct AboutSection: View {
 private struct SettingsSidebar: View {
     @Binding var selection: SettingsPane
     private static let rowHeight: CGFloat = 32
-    private static let iconWidth: CGFloat = 22
+    /// SF Symbols fill more of their frame than logos do.
+    private static let glyphShare: CGFloat = 0.82
 
     var body: some View {
         ScrollView {
@@ -743,8 +743,11 @@ private struct SettingsSidebar: View {
                     let isSelected = pane == selection
                     Button { selection = pane } label: {
                         HStack(spacing: DS.Space.s) {
-                            Image(systemName: pane.systemImage)
-                                .frame(width: Self.iconWidth)
+                            TileArtwork(size: ProgramTile.rowSize, isSelected: isSelected) { glyphSize, _ in
+                                Image(systemName: pane.systemImage)
+                                    .font(.system(size: glyphSize * Self.glyphShare, weight: .medium))
+                                    .frame(width: glyphSize, height: glyphSize)
+                            }
                             Text(pane.title)
                                 .lineLimit(1)
                         }
@@ -775,6 +778,42 @@ private struct SettingsSidebar: View {
         }
     }
 }
+
+#if os(macOS)
+private extension View {
+    /// Rows pass under the title bar's edge, never under the title: the band behind the title is
+    /// the page's own colour, with a hairline once the rows have scrolled beneath it.
+    func titleBarEdge() -> some View {
+        modifier(TitleBarEdge())
+    }
+}
+
+private struct TitleBarEdge: ViewModifier {
+    @State private var isScrolled = false
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: Bool.self, of: { $0.contentOffset.y + $0.contentInsets.top > 0 }) { _, scrolled in
+                isScrolled = scrolled
+            }
+            .overlay(alignment: .top) {
+                GeometryReader { proxy in
+                    Rectangle()
+                        .fill(DS.Palette.groupedPage)
+                        .overlay(alignment: .bottom) {
+                            Hairline(style: DS.Palette.separator)
+                                .opacity(isScrolled ? 1 : 0)
+                                .animation(DS.Motion.micro, value: isScrolled)
+                        }
+                        .frame(height: proxy.safeAreaInsets.top)
+                }
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+    }
+}
+#endif
 
 /// The sidebar's search (System Settings': above the panes, under the traffic lights).
 private struct SettingsSearchField: View {

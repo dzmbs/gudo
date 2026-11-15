@@ -71,11 +71,36 @@ final class ChromeGalleryTests: XCTestCase {
                 model.isPaletteShown = true
             }
             try await capture("\(appearance)-settings") { model in model.sheet = .settings }
+            try await captureSettingsWindow("\(appearance)-settings-window")
         }
     }
 
     private final class OffscreenWindow: NSWindow {
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    }
+
+    /// The Mac's Settings window at the size it opens at, in the toolbar style the app gives it.
+    private func captureSettingsWindow(_ name: String) async throws {
+        let size = NSSize(width: 760, height: 720)
+        let window = OffscreenWindow(
+            contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: size),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+        let hosting = NSHostingController(rootView: SettingsView())
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setContentSize(size)
+        window.orderFrontRegardless()
+        defer { window.close() }
+        try await Task.sleep(for: .seconds(1.5))
+        let view = try XCTUnwrap(window.contentView?.superview ?? window.contentView)
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: captureDirectory.appendingPathComponent("\(name).png"))
     }
 
     private func capture(_ name: String, _ arrange: (WindowModel) async -> Void) async throws {

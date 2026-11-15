@@ -1006,7 +1006,10 @@ theme, each from the same picker; the system's appearance writes `theme` (`Views
 Font: JetBrains Mono, size stepper with live sample. Cursor: style, blink. Splits: unfocused
 opacity, size overlay. Keyboard: Option sends Meta, ASCII keyboard, key bar profiles (rendered
 from the real profiles). Notifications (on the Mac also Agents in the Menu Bar, off by default). Agents: Accounts (each host's Claude Code and Codex sign-ins; per agent a grouped list of rows with the account's colour dot in the project palette, its name, a quiet Default capsule, who it is signed in as on the second line, "Not signed in" in the attention colour, its tightest limit trailing in `meta`; actions in the context menu, Add … Account opens a name-and-colour sheet; APP-ARCHITECTURE §27), Agent Tools. Privacy & Security: App Lock ("Require Face ID", the grace period) and saved passwords; locked, every window shows the app icon, "<App> Is Locked" and one primary Unlock on the theme base (`Security/AppLockScreen.swift`, 1Password and banking apps). About and Acknowledgements. Mac: System Settings' shape (a full-height 220 pt sidebar under the traffic lights with search on
-top, the pane's title once in the titlebar, a grouped form beside it, min 720 × 480); iOS: one grouped form. Both on the
+top, each pane's symbol on a program tile, the pane's title once in the titlebar over a band
+of the page's colour that rows pass under (a hairline once scrolled), a grouped form beside it,
+opening at 760 × 720, min 720 × 480; toggles in the accent, which the platform greys in an
+inactive window); iOS: one grouped form. Both on the
 theme's chrome. Values reach the renderer through `TerminalAppearance`
 (`TerminalAppearance.fromPreferences()`).
 
