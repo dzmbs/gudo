@@ -98,7 +98,15 @@ final class CodeGutterLayout {
         starts = LineStarts(content.text)
     }
 
+    /// The text as the view holds it: each line capped like every other row (`DisplayLine`).
+    static func shown(_ content: CodeTextContent) -> CodeTextContent {
+        var shown = content
+        shown.text = DisplayLine.cappedLines(content.text)
+        return shown
+    }
+
     var lastNumber: Int { content.firstLine + starts.count - 1 }
+
 
     func width(digitWidth: CGFloat) -> CGFloat {
         CGFloat(max(3, String(lastNumber).count)) * digitWidth + DS.Space.l + DS.Space.s
@@ -216,6 +224,7 @@ private struct PlatformCodeView: NSViewRepresentable {
             }
             guard content != shownContent else { return }
             shownContent = content
+            let content = CodeGutterLayout.shown(content)
             gutter.update(content)
             if isNewText {
                 let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor(colors.text)]
@@ -374,6 +383,7 @@ private struct PlatformCodeView: UIViewRepresentable {
             }
             guard content != shownContent else { return }
             shownContent = content
+            let content = CodeGutterLayout.shown(content)
             textView.gutter.update(content)
             if isNewText {
                 textView.attributedText = NSAttributedString(

@@ -82,6 +82,16 @@ final class FileCopyTests: XCTestCase {
         XCTAssertEqual(gutter.lastNumber, 43)
     }
 
+    /// A minified line is shown capped, like every row of the app; the menu copies it whole.
+    func testAnOverlongLineIsCappedOnScreenOnly() {
+        let long = String(repeating: "x", count: DisplayLine.maximumCharacters + 10)
+        let shown = CodeGutterLayout.shown(CodeTextContent(text: "short\n\(long)\nend"))
+        XCTAssertEqual(shown.text, "short\n" + String(repeating: "x", count: DisplayLine.maximumCharacters) + "…\nend")
+        XCTAssertEqual(DisplayLine.cappedLines("a\nb"), "a\nb")
+        let actions = FileCopyAction.actions(path: "/a.js", contents: long, repositoryRoot: nil)
+        XCTAssertEqual(actions.first?.text, long)
+    }
+
     // MARK: The text view
 
     #if os(macOS)
