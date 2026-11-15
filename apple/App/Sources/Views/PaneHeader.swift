@@ -156,8 +156,19 @@ private struct PaneHeaderButtons: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
+        // A narrow pane keeps only its menu, which holds every one of these too.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                buttons
+                menu
+            }
+            menu
+        }
+    }
+
+    @ViewBuilder private var buttons: some View {
         let zoomed = workspace.session.tab(containing: id)?.zoomed == id
-        HStack(spacing: 0) {
+        Group {
             HeaderButton("Split Right", systemImage: "rectangle.split.2x1", shortcut: WorkspaceAction.splitRight) {
                 act { WorkspaceAction.splitRight.perform(on: workspace, window: model) }
             }
@@ -200,22 +211,25 @@ private struct PaneHeaderButtons: View {
             HeaderButton("Close Pane", systemImage: "xmark", shortcut: WorkspaceAction.closePane) {
                 act { WorkspaceAction.closePane.perform(on: workspace, window: model) }
             }
-            Menu {
-                PaneMenuItems(workspace: workspace, model: model, pane: id, focusPane: focus)
-            } label: {
-                Image(systemName: "ellipsis")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(DS.Palette.textSecondary)
-                    .frame(width: 22, height: 20)
-                    .contentShape(.rect)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Pane Menu: split, zoom, find, share, close")
-            .accessibilityLabel("Pane Menu")
         }
+    }
+
+    private var menu: some View {
+        Menu {
+            PaneMenuItems(workspace: workspace, model: model, pane: id, focusPane: focus)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(DS.Palette.textSecondary)
+                .frame(width: 22, height: 20)
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Pane Menu: split, zoom, find, share, close")
+        .accessibilityLabel("Pane Menu")
     }
 
     private func act(_ action: () -> Void) {

@@ -196,6 +196,9 @@ struct SplitTreeView: View {
                 ForEach(layout.leaves, id: \.pane) { leaf in
                     PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
                         .environment(\.paneStill, arrangement.still(of: leaf.pane))
+                        // What does not fit a narrow pane is cut at its edge, never drawn over a neighbour.
+                        .frame(width: leaf.frame.width, height: leaf.frame.height)
+                        .clipped()
                         .surface(paneSurface(of: leaf), in: .rounded(paneStyle == .comfortable && (isSplit || leaf.window != nil) ? DS.Radius.pane : 0))
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         // A pane zooming over its neighbours, or shrinking back onto them,
