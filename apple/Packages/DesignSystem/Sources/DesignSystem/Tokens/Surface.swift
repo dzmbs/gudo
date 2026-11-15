@@ -18,6 +18,8 @@ nonisolated public enum Surface: CaseIterable, Sendable {
     case panel
     /// The selected tab's pill: the selected fill, edged and lit, flat.
     case selection
+    /// A program mark's tile: the tile fill (inverted when selected), edged and lit, flat.
+    case mark
 
     /// Where the surface is drawn.
     nonisolated public struct Context: Equatable, Sendable {
@@ -64,7 +66,7 @@ nonisolated public enum Surface: CaseIterable, Sendable {
             fill: fill,
             innerEdge: DS.Palette.edge,
             innerEdgeStrength: edged ? 1 : 0,
-            outerEdgeStrength: edged && self != .selection ? 1 : 0,
+            outerEdgeStrength: edged && ![.selection, .mark].contains(self) ? 1 : 0,
             topLightStrength: edged ? 1 : 0,
             shadow: shadow,
             clipsContent: [.tile, .pane, .window].contains(self))
@@ -78,7 +80,7 @@ nonisolated public enum Surface: CaseIterable, Sendable {
         if context.increasesContrast {
             layers.innerEdge = DS.Palette.border
             layers.innerEdgeStrength = edged ? 1 : 0
-            layers.outerEdgeStrength = edged && self != .selection ? 1 : 0
+            layers.outerEdgeStrength = edged && ![.selection, .mark].contains(self) ? 1 : 0
             layers.topLightStrength = 0
         }
         if context.reducesTransparency, layers.fill == .glass { layers.fill = .paper }
@@ -90,12 +92,13 @@ nonisolated public enum Surface: CaseIterable, Sendable {
         case .tile, .pane, .window: .solid(DS.Palette.terminal)
         case .card, .panel: .glass
         case .selection: .solid(DS.Palette.selectedFill)
+        case .mark: .solid(DS.Palette.tile)
         }
     }
 
     private var shadow: DS.Shadow? {
         switch self {
-        case .tile, .pane, .selection: nil
+        case .tile, .pane, .selection, .mark: nil
         case .window, .panel: .panel
         case .card: .float
         }

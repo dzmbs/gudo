@@ -259,6 +259,7 @@ own stroke or shadow (`StyleLintTests`).
 | `card` | glass | ✓ | ✓ | ✓ | `float` | `floatingCapsule`, `floatingPanel`: toasts, notices, the update card, reconnect, control-request, knock and secret cards, a sidebar row being dragged |
 | `panel` | glass | ✓ | ✓ | ✓ | `panel` | `floatingPanel(elevated:)`: the command palette, workflow forms |
 | `selection` | `selectedFill` | ✓ | - | ✓ | - | the selected tab's pill in the strip |
+| `mark` | `tile` (`text` when selected) | ✓ | - | ✓ | - | a program mark's tile, everywhere marks are drawn |
 
 - **Light and dark.** On dark chrome the edge and the top light add light (plus-lighter: the ink
   at 16 % and 14 %); on light chrome the edge is the ink at 8 % and the top light white at 60 %,

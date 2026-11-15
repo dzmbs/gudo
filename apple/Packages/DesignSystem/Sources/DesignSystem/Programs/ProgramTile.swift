@@ -61,7 +61,6 @@ public struct TileArtwork<Artwork: View>: View {
     let isSelected: Bool
     let artwork: (_ glyphSize: CGFloat, _ isMuted: Bool) -> Artwork
     @AppStorage(ProgramTileTint.key) private var tint = ProgramTileTint.original
-    @Environment(\.displayScale) private var displayScale
     @Environment(\.colorScheme) private var colorScheme
 
     public init(size: CGFloat, isSelected: Bool = false, @ViewBuilder artwork: @escaping (_ glyphSize: CGFloat, _ isMuted: Bool) -> Artwork) {
@@ -80,15 +79,7 @@ public struct TileArtwork<Artwork: View>: View {
             // On an inverted tile a logo takes the variant made for the tile's own lightness.
             .environment(\.colorScheme, isSelected ? colorScheme.inverted : colorScheme)
             .frame(width: size, height: size)
-            .background(fill, in: shape)
-            .hairlineBorder(shape, style: DS.Palette.hairline)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(DS.Palette.edge)
-                    .frame(height: DS.Size.hairline(scale: displayScale))
-                    .padding(.horizontal, radius)
-                    .allowsHitTesting(false)
-            }
+            .surface(.mark, in: shape, fill: fill)
             .animation(DS.Motion.micro, value: isSelected)
     }
 

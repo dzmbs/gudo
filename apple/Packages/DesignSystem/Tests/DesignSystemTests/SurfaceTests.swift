@@ -27,7 +27,7 @@ struct SurfaceTests {
         #expect(Surface.panel.layers(in: active).fill == .glass)
         #expect(Surface.selection.layers(in: active).fill == .solid(DS.Palette.selectedFill))
         let shadows = Dictionary(uniqueKeysWithValues: Surface.allCases.map { ($0, $0.layers(in: active).shadow) })
-        #expect(shadows == [.tile: nil, .pane: nil, .selection: nil, .card: .float, .window: .panel, .panel: .panel])
+        #expect(shadows == [.tile: nil, .pane: nil, .selection: nil, .mark: nil, .card: .float, .window: .panel, .panel: .panel])
     }
 
     @Test func anInactiveWindowRecedes() {
