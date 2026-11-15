@@ -21,11 +21,14 @@ final class InteractionGalleryTests: XCTestCase {
         try FileManager.default.createDirectory(at: galleryDirectory, withIntermediateDirectories: true)
     }
 
-    func testRenderPopovers() throws {
+    /// In a window: fields and scroll views draw only there.
+    func testRenderPopovers() async throws {
         for (appearance, themeName) in Self.themes {
             let theme = ThemeCatalog.theme(named: themeName)
             for setting in GalleryAccessibility.allCases {
-                try render(InteractionSheet(theme: theme).galleryAccessibility(setting), named: "popovers-\(appearance)-\(setting.rawValue)")
+                try await captureWindow(
+                    InteractionSheet(theme: theme).galleryAccessibility(setting),
+                    size: NSSize(width: 1040, height: 600), named: "popovers-\(appearance)-\(setting.rawValue)")
             }
         }
     }
@@ -123,6 +126,7 @@ private struct GalleryTheme<Content: View>: View {
         let chrome = ChromePalette(theme: theme)
         content
             .padding(DS.Space.xxl)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(chrome.baseColor)
             .chromeContent()
             .environment(\.terminalTheme, theme)
