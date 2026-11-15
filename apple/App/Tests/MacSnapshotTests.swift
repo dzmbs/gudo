@@ -129,7 +129,7 @@ final class MacSnapshotTests: XCTestCase {
         let dark = mode != "light"
         // Canvas points to window points, from a pane's terminal and its leaf.
         guard let (anchorPane, anchor) = workspace.panes.first(where: { pane, _ in
-                  model.arrangement.still(of: pane) == nil && layout.leaves.contains { $0.pane == pane && $0.visible && $0.window == nil } }),
+                  !model.arrangement.hidesTerminal(of: pane) && layout.leaves.contains { $0.pane == pane && $0.visible && $0.window == nil } }),
               let anchorLeaf = layout.leaves.first(where: { $0.pane == anchorPane })
         else { return nil }
         let anchorRect = anchor.view.convert(anchor.view.bounds, to: nil)
@@ -138,7 +138,7 @@ final class MacSnapshotTests: XCTestCase {
 
         // Each terminal where it is on screen now (part way through a motion, too).
         func onScreen(_ pane: PaneId) -> CGRect? {
-            guard let terminal = workspace.panes[pane], model.arrangement.still(of: pane) == nil,
+            guard let terminal = workspace.panes[pane], !model.arrangement.hidesTerminal(of: pane),
                   terminal.view.window != nil, !terminal.view.isHiddenOrHasHiddenAncestor else { return nil }
             let inWindow = terminal.view.convert(terminal.view.bounds, to: nil)
             return CGRect(x: inWindow.minX, y: frameView.bounds.height - inWindow.maxY, width: inWindow.width, height: inWindow.height)
@@ -1101,6 +1101,9 @@ final class MacSnapshotTests: XCTestCase {
         }
         arrangement.scrub = nil
         PaneArrangement.settleStretch = 1
+        // At rest: the stretched motion has settled and the terminals show again.
+        let settling = ContinuousClock.now
+        while arrangement.isMoving, ContinuousClock.now - settling < .seconds(15) { await pump(0.1) }
         await pump(0.8)
         await present(model)
         try? capture(window, "\(name)-rest")
@@ -1152,6 +1155,12 @@ final class MacSnapshotTests: XCTestCase {
                 guard layout == "columns" else { return }
                 await self.motion("split-\(layout)", model) { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
                 await self.motion("close-\(layout)", model) { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+                // Back to one pane, whose header goes, and the first splits, whose headers come.
+                await self.motion("close-last-\(layout)", model) { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+                await self.motion("split-first-right", model) { WorkspaceAction.splitRight.perform(on: workspace, window: model) }
+                WorkspaceAction.closePane.perform(on: workspace, window: model)
+                await self.pump(0.8)
+                await self.motion("split-first-down", model) { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
             }
         }
     }
