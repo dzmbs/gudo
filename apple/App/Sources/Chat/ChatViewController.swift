@@ -38,6 +38,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         let rightToLeft: Bool
         let expanded: Bool
         let fontSize: Double
+        let topSpacing: CGFloat
 
         var cost: LRUCost {
             LRUCost(bytes: 2 * (MemoryLayout<Self>.stride + id.item.utf8.count + category.utf8.count))
@@ -55,6 +56,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var current = TimelineFrame()
     private var pending: TimelineFrame?
     private var rows: [ChatRowID: ChatRow] = [:]
+    private var topSpacings: [ChatRowID: CGFloat] = [:]
     private var expanded: Set<ChatRowID> = []
     private var previousExpanded: Set<ChatRowID> = []
     private var environment = EnvironmentValues()
@@ -124,6 +126,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.contentInsetAdjustmentBehavior = .never
         collection.contentInset.top = Self.topClearance
         collection.verticalScrollIndicatorInsets.top = Self.topClearance
+        collection.contentInset.bottom = DS.Space.l
         collection.delegate = self
         collection.prefetchDataSource = self
         collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: "chat-block")
@@ -305,7 +308,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     private func rowContent(_ row: ChatRow) -> some View {
-        ChatRowView(row: row, isExpanded: expanded.contains(row.id), toggle: { [weak self] in self?.model.toggle(row.id) }, actions: actions)
+        ChatRowView(row: row, isExpanded: expanded.contains(row.id), toggle: { [weak self] in self?.model.toggle(row.id) },
+                    actions: actions, topSpacing: topSpacings[row.id] ?? 0)
             .environment(\.self, environment)
             .dynamicTypeSize(environment.dynamicTypeSize)
             .tint(environment.chrome.accentColor)
@@ -395,6 +399,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         if changesOrder, rows.count > current.rowIDs.count {
             let identifiers = current.rowIDs
             rows = rows.filter { identifiers.contains($0.key) }
+            topSpacings = topSpacings.filter { identifiers.contains($0.key) }
             measured.formIntersection(identifiers)
         }
         isApplying = false
@@ -413,6 +418,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
                 changed.insert(row.id)
             }
             rows[row.id] = row
+        }
+        var previous: ChatRow?
+        for row in frame.rows {
+            let spacing = ChatRowSpacing.top(of: row, below: previous)
+            if topSpacings[row.id] != spacing {
+                topSpacings[row.id] = spacing
+                measured.remove(row.id)
+                changed.insert(row.id)
+            }
+            previous = row
         }
         if needsRestyle { changed.formUnion(frame.rowIDs) }
         return Array(changed.intersection(frame.rowIDs))
@@ -459,7 +474,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             measured.insert(row.id)
             return cached
         }
-        let fitting = paragraphMetrics.height(for: row, width: collection.bounds.width,
+        let fitting = paragraphMetrics.height(for: row, width: collection.bounds.width, topSpacing: topSpacings[row.id] ?? 0,
                                               environment: environment, measure: nativeFittingHeight)
             ?? nativeFittingHeight(row)
         guard let fitting, fitting.isFinite, fitting > 0 else { return nil }
@@ -552,7 +567,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         HeightKey(id: row.id, revision: row.revision, width: collection.bounds.width,
                   category: traitCollection.preferredContentSizeCategory.rawValue, dynamicType: environment.dynamicTypeSize,
                   boldText: environment.legibilityWeight == .bold, rightToLeft: environment.layoutDirection == .rightToLeft,
-                  expanded: expanded.contains(row.id), fontSize: codeFontSize)
+                  expanded: expanded.contains(row.id), fontSize: codeFontSize, topSpacing: topSpacings[row.id] ?? 0)
     }
 
     private func restore(_ y: CGFloat) {

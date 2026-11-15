@@ -19,6 +19,7 @@ struct ChatRowView: View {
     let isExpanded: Bool
     let toggle: () -> Void
     let actions: ChatRowActions
+    var topSpacing: CGFloat = 0
     private static let maximumIndentationDepth = 12
     @ScaledMetric(relativeTo: .callout) private var tableLineHeight = DS.Size.proseTableLineHeight
     @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
@@ -29,7 +30,7 @@ struct ChatRowView: View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, DS.Space.xl)
-            .padding(.vertical, DS.Space.s)
+            .padding(.top, topSpacing)
             .frame(maxWidth: ChatReadingColumn.maximumWidth)
             .frame(maxWidth: .infinity)
             .foregroundStyle(DS.Palette.text)
@@ -167,7 +168,7 @@ struct ChatRowView: View {
             }
             if item.origin == .terminal { fromTerminal }
         }.frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, DS.Space.xxxl).padding(.vertical, DS.Space.row)
+            .padding(.leading, DS.Space.xxxl)
     }
 
     private func bubble(_ text: String) -> some View {
@@ -214,7 +215,7 @@ struct ChatRowView: View {
                 bubble(text)
                 if item.origin == .terminal { fromTerminal }
             }.frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.leading, DS.Space.xxxl).padding(.top, DS.Space.row)
+                .padding(.leading, DS.Space.xxxl)
         case .known(.thinking):
             VStack(alignment: .leading, spacing: DS.Space.gap10) {
                 thinkingHeader("Thinking", hasText: !text.isEmpty)

@@ -10,6 +10,7 @@ final class ChatParagraphMetrics {
 
     private struct Key: Hashable {
         let lines: Lines
+        let topSpacing: CGFloat
         let font: Font.Resolved
         let scale: CGFloat
         let rightToLeft: Bool
@@ -19,7 +20,7 @@ final class ChatParagraphMetrics {
     private let heights = BoundedLRU<Key, CGFloat>(capacity: ChatCacheLimits.paragraphProfiles,
                                                   byteLimit: ChatCacheLimits.bytes)
 
-    func height(for row: ChatRow, width: CGFloat, environment: EnvironmentValues,
+    func height(for row: ChatRow, width: CGFloat, topSpacing: CGFloat = 0, environment: EnvironmentValues,
                 measure: (ChatRow) -> CGFloat?) -> CGFloat? {
         guard environment.textCase == nil, environment.lineHeight == nil,
               case .markdown(let block) = row.content, block.kind == .paragraph,
@@ -29,7 +30,7 @@ final class ChatParagraphMetrics {
         let font = DS.Font.prose.resolve(in: environment.fontResolutionContext)
         let available = ChatReadingColumn.textWidth(in: width)
         guard available > 0, let lines = lineCount(text, font: font.ctFont, width: available) else { return nil }
-        let key = Key(lines: lines, font: font, scale: environment.displayScale,
+        let key = Key(lines: lines, topSpacing: topSpacing, font: font, scale: environment.displayScale,
                       rightToLeft: environment.layoutDirection == .rightToLeft, locale: environment.locale.identifier)
         if let height = heights.value(for: key) { return height }
         // Calibrate through the SAME row and environment, not guessed UIFont/line-height equivalents.
