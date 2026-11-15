@@ -116,7 +116,9 @@ public struct CommandPalette: View {
         .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
         .padding(.horizontal, DS.Space.l)
         .task { await takeFocus() }
+        #if os(macOS)
         .onModifierKeysChanged(mask: .command, initial: true) { _, keys in isCommandHeld = keys.contains(.command) }
+        #endif
         .onChange(of: query) {
             selection = nil
             if let onScope, onScope(query) { query = "" }
