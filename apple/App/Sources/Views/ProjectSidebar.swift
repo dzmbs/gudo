@@ -125,7 +125,8 @@ final class SidebarGeometry {
 extension WindowModel {
     /// The list's items with `drop` and `projectMove` shown as if done.
     func sidebarItems(
-        drop: SidebarDrop?, projectMove: (id: String, index: Int)?, showsIntro: Bool = false, opensPanes: Bool = false
+        drop: SidebarDrop?, projectMove: (id: String, index: Int)?, showsIntro: Bool = false, opensPanes: Bool = false,
+        showsEmptyProjects: Bool = false
     ) -> (items: [SidebarItem], sections: [SidebarSection]) {
         let hostGroups = groups.groups
         var sections = groups.sections
@@ -158,7 +159,7 @@ extension WindowModel {
             if !self.groups.collapsedProjects.contains(project.id) {
                 let members = rows(.project(project.id))
                 items += tabItems(members, in: .project(project.id))
-                if members.isEmpty { items.append(.projectEmpty(project.id)) }
+                if members.isEmpty, showsEmptyProjects { items.append(.projectEmpty(project.id)) }
             }
         }
         let suggestions = projectSuggestions.prefix(2)
@@ -243,7 +244,8 @@ struct SidebarTabList: View {
         #endif
         let drag = model.sidebarDrag
         let (items, sections) = model.sidebarItems(
-            drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed, opensPanes: listStyle == .plain)
+            drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed, opensPanes: listStyle == .plain,
+            showsEmptyProjects: listStyle == .grouped)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { first, _ in first })
         let _ = geometry.record(items, sections)
         Group {
@@ -744,11 +746,12 @@ private struct ProjectHeader: View {
                 .font(.callout)
                 .opacity(controlsShown ? 1 : 0)
                 .accessibilityIdentifier("project-new-tab-\(project.name)")
+            // An empty project is its header alone: nothing to fold.
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(DS.Palette.textTertiary)
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
-                .opacity(controlsShown || collapsed ? 1 : 0)
+                .opacity(!project.tabs.isEmpty && (controlsShown || collapsed) ? 1 : 0)
                 .accessibilityHidden(true)
         }
         .frame(minHeight: 28)

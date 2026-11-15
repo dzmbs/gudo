@@ -127,14 +127,17 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(model.groups.project(app.id)?.tabs.count, app.tabs.count + 1)
     }
 
-    /// New Project: an empty project named in place, a line inviting tabs, never a duplicate name.
+    /// New Project: an empty project named in place, never a duplicate name.
     func testNewProjectStartsEmptyAndNamedInPlace() throws {
         model.newEmptyProject()
         let made = try XCTUnwrap(model.projects.last)
         XCTAssertEqual(made.name, "New Project")
         XCTAssertEqual(made.tabs, [])
         XCTAssertEqual(model.namingProject, made.id)
-        XCTAssertTrue(ids().contains(SidebarItem.projectEmpty(made.id).id))
+        XCTAssertTrue(ids().contains(SidebarItem.projectHeader(made.id).id))
+        XCTAssertFalse(ids().contains(SidebarItem.projectEmpty(made.id).id), "an empty project is its header alone, + on hover")
+        let grouped = model.sidebarItems(drop: nil, projectMove: nil, showsEmptyProjects: true).items.map(\.id)
+        XCTAssertTrue(grouped.contains(SidebarItem.projectEmpty(made.id).id), "the phone's cards keep a line to tap")
         model.newEmptyProject()
         XCTAssertEqual(model.projects.last?.name, "New Project 2")
         model.renameProject(made.id, to: "infra")
