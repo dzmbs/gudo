@@ -1,4 +1,6 @@
+import DesignSystem
 import PaneLayout
+import TerminalRenderer
 import XCTest
 @testable import App
 
@@ -33,6 +35,19 @@ final class DividerDragTests: XCTestCase {
         let left = make()
         workspace.apply(.setRatio(left, .horizontal, ratio: 0.7))
         XCTAssertTrue(ContinuousClock.now < workspace.keyboardResizeUntil, "the grids it changes show no overlay")
+    }
+
+    /// A split, a zoom, a float or a dock moves the panes in the structural spring: their grids
+    /// change while it runs or as its stills give way, and no cols × rows overlay shows for any.
+    func testLayoutChangesShowNoSizeOverlayThroughTheirMotion() {
+        let left = make()
+        let motion = Duration.seconds(DS.Motion.structuralSettle) + TerminalSurface.redrawWait
+        let ops: [LayoutOp] = [.split(left, .vertical), .toggleZoom, .toggleZoom, .float(left, frame: nil), .dock(left, beside: nil, side: .right)]
+        for op in ops {
+            workspace.layoutChangeUntil = .now
+            workspace.apply(op)
+            XCTAssertGreaterThanOrEqual(workspace.keyboardResizeUntil, .now + motion, "\(op)")
+        }
     }
 
     func testAKeyboardDividerMoveKeepsTheOverlay() {

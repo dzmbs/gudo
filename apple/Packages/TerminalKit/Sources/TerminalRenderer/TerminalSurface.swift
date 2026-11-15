@@ -534,7 +534,7 @@ public final class TerminalSurface {
     /// How long the program's output must pause after a resize to count as redrawn, and how
     /// long a view that arrived waits for that at most.
     static let redrawQuiet = Duration.milliseconds(30)
-    static let redrawWait = Duration.milliseconds(150)
+    public static let redrawWait = Duration.milliseconds(150)
 
     /// Holds the frames of views resized during `duration`, for an animation whose end size only
     /// the layout knows (the sidebar): each shows its last frame until it settles, then changes
