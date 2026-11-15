@@ -61,7 +61,9 @@ struct TabBar: View {
     private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy) {
         guard let ref else { return }
         Task { @MainActor in
-            guard let anchor = spans.anchor(revealing: ref) else { return }
+            // Where the spans know no better (a chip not yet measured), the scroll's own least
+            // travel, which leaves a chip in view where it is.
+            let anchor = spans.anchor(revealing: ref)
             withAnimation(DS.Motion.standard) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
             TabTimeline.mark(.scrolledIntoView)
         }
@@ -131,7 +133,7 @@ final class StripSpans {
     var chips: [TabRef: ClosedRange<CGFloat>] = [:]
     var visible: ClosedRange<CGFloat> = 0...0
 
-    /// The edge to scroll `ref` to, the nearer one; nil while it shows whole or is not laid out.
+    /// The edge to scroll `ref` to, the nearer one; nil while it shows whole or is not measured.
     func anchor(revealing ref: TabRef) -> UnitPoint? {
         guard let chip = chips[ref] else { return nil }
         return Self.anchor(chip: chip, visible: visible)

@@ -110,8 +110,12 @@ final class TabStripTests: XCTestCase {
         let shown = scrollView.convert(scrollView.bounds, to: nil)
         for ref in [model.groups.tabs.last, model.groups.tabs.first, model.groups.tabs[7]].compactMap(\.self) {
             model.focus(ref)
-            try await Task.sleep(for: .milliseconds(700))
-            let chip = try XCTUnwrap(frames.byTab[ref])
+            var chip = CGRect.null
+            for _ in 0..<40 {
+                try await Task.sleep(for: .milliseconds(50))
+                chip = try XCTUnwrap(frames.byTab[ref])
+                if chip.minX >= shown.minX - 1, chip.maxX <= shown.maxX + 1 { break }
+            }
             XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "\(ref) cut at the leading edge")
             XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "\(ref) cut at the trailing edge")
         }
