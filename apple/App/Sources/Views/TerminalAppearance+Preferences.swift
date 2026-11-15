@@ -12,6 +12,8 @@ extension TerminalAppearance {
         var appearance = TerminalAppearance()
         if let size = defaults.object(forKey: Key.fontSize) as? Double { appearance.fontSize = size }
         appearance.paddingBalance = true
+        // Text never touches a split's line or the window's edge.
+        appearance.padding = DS.Space.xs
         if let opacity = defaults.object(forKey: Key.unfocusedSplitOpacity) as? Double { appearance.unfocusedSplitOpacity = opacity }
         if let blink = defaults.object(forKey: Key.cursorBlink) as? Bool { appearance.cursorBlink = blink }
         switch TerminalPreferences.CursorStyle(rawValue: defaults.string(forKey: Key.cursorStyle) ?? "") {
