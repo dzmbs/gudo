@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Sun, 15 Nov 2026 20:42:57 +0100
+Subject: [PATCH] Screen: clearing a prompt for redraw starts where its line
+ starts
+
+A reflow gives each row a prompt line wraps onto the line's own prompt
+state, so the prompt the iterator finds can be the second half of a line.
+Clearing the prompt for the shell to redraw (prompt_redraw) began there
+and left the line's first half on the screen: a two-line prompt whose
+first line spans the width (a right prompt) left a copy of that line
+above the redrawn prompt each time the columns shrank.
+
+The clear now starts at the row the line begins on.
+---
+ src/terminal/Screen.zig | 40 +++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/src/terminal/Screen.zig b/src/terminal/Screen.zig
+index ee2689f..f2bfc13 100644
+--- a/src/terminal/Screen.zig
++++ b/src/terminal/Screen.zig
+@@ -2480,13 +2480,21 @@ fn clearPromptForRedraw(
+                         .left_up,
+                         null,
+                     );
+-                    break :start it.next() orelse {
++                    var start = it.next() orelse {
+                         // This should never happen because promptIterator should always
+                         // find a prompt if we already verified our row is some kind of
+                         // prompt.
+                         log.warn("cursor on prompt line but promptIterator found no prompt", .{});
+                         break :prompt;
+                     };
++
++                    // A reflow gives the rows a prompt line wraps onto the
++                    // line's own prompt state, so the prompt found can be the
++                    // second half of a line. Clear from where the line starts.
++                    while (start.rowAndCell().row.wrap_continuation) {
++                        start = start.up(1) orelse break;
++                    }
++                    break :start start;
+                 };
+ 
+                 // Clear cells from our start down. We replace it with spaces,
+@@ -9579,6 +9587,36 @@ test "Screen: resize with prompt_redraw last multiline prompt clears only last l
+     }
+ }
+ 
++test "Screen: resize with prompt_redraw clears a multiline prompt whose first line wraps" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 10, .rows = 5, .max_scrollback_bytes = 5 });
++    defer s.deinit();
++
++    // zig fmt: off
++    s.cursorSetSemanticContent(.{ .prompt = .initial });
++    try s.testWriteString("ABCDEFGH\n");
++    s.cursorSetSemanticContent(.{ .prompt = .secondary });
++    try s.testWriteString("> ");
++    // zig fmt: on
++
++    try s.resize(.{
++        .cols = 4,
++        .rows = 5,
++        .prompt_redraw = .true,
++    });
++
++    // Every row of the prompt is cleared, including the first line's
++    // half that wrapped onto a row of its own.
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("", contents);
++    }
++}
++
+ test "Screen: select untracked" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
+-- 
+2.54.0 (Apple Git-157)
+

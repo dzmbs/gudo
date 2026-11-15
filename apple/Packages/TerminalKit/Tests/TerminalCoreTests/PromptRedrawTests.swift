@@ -32,6 +32,16 @@ private func lines(_ terminal: Terminal) -> [String] {
     #expect(lines(terminal) == [promptLine(cols: 50)])
 }
 
+/// A two-line prompt whose first line wraps when the pane narrows: every row of it is cleared,
+/// including the half of the first line that wrapped onto a row of its own.
+@Test func resizeClearsEveryRowOfATwoLinePrompt() {
+    let terminal = Terminal(cols: 100, rows: 10) { _ in }
+    let firstLine = String(repeating: "=", count: 60)
+    terminal.write(Array("\(esc)]133;A;cl=line\u{07}\(firstLine)\r\n\(esc)]133;P;k=s\u{07}> \(esc)]133;B\u{07}".utf8))
+    terminal.resize(cols: 50, rows: 10, cellWidth: 8, cellHeight: 16)
+    #expect(lines(terminal).isEmpty)
+}
+
 @Test func clearedScreenStaysClearWhenThePaneNarrows() {
     let terminal = Terminal(cols: 100, rows: 10) { _ in }
     terminal.write(prompt(cols: 100))

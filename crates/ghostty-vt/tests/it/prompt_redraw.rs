@@ -74,3 +74,16 @@ fn restored_terminal_keeps_the_shells_redraw_setting() -> Result<(), Error> {
     assert_eq!(rows(&client)?, ["P>"]);
     Ok(())
 }
+
+#[test]
+fn resize_clears_every_row_of_a_two_line_prompt() -> Result<(), Error> {
+    let mut terminal = Terminal::new(100, 30)?;
+    let first_line = "=".repeat(60);
+    terminal.write(
+        format!("\x1b]133;A;cl=line\x07{first_line}\r\n\x1b]133;P;k=s\x07> \x1b]133;B\x07")
+            .as_bytes(),
+    );
+    terminal.resize(50, 30, (8, 16))?;
+    assert_eq!(rows(&terminal)?, Vec::<String>::new());
+    Ok(())
+}
