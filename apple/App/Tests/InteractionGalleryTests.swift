@@ -43,9 +43,45 @@ final class InteractionGalleryTests: XCTestCase {
     }
 
     func testRenderToastPlacement() throws {
+        let saved = UserDefaults.standard.object(forKey: ToastPosition.key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: ToastPosition.key) } else { UserDefaults.standard.removeObject(forKey: ToastPosition.key) }
+        }
         for (appearance, themeName) in Self.themes {
             let theme = ThemeCatalog.theme(named: themeName)
-            try render(ToastPlacementSheet(theme: theme), named: "toast-placement-\(appearance)")
+            for position in ToastPosition.allCases {
+                UserDefaults.standard.set(position.rawValue, forKey: ToastPosition.key)
+                try render(ToastPlacementSheet(theme: theme), named: "toast-placement-\(appearance)-\(position.rawValue)")
+            }
+        }
+    }
+
+    func testRenderPaneEmphasis() async throws {
+        try XCTSkipIf(!LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
+        let keys = [TerminalPreferences.Key.theme, ThemePair.enabledKey, TerminalPreferences.Key.paneStyle,
+                    TerminalPreferences.Key.paneActiveBorder, TerminalPreferences.Key.paneInactiveFade,
+                    "window.projects", "window.focusedTab", "window.focusedPane", "window.mixedTabs", "tab-touches"]
+        let saved = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, value) in saved {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        UserDefaults.standard.set(false, forKey: ThemePair.enabledKey)
+        let variants: [(String, Bool, TerminalPreferences.InactivePaneFade, TerminalPreferences.PaneStyle)] = [
+            ("default", false, .dim, .compact), ("ring", true, .dim, .compact), ("ring-header", true, .header, .compact),
+            ("ring-none-comfortable", true, .none, .comfortable),
+        ]
+        for (appearance, themeName) in Self.themes {
+            UserDefaults.standard.set(themeName, forKey: TerminalPreferences.Key.theme)
+            for (name, border, fade, style) in variants {
+                UserDefaults.standard.set(border, forKey: TerminalPreferences.Key.paneActiveBorder)
+                UserDefaults.standard.set(fade.rawValue, forKey: TerminalPreferences.Key.paneInactiveFade)
+                UserDefaults.standard.set(style.rawValue, forKey: TerminalPreferences.Key.paneStyle)
+                for setting in [GalleryAccessibility.standard, .increasedContrast] where name == "ring" || setting == .standard {
+                    try await captureSplitWindow(named: "panes-\(appearance)-\(name)-\(setting.rawValue)", setting: setting)
+                }
+            }
         }
     }
 
@@ -82,7 +118,21 @@ final class InteractionGalleryTests: XCTestCase {
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     }
 
-    private func captureWindow(_ content: some View, size: NSSize, named name: String) async throws {
+    private func captureSplitWindow(named name: String, setting: GalleryAccessibility) async throws {
+        let model = WindowModel(app: .shared)
+        model.start()
+        defer { model.close() }
+        let content = WindowContent(request: nil, model: model).galleryAccessibility(setting)
+        try await captureWindow(content, size: NSSize(width: 1100, height: 640), named: name, settle: .seconds(1.5)) {
+            for _ in 0..<50 where model.workspace?.focusedPane == nil { try? await Task.sleep(for: .milliseconds(100)) }
+            model.isSidebarShown = false
+            model.workspace?.split(.horizontal)
+        }
+    }
+
+    private func captureWindow(
+        _ content: some View, size: NSSize, named name: String, settle: Duration = .milliseconds(800), arrange: () async -> Void = {}
+    ) async throws {
         let window = OffscreenWindow(
             contentRect: NSRect(origin: NSPoint(x: -30000, y: -30000), size: size),
             styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
@@ -94,7 +144,8 @@ final class InteractionGalleryTests: XCTestCase {
         window.setContentSize(size)
         window.orderFrontRegardless()
         defer { window.close() }
-        try await Task.sleep(for: .milliseconds(800))
+        await arrange()
+        try await Task.sleep(for: settle)
         let view = try XCTUnwrap(window.contentView?.superview ?? window.contentView)
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -189,7 +240,7 @@ private struct GalleryHostSwitcher: View {
                 HostSwitcherCommand(id: "tab", title: "New Tab", systemImage: "plus", shortcut: ["⌘", "T"]) {},
                 HostSwitcherCommand(id: "ssh", group: 1, title: "Connect via SSH…", systemImage: "terminal", shortcut: ["⇧", "⌘", "K"]) {},
             ],
-            onSelect: { _ in }, onCreate: { _ in }, focusesFilter: false, onDismiss: {})
+            onSelect: { _ in }, onCreate: { _ in }, focusesFilter: true, onDismiss: {})
     }
 }
 
