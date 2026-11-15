@@ -250,6 +250,10 @@ protocol AgentFeed: AnyObject, Observable {
     /// For a drive request: allows it and every later one from that agent to that pane until the
     /// pane closes.
     func allowForPane(_ id: AgentItem.ID)
+    /// Whether the agent offers to stop asking about this tool ("don't ask again").
+    func canApproveAlways(_ id: AgentItem.ID) -> Bool
+    /// Approves and tells the agent not to ask about this tool again.
+    func approveAlways(_ id: AgentItem.ID)
 
     /// Edit and "approve all like this" for a permission request; nil when neither is offered.
     func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions?
@@ -265,6 +269,8 @@ protocol AgentFeed: AnyObject, Observable {
 /// Feeds without the approval extras (mocks, fakes): plain approve and deny.
 extension AgentFeed {
     func allowForPane(_ id: AgentItem.ID) { approve(id) }
+    func canApproveAlways(_ id: AgentItem.ID) -> Bool { false }
+    func approveAlways(_ id: AgentItem.ID) { approve(id) }
     func approvalOptions(_ id: AgentItem.ID) -> AgentApprovalOptions? { nil }
     func autoApprovals(_ id: AgentItem.ID) -> [AgentAutoApproval] { [] }
     func approveEdited(_ id: AgentItem.ID, input: String) async throws { throw ApprovalUnavailable() }

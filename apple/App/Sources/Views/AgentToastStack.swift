@@ -162,6 +162,12 @@ private struct AgentToastCard: View {
                     .keyboardShortcut(isHovered ? .cancelAction : nil)
                     .help("Deny (Esc)")
                     .accessibilityIdentifier("agent-toast-deny-\(item.id)")
+                if model.agents.canApproveAlways(item.id) {
+                    Button("Always") { approveAlways() }
+                        .buttonStyle(.glass)
+                        .help("Approve, and don't ask again about this tool")
+                        .accessibilityIdentifier("agent-toast-always-\(item.id)")
+                }
                 if item.drive {
                     Button("This Pane") { allowForPane() }
                         .buttonStyle(.glass)
@@ -196,6 +202,13 @@ private struct AgentToastCard: View {
     private func decide(allow: Bool) {
         withAnimation(DS.Motion.snappy) {
             if allow { model.agents.approve(item.id) } else { model.agents.deny(item.id) }
+            model.agentToasts.dismiss(card.id)
+        }
+    }
+
+    private func approveAlways() {
+        withAnimation(DS.Motion.snappy) {
+            model.agents.approveAlways(item.id)
             model.agentToasts.dismiss(card.id)
         }
     }

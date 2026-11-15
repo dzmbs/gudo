@@ -680,6 +680,31 @@ final class LiveAgentFeed: AgentFeed {
         daemon.decide(requestId: request, optionId: option)
     }
 
+    func canApproveAlways(_ id: AgentItem.ID) -> Bool {
+        alwaysOption(id) != nil
+    }
+
+    func approveAlways(_ id: AgentItem.ID) {
+        guard let (daemon, request, option) = alwaysOption(id) else { return }
+        answered[id] = request
+        daemon.decide(requestId: request, optionId: option.id)
+    }
+
+    /// The agent's own "don't ask again" answer to the request the item is blocked on.
+    private func alwaysOption(_ id: AgentItem.ID) -> (DaemonConnection, UInt64, DecisionOption)? {
+        let parts = id.split(separator: "/")
+        guard parts.count == 2, let pane = UInt64(parts[1]),
+              let daemon = hosts.connection(String(parts[0])) as? DaemonConnection,
+              case .blocked(let request, _, let options)? = daemon.meta[PaneId(pane)]?.agent?.state,
+              daemon.approvals.drives[request] == nil,
+              let option = options.first(where: { option in
+                  let label = option.label.lowercased()
+                  return label.contains("don't ask again") || label.contains("always")
+              })
+        else { return nil }
+        return (daemon, request, option)
+    }
+
     func allowForPane(_ id: AgentItem.ID) {
         let parts = id.split(separator: "/")
         guard parts.count == 2, let pane = UInt64(parts[1]),
