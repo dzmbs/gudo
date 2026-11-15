@@ -336,7 +336,7 @@ struct MixedTabView: View {
             let isSplit = single == nil && tab.leaves.count > 1
             SplitTreeView(node: single.map(Node.leaf) ?? tab.layout.root, tree: MixedTabTree(model: model, id: id, isActive: isActive), isSplit: isSplit, animated: !compact)
                 .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
-                .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
+                .background(paneStyle == .comfortable && isSplit ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(theme.background), ignoresSafeAreaEdges: [])
                 .background(theme.background, ignoresSafeAreaEdges: [])
                 .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
                     if isActive, !model.isPresentation, model.terminalArea != size { model.terminalArea = size }

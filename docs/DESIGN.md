@@ -550,7 +550,7 @@ tabs to reorder.
   the feedback, and while the software keyboard moves); process-exited bar at the bottom (red 50 % on failure,
   hides under the pointer); secure-input badge top-right; bell border; hovered URL bottom-left;
   scrollback search bar top-right (draggable to any corner).
-- Comfortable pane style (Settings → Panes): inset rounded panes on a divider-colored field,
+- Comfortable pane style (Settings → Panes): inset rounded panes on the window's own base surface (no field of its own whose square edges meet the chrome),
   each a `Surface.pane` (opaque, its edges and top light, no shadow). Compact panes are tiles:
   the split's one-pixel line is their only boundary.
 

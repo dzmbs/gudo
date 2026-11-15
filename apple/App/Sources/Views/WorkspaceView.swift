@@ -678,7 +678,7 @@ struct ActiveTabView: View {
                 if compact { PictureInPicture(workspace: workspace, tab: tab) }
             }
             .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
-            .background(paneStyle == .comfortable && isSplit ? theme.splitDivider : theme.background, ignoresSafeAreaEdges: [])
+            .background(paneStyle == .comfortable && isSplit ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(theme.background), ignoresSafeAreaEdges: [])
     }
 }
 
