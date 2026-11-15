@@ -21,6 +21,39 @@ nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sen
 
     public var needsYou: Bool { self == .blocked || self == .error }
 
+    /// The most urgent of several states (a tab's panes, a project's tabs): blocked, then failed,
+    /// working, done, no contact, idle.
+    public static func mostUrgent(_ states: some Sequence<AgentState>) -> AgentState? {
+        states.min { $0.urgency < $1.urgency }
+    }
+
+    /// How a program tile carries the state: quiet states as a dot on its corner, the ones that
+    /// need you as a `StatePill` beside the title. Nothing for a host out of contact.
+    public enum StatusMark: Sendable { case dot, pill }
+
+    public var statusMark: StatusMark? {
+        switch self {
+        case .idle, .working, .done: .dot
+        case .blocked, .error: .pill
+        case .unknown: nil
+        }
+    }
+
+    /// The pill's words.
+    public var pillTitle: String {
+        switch self {
+        case .blocked: "Needs you"
+        case .error: "Failed"
+        default: title
+        }
+    }
+
+    /// A tab whose agent turns blocked while it is out of sight gets one attention beat; a tab
+    /// in view, or a failure, does not.
+    public static func callsForAttention(from previous: AgentState?, to state: AgentState?, isVisible: Bool) -> Bool {
+        state == .blocked && previous != .blocked && !isVisible
+    }
+
     public var title: String {
         switch self {
         case .idle: "Idle"
@@ -42,8 +75,8 @@ nonisolated public enum AgentState: String, CaseIterable, Codable, Hashable, Sen
         }
     }
 
-    /// SF Symbol for the static states (working draws a spinner instead).
-    var symbol: String {
+    /// SF Symbol for the static states (working draws a spinner instead); menus show it too.
+    public var symbol: String {
         switch self {
         case .idle: "circle"
         case .working: "circle.dotted"
