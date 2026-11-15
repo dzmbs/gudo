@@ -326,7 +326,7 @@ enum DesignFixtures {
             ("search", "gemini", nil), ("pr", "copilot", nil), ("init.el", "emacs", nil), ("api", "docker", nil),
             ("prod", "kubectl", nil), ("web", "node", nil), ("bench", "bun", nil), ("tools", "deno", nil),
             ("server", "go", nil), ("build", "cargo", nil), ("check", "rustc", nil), ("db", "psql", nil),
-            ("cache", "redis-cli", nil),
+            ("cache", "redis-cli", nil), ("plan", "pi", .done), ("fix", "opencode", .error), ("triage", "amp", .idle),
         ]
         var fixture: [String: (program: String, state: AgentState?)] = [:]
         // `-fixtureTabs N` keeps the first N only.
