@@ -178,7 +178,7 @@ offset; it never animates its own frame, size or padding. Small things are fast 
 | `micro` | 0.10 s, no bounce | 0.106 s | hover fills, a press (scale 0.97), pills, badges, status glyphs, ⌘ hints, lit toggles, a field's focus ring |
 | `standard` | 0.18 s, no bounce | 0.191 s | rows and selection, toasts and banners, menus, popovers, the host switcher's highlight, panels and bars, overlays, the search corner snap, a swipe settling, sidebar rows making room for a drag, the bell border |
 | `structural` | 0.24 s, no bounce | 0.254 s (at rest, within 0.5 %, by `structuralSettle`, 0.284 s) | splits, closing, zoom, a pane floating out or docking, a window to the tray and back, a floating window settling after a flick, picture in picture, the sidebar, the iPhone Duo's fold |
-| `palette` | none on the Mac (`animationBehavior = .none`); `standard` on touch | | command palette in and out |
+| `palette` | `micro` on the Mac (the scrim fades, the panel grows from 98 % at its top); `standard` on touch | | command palette in and out |
 
 Named transitions (`.motionTransition(_:)`), each only opacity, scale and offset, each on its
 own role so it never pops even when the change is not animated:
@@ -728,10 +728,12 @@ down, over a light scrim that dims the find bar and everything else beneath. Gla
 paper (light) or raised surface (dark), a hairline edge and a soft shadow. A magnifier and the
 20 pt light query "Execute a command…", a hairline, then compact one-line rows (40 pt touch,
 32 pt Mac): the program's mark for tabs and agents (with the agent's state as a small badge) or a
-symbol, the title, the subtitle inline in secondary, a badge, and the shortcut as small muted key
-caps. Small tertiary section headers. The selected row is the soft `selection` tint, the text
+symbol, the title at regular weight, the subtitle inline in secondary, a badge, and the command's
+own shortcut as small muted key caps; while ⌘ is held the first five rows show ⌘1…⌘5 instead.
+Small tertiary section headers. The selected row is the soft `selection` tint, the text
 unchanged. Empty query: sections Needs You → Tabs → Terminal → Go → Hosts. With a query: fuzzy
-ranked flat list, matched characters bold. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside
+ranked within their sections, the sections in the order of their best match, matched
+characters bold. ↑↓ / ⌃P ⌃N move, Return runs, Esc or a click outside
 closes. A `KeyHintBar` at the foot says so: "↑ ↓ Move", "↩ Run" leading, "esc Close" trailing.
 Workflow forms open in the same place. Fixtures: `palette`, `palette-search`, `goto`,
 `palette-workflows`.

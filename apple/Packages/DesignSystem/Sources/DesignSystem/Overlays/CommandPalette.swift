@@ -33,9 +33,10 @@ public struct PaletteCommand: Identifiable {
 }
 
 /// The command palette: a search field over compact one-line rows. One row is always selected;
-/// ↑/↓ and ⌃P/⌃N move, Return runs, ⌘1–⌘5 run the first five matches, Esc or clicking outside
-/// closes. With an empty query, entries are grouped by section; with a query, they are ranked
-/// flat. Present it with `spotlightOverlay`.
+/// ↑/↓ and ⌃P/⌃N move, Return runs, ⌘1–⌘5 run the first five rows (their digits show while ⌘ is
+/// held), Esc or clicking outside closes. Entries are grouped by section; with a query, the
+/// sections follow their best match and rows are ranked within them. Present it with
+/// `spotlightOverlay`.
 public struct CommandPalette: View {
     @Binding var isPresented: Bool
     let commands: [PaletteCommand]
@@ -49,6 +50,7 @@ public struct CommandPalette: View {
     @State private var query = ""
     @State private var selection: String?
     @State private var contentHeight: CGFloat = .infinity
+    @State private var isCommandHeld = false
     @FocusState private var isFocused: Bool
 
     public init(
@@ -64,16 +66,23 @@ public struct CommandPalette: View {
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var results: [PaletteCommand] {
-        guard !trimmedQuery.isEmpty else { return commands }
-        return commands
+    private var results: [PaletteCommand] { Self.results(for: trimmedQuery, in: commands) }
+
+    /// Every command for an empty query; otherwise the matches, ranked within their sections and
+    /// the sections in the order of their best match.
+    static func results(for query: String, in commands: [PaletteCommand]) -> [PaletteCommand] {
+        guard !query.isEmpty else { return commands }
+        let ranked = commands
             .compactMap { command -> (PaletteCommand, Int)? in
-                if let score = FuzzyMatch.score(trimmedQuery, in: command.title) { return (command, score) }
-                if let subtitle = command.subtitle, let score = FuzzyMatch.score(trimmedQuery, in: subtitle) { return (command, score - 50) }
+                if let score = FuzzyMatch.score(query, in: command.title) { return (command, score) }
+                if let subtitle = command.subtitle, let score = FuzzyMatch.score(query, in: subtitle) { return (command, score - 50) }
                 return nil
             }
             .sorted { $0.1 > $1.1 }
             .map(\.0)
+        var sectionOrder: [String?] = []
+        for command in ranked where !sectionOrder.contains(command.section) { sectionOrder.append(command.section) }
+        return sectionOrder.flatMap { section in ranked.filter { $0.section == section } }
     }
 
     public var body: some View {
@@ -107,6 +116,7 @@ public struct CommandPalette: View {
         .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
         .padding(.horizontal, DS.Space.l)
         .task { await takeFocus() }
+        .onModifierKeysChanged(mask: .command, initial: true) { _, keys in isCommandHeld = keys.contains(.command) }
         .onChange(of: query) {
             selection = nil
             if let onScope, onScope(query) { query = "" }
@@ -161,7 +171,7 @@ public struct CommandPalette: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(results.enumerated()), id: \.element.id) { index, command in
-                        if trimmedQuery.isEmpty, let section = command.section,
+                        if let section = command.section,
                            index == 0 || results[index - 1].section != section {
                             Text(section)
                                 .font(Self.sectionFont)
@@ -206,6 +216,7 @@ public struct CommandPalette: View {
     static let iconSize: CGFloat = 18
     #endif
     static let sectionFont = SwiftUI.Font.caption.weight(.medium)
+    static let matchFont = titleFont.weight(.bold)
     /// Rows sit this far inside the panel, so their corners are concentric with its own.
     static let listInset: CGFloat = DS.Radius.panel - DS.Radius.control
 
@@ -215,7 +226,7 @@ public struct CommandPalette: View {
                 icon(command)
                     .frame(width: Self.iconSize, height: Self.iconSize)
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
-                    highlighted(command.title)
+                    Text(Self.highlightedTitle(command.title, query: trimmedQuery))
                         .font(Self.titleFont)
                         .foregroundStyle(DS.Palette.text)
                         .lineLimit(1)
@@ -239,8 +250,8 @@ public struct CommandPalette: View {
                         .background(DS.Palette.selectedFill, in: .capsule)
                         .foregroundStyle(DS.Palette.textSecondary)
                 }
-                // The first five results run with ⌘1–⌘5 while a query narrows them.
-                if !trimmedQuery.isEmpty, index < 5 {
+                // Held ⌘ shows which of the first five rows ⌘1–⌘5 run.
+                if isCommandHeld, index < 5 {
                     PaletteKeys(["⌘", "\(index + 1)"])
                 } else if let shortcut = command.shortcut {
                     PaletteKeys(shortcut)
@@ -268,16 +279,19 @@ public struct CommandPalette: View {
         }
     }
 
-    /// Matched characters in bold, in the row's own colour (never the accent).
-    private func highlighted(_ title: String) -> Text {
-        guard !trimmedQuery.isEmpty, let indices = FuzzyMatch.indices(trimmedQuery, in: title) else { return Text(title) }
+    /// Matched characters in bold, in the row's own colour (never the accent), and the rest at
+    /// the title's regular weight, each set on the characters themselves so no weight from
+    /// around the row changes them.
+    static func highlightedTitle(_ title: String, query: String) -> AttributedString {
         var attributed = AttributedString(title)
+        attributed.font = titleFont
+        guard !query.isEmpty, let indices = FuzzyMatch.indices(query, in: title) else { return attributed }
         for offset in indices {
             let start = attributed.index(attributed.startIndex, offsetByCharacters: offset)
             let end = attributed.index(start, offsetByCharacters: 1)
-            attributed[start..<end].inlinePresentationIntent = .stronglyEmphasized
+            attributed[start..<end].font = matchFont
         }
-        return Text(attributed)
+        return attributed
     }
 
     private func move(_ delta: Int, in results: [PaletteCommand]) {
@@ -336,6 +350,9 @@ private struct SpotlightLayer<Panel: View>: View {
     let onDismiss: () -> Void
     let panel: () -> Panel
     @Environment(\.chrome) private var chrome
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The panel grows the last hair to full size from its top as the scrim fades in.
+    @State private var hasArrived = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -345,10 +362,14 @@ private struct SpotlightLayer<Panel: View>: View {
                     .onTapGesture(perform: onDismiss)
                     .accessibilityHidden(true)
                 panel()
+                    .scaleEffect(hasArrived || reduceMotion ? 1 : MotionTransition.panel(from: .top).scale, anchor: .top)
                     .frame(maxWidth: .infinity)
                     .padding(.top, min(max(geometry.size.height * 0.16, DS.Space.l), 180))
                     .padding(.bottom, DS.Space.l)
             }
+        }
+        .onAppear {
+            withAnimation(DS.Motion.palette) { hasArrived = true }
         }
     }
 }

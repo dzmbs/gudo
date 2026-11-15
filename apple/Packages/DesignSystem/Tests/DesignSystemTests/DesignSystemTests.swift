@@ -40,3 +40,27 @@ import Testing
     #expect(sorted.first == .blocked)
     #expect(sorted.last == .idle)
 }
+
+@MainActor @Test func paletteResultsStayInTheirSectionsWithTheBestMatchFirst() {
+    func command(_ title: String, _ section: String) -> PaletteCommand {
+        PaletteCommand(id: title, title: title, section: section) {}
+    }
+    let commands = [
+        command("Toggle Split Lines", "Settings"),
+        command("Split Right", "Pane"),
+        command("Split Down", "Pane"),
+        command("Close Split", "Pane"),
+    ]
+    let titles = CommandPalette.results(for: "split", in: commands).map(\.title)
+    #expect(titles == ["Split Right", "Split Down", "Close Split", "Toggle Split Lines"])
+}
+
+@MainActor @Test func paletteTitleBoldsOnlyTheMatchedCharacters() {
+    let title = CommandPalette.highlightedTitle("Split Right", query: "spr")
+    let bold = title.runs.filter { $0.font == CommandPalette.matchFont }
+        .reduce(0) { count, run in count + title[run.range].characters.count }
+    #expect(bold == 3, "S, p and R")
+    let regular = title.runs.filter { $0.font == CommandPalette.titleFont }
+        .reduce(0) { count, run in count + title[run.range].characters.count }
+    #expect(regular == 8)
+}

@@ -148,9 +148,10 @@ public extension DS {
         /// Content that lands where a structural move is heading shows as the move arrives.
         public static let arrivalDelay = 0.08
 
-        /// None on the Mac, where the palette is a panel that appears at once; `standard` on touch.
+        /// The command palette in and out: `micro` on the Mac, where it is a panel that should
+        /// feel as quick as a keystroke; `standard` on touch.
         #if os(macOS)
-        public static let palette: Animation? = nil
+        public static let palette: Animation? = micro
         #else
         public static let palette: Animation? = standard
         #endif
