@@ -64,6 +64,35 @@ final class UIKitPasteTests: XCTestCase {
         XCTAssertEqual(String(decoding: sink.bytes.withLock { $0 }, as: UTF8.self), "'/tmp/a b/it'\\''s.png'")
     }
 
+    /// ⌘C and the menu's Copy are there only with a selection; ⌘A then ⌘C takes the scrollback too.
+    func testCopyIsOfferedOnlyWithASelectionAndSelectAllReachesScrollback() throws {
+        let sink = PasteSink(), view = try makeView(sink)
+        view.surface.terminal.write(Array((0..<12).map { "line \($0)\r\n" }.joined().utf8))
+        let copy = #selector(UIResponderStandardEditActions.copy(_:))
+        XCTAssertFalse(view.canPerformAction(copy, withSender: nil))
+        XCTAssertTrue(view.canPerformAction(#selector(UIResponderStandardEditActions.selectAll(_:)), withSender: nil))
+        view.selectAll(nil)
+        XCTAssertTrue(view.canPerformAction(copy, withSender: nil))
+        view.copy(nil)
+        XCTAssertEqual(UIPasteboard.general.string, (0..<12).map { "line \($0)" }.joined(separator: "\n"))
+        XCTAssertTrue(sink.bytes.withLock { $0 }.isEmpty, "copying sends nothing to the program")
+    }
+
+    /// The long-press menu: Copy with a selection, the system's own Paste, and Select All.
+    func testEditMenuOffersCopyWithASelectionAndTheSystemPaste() throws {
+        let sink = PasteSink(), view = try makeView(sink)
+        view.surface.terminal.write(Array("hello world".utf8))
+        let interaction = UIEditMenuInteraction(delegate: view)
+        let paste = UICommand(title: "Paste", action: #selector(UIResponderStandardEditActions.paste(_:)))
+        let configuration = UIEditMenuConfiguration(identifier: nil, sourcePoint: .zero)
+        let plain = view.editMenuInteraction(interaction, menuFor: configuration, suggestedActions: [paste])
+        XCTAssertEqual(plain?.children.map(\.title), ["Paste", "Select All"])
+        XCTAssertTrue(plain?.children.first === paste)
+        view.surface.terminal.selectWord(atViewport: GridPoint(x: 1, y: 0))
+        let selected = view.editMenuInteraction(interaction, menuFor: configuration, suggestedActions: [paste])
+        XCTAssertEqual(selected?.children.map(\.title), ["Copy", "Paste", "Select All"])
+    }
+
     /// The key bar's paste control hands the terminal item providers; they paste like ⌘V does,
     /// bracketed when the program asks.
     func testPasteControlItemsPasteBracketed() async throws {

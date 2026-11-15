@@ -61,6 +61,19 @@ final class TerminalGeneratedInputTests: XCTestCase {
         XCTAssertTrue(backend.generated.withLock { $0.isEmpty })
     }
 
+    /// A pane on another machine: the selection is this device's copy of the screen, so copying
+    /// reads it here; a paste is framed here by the host program's modes and goes to its PTY.
+    func testRemotePaneCopiesLocallyAndPastesToTheHost() throws {
+        let backend = RecordingBackend()
+        let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
+        pane.view.surface.terminal.write(Array("\u{1b}[?2004hremote text".utf8))
+        pane.view.surface.terminal.selectWord(atViewport: GridPoint(x: 0, y: 0))
+        XCTAssertEqual(pane.view.surface.terminal.selectionText(), "remote")
+        pane.view.pasteText("one\ntwo")
+        XCTAssertEqual(backend.input.withLock { $0 }, [Array("\u{1b}[200~one\ntwo\u{1b}[201~".utf8)])
+        XCTAssertTrue(backend.generated.withLock { $0.isEmpty })
+    }
+
     func testVTQueriesStillUseTheGeneratedReplyPath() throws {
         let backend = RecordingBackend()
         let pane = try Pane(id: PaneId(1), backend: backend, onExit: {})
