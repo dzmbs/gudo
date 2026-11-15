@@ -132,7 +132,8 @@ struct ChatRowView: View {
     @ViewBuilder private func itemContent(_ item: TimelineItem) -> some View {
         switch item.body {
         case .user(let user): userContent(item, user: user)
-        case .assistant(let assistant): Text(verbatim: assistant.text).font(DS.Font.prose)
+        case .assistant(let assistant):
+            Text(verbatim: assistant.text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
         case .tool(let tool): toolContent(item, tool: tool)
         case .thinking(let thinking): thinkingContent(thinking)
         case .plan(let plan): planContent(plan)
@@ -168,7 +169,7 @@ struct ChatRowView: View {
     }
 
     private func bubble(_ text: String) -> some View {
-        Text(verbatim: text).font(DS.Font.prose)
+        Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
             .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
     }
@@ -264,6 +265,7 @@ struct ChatRowView: View {
         VStack(alignment: .leading, spacing: 0) {
             Label {
                 Text(verbatim: row.preview ?? notice.text).foregroundStyle(DS.Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: notice.kind == .known(.error) ? "exclamationmark.circle" : "info.circle")
                     .foregroundStyle(notice.kind == .known(.error) ? DS.Palette.error : DS.Palette.info)

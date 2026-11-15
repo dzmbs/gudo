@@ -429,7 +429,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             let height: CGFloat
             if let cached = heights.peek(key(row)) { height = cached }
             else if old.contentWidth == width, let index = old.indices[row.id.storageKey] { height = old.rows[index].height }
-            else { height = estimate(row, scale: scale) }
+            else { height = ChatRowEstimate.height(for: row, rowWidth: width, scale: scale) }
             return NativeListRow(id: row.id.storageKey, height: max(1, height))
         }
         if kept > 0 { document.replaceRows(from: kept, with: tail) }
@@ -553,24 +553,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
                   category: traitCollection.preferredContentSizeCategory.rawValue, dynamicType: environment.dynamicTypeSize,
                   boldText: environment.legibilityWeight == .bold, rightToLeft: environment.layoutDirection == .rightToLeft,
                   expanded: expanded.contains(row.id), fontSize: codeFontSize)
-    }
-
-    private func estimate(_ row: ChatRow, scale: CGFloat) -> CGFloat {
-        switch row.content {
-        case .markdown(let block):
-            switch block.kind {
-            case .code: return (CGFloat(block.code?.visibleLineCount ?? 1) * 20 + 84) * scale
-            case .table: return (CGFloat(block.table.count) * 34 + 44) * scale
-            case .list: return (CGFloat(block.list.count) * 28 + 14) * scale
-            case .separator: return 31
-            default: return 64 * scale
-            }
-        case .omitted: return 96 * scale
-        case .showAll: return 60 * scale
-        case .item(let item):
-            if case .plan(let plan) = item.body { return CGFloat(min(plan.entries.count, 20) * 30 + 64) * scale }
-            return 64 * scale
-        }
     }
 
     private func restore(_ y: CGFloat) {
