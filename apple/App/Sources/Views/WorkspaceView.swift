@@ -215,7 +215,12 @@ struct WorkspaceView: View {
             }
             #endif
         }
-        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { frame = $0 }
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { newFrame in
+            frame = newFrame
+            #if os(macOS)
+            model.windowWidthChanged(to: newFrame.width)
+            #endif
+        }
         .animation(DS.Motion.structural, value: model.isSidebarShown)
         .animation(DS.Motion.standard, value: model.isEditorFullScreen)
         .chromeBackground(DS.Palette.base)
@@ -235,6 +240,41 @@ enum SidebarSlide {
     static func detailOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? sidebar : 0 }
 
     static func sidebarOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? 0 : -sidebar }
+}
+
+/// A Mac window too narrow for the sidebar beside a useful terminal hides it, and shows it again
+/// once it is wide enough, unless the user showed or hid it meanwhile.
+struct SidebarWidthFit {
+    /// About 80 columns of terminal beside a sidebar of the standard width.
+    static let hideBelow: CGFloat = 900
+    /// A little wider, so a window resized around the edge does not flicker.
+    static let showFrom: CGFloat = 960
+
+    private var hidForWidth = false
+    private var isNarrow = false
+    private var userChoseWhileNarrow = false
+
+    /// Whether the sidebar should show now, or nil to leave it as it is.
+    mutating func widthChanged(to width: CGFloat, isShown: Bool) -> Bool? {
+        if width < Self.hideBelow {
+            isNarrow = true
+            guard isShown, !userChoseWhileNarrow else { return nil }
+            hidForWidth = true
+            return false
+        }
+        guard width >= Self.showFrom else { return nil }
+        isNarrow = false
+        userChoseWhileNarrow = false
+        guard hidForWidth else { return nil }
+        hidForWidth = false
+        return isShown ? nil : true
+    }
+
+    /// The user showed or hid the sidebar: that holds until the window is wide again.
+    mutating func userChose() {
+        hidForWidth = false
+        if isNarrow { userChoseWhileNarrow = true }
+    }
 }
 
 private struct TabsEmptied: Equatable {

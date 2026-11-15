@@ -394,6 +394,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   mini and wider windows are regular. Crossing the boundary keeps the tab, the focused pane and
   its scroll position, and never shows the cols × rows overlay. On the iPhone Duo the fold
   arranges a regular window further (Foldable, below).
+- A Mac window narrower than 900 pt hides its sidebar, and shows it again from 960 pt
+  (`SidebarWidthFit`), unless the user showed or hid it in between; the next window still
+  starts with the user's own choice.
 - Every window is its own (iPad scenes, Stage Manager, Mac windows): New Window (⌘N) opens the
   same hosts on the same tab; tab and host context menus have Open in New Window
   (`macwindow.badge.plus`); on iPad a tab dragged out of the window becomes a window.

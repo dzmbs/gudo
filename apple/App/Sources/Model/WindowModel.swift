@@ -148,9 +148,23 @@ final class WindowModel {
     /// window's start.
     var isSidebarShown = TabPlacement.sidebarShown {
         didSet {
-            TabPlacement.sidebarShown = isSidebarShown
+            if !isFittingSidebar {
+                TabPlacement.sidebarShown = isSidebarShown
+                sidebarWidthFit.userChose()
+            }
             quietLayoutResizes()
         }
+    }
+    @ObservationIgnored private var sidebarWidthFit = SidebarWidthFit()
+    @ObservationIgnored private var isFittingSidebar = false
+
+    /// Hides the sidebar while the window is too narrow for it (`SidebarWidthFit`); the next
+    /// window still starts with the user's own choice.
+    func windowWidthChanged(to width: CGFloat) {
+        guard let shown = sidebarWidthFit.widthChanged(to: width, isShown: isSidebarShown) else { return }
+        isFittingSidebar = true
+        isSidebarShown = shown
+        isFittingSidebar = false
     }
 
     /// The grids about to change follow an animated layout change, not a resize the user is
