@@ -48,6 +48,24 @@ fn resize_clears_the_prompt_for_the_shell_to_redraw() -> Result<(), Error> {
 }
 
 #[test]
+fn screen_cleared_at_a_prompt_stays_clear_when_the_pane_narrows() -> Result<(), Error> {
+    let mut terminal = Terminal::new(100, 30)?;
+    terminal.set_scrollback_max_bytes(None)?;
+    terminal.write(&prompt(100));
+    terminal.write(b"echo one\r\n\x1b]133;C\x07one\r\n\x1b]133;D;0\x07");
+    terminal.write(&prompt(100));
+    terminal.write(b"clear\r\n\x1b]133;C\x07\x1b[3J\x1b[H\x1b[2J\x1b]133;D;0\x07");
+    terminal.write(&prompt(100));
+    assert_eq!(rows(&terminal)?, [prompt_row(100)]);
+
+    terminal.resize(50, 30, (8, 16))?;
+    terminal.write(&prompt(50));
+    assert_eq!(rows(&terminal)?, [prompt_row(50)]);
+    assert_eq!(terminal.cursor().y, 0);
+    Ok(())
+}
+
+#[test]
 fn restored_terminal_keeps_the_shells_redraw_setting() -> Result<(), Error> {
     let mut daemon = Terminal::new(40, 4)?;
     daemon.write(b"\x1b]133;A;redraw=0\x07P> \x1b]133;B\x07");

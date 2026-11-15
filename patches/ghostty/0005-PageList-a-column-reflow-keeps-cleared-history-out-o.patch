@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Gudo Authors <noreply@gudo.dev>
+Date: Sun, 15 Nov 2026 20:11:16 +0100
+Subject: [PATCH] PageList: a column reflow keeps cleared history out of view
+
+Shrinking columns keeps the rows below the cursor (see preserved_cursor)
+by offsetting the rows the reflow wraps above it. Those wraps were counted
+from the top of the new active area. Trailing blank rows are not reflowed,
+so after clearing the screen at a prompt (scrollClear) the new active area
+reaches up into history, and every history row that wrapped (each line
+with a right prompt) counted as a wrap of the screen. The active area then
+slid down over the cleared history and brought it back into view.
+
+Wraps are now counted from where the active area started before the
+reflow, as they are before it.
+---
+ src/terminal/PageList.zig | 64 +++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 62 insertions(+), 2 deletions(-)
+
+diff --git a/src/terminal/PageList.zig b/src/terminal/PageList.zig
+index f2d85f3..079aa99 100644
+--- a/src/terminal/PageList.zig
++++ b/src/terminal/PageList.zig
+@@ -1396,6 +1396,7 @@ fn resizeCols(
+     const preserved_cursor: ?struct {
+         tracked_pin: *Pin,
+         untrack: bool,
++        active_top: *Pin,
+         remaining_rows: usize,
+         wrapped_rows: usize,
+     } = if (cursor) |c| cursor: {
+@@ -1431,15 +1432,19 @@ fn resizeCols(
+             break :wrapped wrapped;
+         };
+ 
++        const tracked_pin = c.pin orelse try self.trackPin(p);
++        errdefer if (c.pin == null) self.untrackPin(tracked_pin);
+         break :cursor .{
+-            .tracked_pin = c.pin orelse try self.trackPin(p),
++            .tracked_pin = tracked_pin,
+             .untrack = c.pin == null,
++            .active_top = try self.trackPin(self.getTopLeft(.active)),
+             .remaining_rows = self.rows -| (c.y + 1),
+             .wrapped_rows = wrapped,
+         };
+     } else null;
+     defer if (preserved_cursor) |c| {
+         if (c.untrack) self.untrackPin(c.tracked_pin);
++        self.untrackPin(c.active_top);
+     };
+ 
+     // Update our cols. We have to do this early because grow() that we
+@@ -1579,7 +1584,15 @@ fn resizeCols(
+             c.tracked_pin.*,
+         ) orelse break :cursor;
+ 
++        // Count wraps only over the rows that were active before, like
++        // wrapped_rows. Trailing blank rows are not reflowed, so the new
++        // active area can reach up into history, and counting the wraps of
++        // history rows would pull that history down.
+         const active_pin = self.pin(.{ .active = .{} });
++        const count_from = if (active_pin) |ap|
++            if (c.active_top.before(ap)) ap else c.active_top.*
++        else
++            c.active_top.*;
+ 
+         // We need to determine how many rows we wrapped from the original
+         // and subtract that from the remaining rows we expect because if
+@@ -1588,7 +1601,7 @@ fn resizeCols(
+         const wrapped = wrapped: {
+             var wrapped: usize = 0;
+ 
+-            var row_it = c.tracked_pin.rowIterator(.left_up, active_pin);
++            var row_it = c.tracked_pin.rowIterator(.left_up, count_from);
+             while (row_it.next()) |next| {
+                 const row = next.rowAndCell().row;
+                 if (row.wrap_continuation) wrapped += 1;
+@@ -19336,6 +19349,53 @@ test "PageList resize reflow less cols cursor not on last line preserves locatio
+     } }, s.pointFromPin(.active, p.*).?);
+ }
+ 
++test "PageList resize reflow less cols cursor below cleared history keeps history" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var s = try init(alloc, .{ .cols = 5, .rows = 5, .max_size = 1 });
++    defer s.deinit();
++    try testing.expect(s.pages.first == s.pages.last);
++    const page = s.pages.first.?.page();
++
++    // Full rows that wrap when the columns shrink, as a right prompt does.
++    for (0..s.rows) |y| {
++        for (0..s.cols) |x| {
++            const rac = page.getRowAndCell(x, y);
++            rac.cell.* = .{
++                .content_tag = .codepoint,
++                .content = .{ .codepoint = .{ .data = 'A' } },
++            };
++        }
++    }
++
++    // Push them into history, as clearing the screen at a prompt does,
++    // and write a prompt at the top of the blank active area.
++    try s.growRows(5);
++    try testing.expectEqual(@as(usize, 10), s.totalRows());
++    {
++        const rac = s.pin(.{ .active = .{} }).?.rowAndCell();
++        rac.cell.* = .{
++            .content_tag = .codepoint,
++            .content = .{ .codepoint = .{ .data = '$' } },
++        };
++    }
++    const p = try s.trackPin(s.pin(.{ .active = .{ .x = 1, .y = 0 } }).?);
++    defer s.untrackPin(p);
++
++    try s.resize(.{
++        .cols = 4,
++        .reflow = true,
++        .cursor = .{ .x = 1, .y = 0, .pin = p },
++    });
++
++    // The prompt stays at the top; no history comes back into view.
++    try testing.expectEqual(point.Point{ .active = .{
++        .x = 1,
++        .y = 0,
++    } }, s.pointFromPin(.active, p.*).?);
++}
++
+ test "PageList resize reflow less cols no scrollback pull blank active" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
+-- 
+2.54.0 (Apple Git-157)
+

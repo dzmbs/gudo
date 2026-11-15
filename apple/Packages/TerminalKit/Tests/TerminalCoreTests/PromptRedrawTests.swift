@@ -32,6 +32,18 @@ private func lines(_ terminal: Terminal) -> [String] {
     #expect(lines(terminal) == [promptLine(cols: 50)])
 }
 
+@Test func clearedScreenStaysClearWhenThePaneNarrows() {
+    let terminal = Terminal(cols: 100, rows: 10) { _ in }
+    terminal.write(prompt(cols: 100))
+    terminal.write(Array("echo one\r\n\(esc)]133;C\u{07}one\r\n\(esc)]133;D;0\u{07}".utf8))
+    terminal.write(prompt(cols: 100))
+    terminal.write(Array("clear\r\n\(esc)]133;C\u{07}\(esc)[3J\(esc)[H\(esc)[2J\(esc)]133;D;0\u{07}".utf8))
+    terminal.write(prompt(cols: 100))
+    terminal.resize(cols: 50, rows: 10, cellWidth: 8, cellHeight: 16)
+    terminal.write(prompt(cols: 50))
+    #expect(lines(terminal) == [promptLine(cols: 50)])
+}
+
 @Test func restoredTerminalKeepsTheShellsOwnRedrawSetting() throws {
     let daemon = Terminal(cols: 40, rows: 4) { _ in }
     daemon.write(Array("\(esc)]133;A;redraw=0\u{07}P> \(esc)]133;B\u{07}".utf8))
