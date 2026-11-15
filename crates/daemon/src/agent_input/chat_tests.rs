@@ -89,6 +89,19 @@ pub(crate) async fn raw_fixture_with_claude_streaming(
     session: &str,
     streaming: bool,
 ) -> RawFixture {
+    raw_fixture_with(session, streaming, Vec::new()).await
+}
+
+/// A fixture whose panes also get `pane_env`, such as an agent home of its own.
+pub(crate) async fn raw_fixture_with_pane_env(pane_env: Vec<(String, String)>) -> RawFixture {
+    raw_fixture_with("native", false, pane_env).await
+}
+
+async fn raw_fixture_with(
+    session: &str,
+    streaming: bool,
+    pane_env: Vec<(String, String)>,
+) -> RawFixture {
     let root = tempfile::tempdir().unwrap();
     let mut config = crate::Config::new(root.path());
     config.claude_chat_streaming = streaming;
@@ -103,6 +116,7 @@ pub(crate) async fn raw_fixture_with_claude_streaming(
             root.path().join("agent").display().to_string(),
         ),
     ];
+    config.pane_env.extend(pane_env);
     let daemon = crate::Daemon::start(config).await.unwrap();
     let (entry, captured) = raw_pane(&daemon, root.path()).await;
     {

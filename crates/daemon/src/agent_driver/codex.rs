@@ -5,6 +5,7 @@ pub(crate) mod process;
 mod projection;
 mod rollout;
 mod runtime;
+pub(super) mod tail;
 #[cfg(test)]
 pub(crate) mod tests;
 mod transport;
@@ -384,6 +385,11 @@ impl Live {
         }
     }
 
+    /// Chat can show the conversation from the app-server stream.
+    pub(crate) fn is_chat_ready(&self) -> bool {
+        lock(&self.state).is_chat_ready() && !self.fault.load(std::sync::atomic::Ordering::Acquire)
+    }
+
     /// The app-server runs, or its launch is still within its bounded bootstrap.
     pub(crate) fn is_running(&self) -> bool {
         lock(&self.process).is_some()
@@ -684,5 +690,7 @@ fn operation_cursor(operation: &TimelineOp) -> Option<TimelineCursor> {
 }
 
 fn unavailable() -> WsError {
-    WsError::Unavailable("Codex Chat is unavailable. Continue in Terminal.".into())
+    WsError::Unavailable(
+        "Chat lost track of this Codex conversation. Open Chat again to read it.".into(),
+    )
 }

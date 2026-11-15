@@ -56,15 +56,13 @@ impl AgentDriver for TerminalDriver {
         &self,
         core: &Core,
         pane: PaneId,
-        _: u64,
+        epoch: u64,
         wake: mpsc::Sender<()>,
     ) -> Result<Box<dyn AgentSession>, WsError> {
-        if live(core, pane) {
+        if source(core, pane).is_some_and(|source| source.is_chat_ready()) {
             return super::codex::open(core, pane, wake);
         }
-        Err(WsError::Unavailable(
-            "Chat is not available for this agent".into(),
-        ))
+        super::codex::tail::open(core, pane, epoch, wake)
     }
 
     fn send(
@@ -127,11 +125,6 @@ impl AgentDriver for TerminalDriver {
 fn source(core: &Core, pane: PaneId) -> Option<std::sync::Arc<super::codex::Live>> {
     core.pane(pane)
         .and_then(|entry| crate::core::lock(&entry.codex).clone())
-}
-
-fn live(core: &Core, pane: PaneId) -> bool {
-    core.pane(pane)
-        .is_some_and(|entry| crate::core::lock(&entry.codex).is_some())
 }
 
 fn notify_submission(request: &crate::HookRequest) -> Option<(&str, &str)> {

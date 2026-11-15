@@ -6,7 +6,7 @@ mod commands;
 mod complete_diff;
 mod display_index;
 mod display_overlay;
-mod native_watch;
+pub(crate) mod native_watch;
 pub(crate) mod record_stream;
 mod text;
 mod transcript;

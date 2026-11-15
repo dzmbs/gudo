@@ -11,14 +11,14 @@ use tokio::sync::mpsc;
 #[path = "native_watch_tests.rs"]
 mod tests;
 
-pub(super) struct NativeWatch {
+pub(crate) struct NativeWatch {
     pub(super) _watcher: notify::RecommendedWatcher,
     pub(super) failed: Arc<AtomicBool>,
 }
 
 impl NativeWatch {
     /// Attaches before the initial read and queues one reconciliation for the attachment race.
-    pub(super) fn new(path: &Path, wake: mpsc::Sender<()>) -> Result<Self, WsError> {
+    pub(crate) fn new(path: &Path, wake: mpsc::Sender<()>) -> Result<Self, WsError> {
         let failed = Arc::new(AtomicBool::new(false));
         let callback_failed = Arc::clone(&failed);
         let callback_wake = wake.clone();
@@ -38,7 +38,7 @@ impl NativeWatch {
     }
 
     /// Fails closed if the backend lost coverage; a clock cannot repair a failed subscription.
-    pub(super) fn check(&self) -> Result<(), WsError> {
+    pub(crate) fn check(&self) -> Result<(), WsError> {
         if self.failed.load(Ordering::Acquire) {
             Err(unavailable())
         } else {
