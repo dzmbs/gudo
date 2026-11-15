@@ -501,6 +501,9 @@ private struct DetailColumn: View {
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .navigationBar)
         #else
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        // The bar is drawn by what lies under it: the sidebar's colour over the sidebar, the
+        // window's base over the rest, so no band of the system's own colour sits on top.
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         #endif
         .modifier(GitDialogs(git: model.git))
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, hasRepos in
