@@ -188,9 +188,8 @@ private struct TabChip: View {
         let program = model.programIdentity(of: tab, onGroup: group.id)
         ZStack {
             if isActive {
-                RoundedRectangle.rounded(DS.Radius.field)
-                    .fill(DS.Palette.selectedFill)
-                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
+                Color.clear
+                    .surface(.selection, in: RoundedRectangle.rounded(DS.Radius.field))
                     .padding(.vertical, 3)
                     .motionTransition(.fade)
             } else if isHovered {

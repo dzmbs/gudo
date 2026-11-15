@@ -122,7 +122,7 @@ private struct ThemeTile: View {
             ThemePreview(theme: theme)
                 .clipShape(.rect(cornerRadius: Self.radius, style: .continuous))
                 .hairlineBorder(RoundedRectangle.rounded(Self.radius), style: DS.Palette.border)
-                .shadow(.float)
+                .shadow(.float) // style-exempt: a theme's preview, a picture of a window rather than chrome
                 .padding(Self.ringGap)
                 .overlay {
                     RoundedRectangle(cornerRadius: Self.radius + Self.ringGap, style: .continuous)

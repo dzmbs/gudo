@@ -669,9 +669,8 @@ final class PaneArrangement {
 // MARK: - Chrome
 
 extension View {
-    /// A pane's look on the canvas: square and flat in the tree; lifted into a card when it is
-    /// a window of its own (rounded, the glass rim, the panel shadow, the accent rim while it
-    /// has the focus). Every value animates, so lifting out and docking are one motion.
+    /// A pane's look on the canvas: a tile in the tree; a `Surface.window` when it is a window
+    /// of its own, with the accent rim while it has the focus. Every value animates, so lifting out and docking are one motion.
     func floatingChrome(_ leaf: CanvasLayout.Leaf, dragging: Bool) -> some View {
         modifier(FloatingChrome(leaf: leaf, dragging: dragging))
     }
@@ -704,30 +703,18 @@ private struct LiftBeat: ViewModifier {
 private struct FloatingChrome: ViewModifier {
     let leaf: CanvasLayout.Leaf
     let dragging: Bool
-    @Environment(\.chrome) private var chrome
-    @Environment(\.displayScale) private var scale
 
     func body(content: Content) -> some View {
-        let dark = chrome.scheme == .dark
         let shape = UnevenRoundedRectangle(cornerRadii: leaf.radii, style: .continuous)
-        // Its rim and shadow go with it into the tray, fading as it does.
-        let lifted = leaf.lifted
+        // Its edges and shadow go with it into the tray, fading as it does.
         content
-            .clipShape(shape)
-            .overlay {
-                shape
-                    .strokeBorder(DS.Palette.edge, lineWidth: DS.Size.hairline(scale: scale))
-                    .blendMode(dark ? .plusLighter : .normal)
-                    .opacity(lifted && !leaf.focusedWindow ? 1 : 0)
-                    .allowsHitTesting(false)
-            }
+            .surface(leaf.lifted ? .window : .tile, in: shape)
             .overlay {
                 shape
                     .strokeBorder(DS.Palette.accent, lineWidth: 1)
-                    .opacity(lifted && leaf.focusedWindow ? 1 : 0)
+                    .opacity(leaf.lifted && leaf.focusedWindow ? 1 : 0)
                     .allowsHitTesting(false)
             }
-            .shadow(.panel, visible: lifted)
             // Washed while it is being moved: an overlay, as the terminal's layer draws itself.
             .overlay {
                 if dragging {
@@ -738,12 +725,11 @@ private struct FloatingChrome: ViewModifier {
 }
 
 /// The card under a window of several panes: their gaps in the divider colour, the grip that
-/// moves it, the rim and the panel shadow.
+/// moves it, a window's surface.
 struct FloatCardBackdrop: View {
     let card: CanvasLayout.Card
     @Environment(PaneArrangement.self) private var arrangement
     @Environment(\.terminalTheme) private var theme
-    @Environment(\.displayScale) private var scale
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: CanvasLayout.radius, style: .continuous)
@@ -756,12 +742,13 @@ struct FloatCardBackdrop: View {
                     .frame(width: 36, height: 4)
                     .padding(.top, 5)
             }
+            .surface(shown ? .window : .tile, in: shape)
             .overlay {
                 shape
-                    .strokeBorder(card.focused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.edge), lineWidth: card.focused ? 1 : DS.Size.hairline(scale: scale))
+                    .strokeBorder(DS.Palette.accent, lineWidth: 1)
+                    .opacity(card.focused ? 1 : 0)
                     .allowsHitTesting(false)
             }
-            .shadow(.panel, visible: shown)
             .frame(width: card.frame.width, height: card.frame.height)
             .overlay(alignment: .top) {
                 // The grip strip moves the window.

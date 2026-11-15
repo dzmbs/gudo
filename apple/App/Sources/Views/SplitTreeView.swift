@@ -196,10 +196,11 @@ struct SplitTreeView: View {
                 ForEach(layout.leaves, id: \.pane) { leaf in
                     PaneLeaf(leaf: leaf.pane, tree: tree, isSplit: isSplit || leaf.window != nil)
                         .environment(\.paneStill, arrangement.still(of: leaf.pane))
+                        .surface(paneSurface(of: leaf), in: .rounded(paneStyle == .comfortable && (isSplit || leaf.window != nil) ? DS.Radius.pane : 0))
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         // A pane zooming over its neighbours, or shrinking back onto them,
                         // keeps an edge against them on the way.
-                        .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving)
+                        .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving) // style-exempt: a pane zooming over its neighbours, only while it moves
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
                         .liftBeat(floating: leaf.window != nil)
                         .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)
@@ -247,6 +248,14 @@ struct SplitTreeView: View {
             guard !Task.isCancelled else { return }
             settledZoom = zoomed
         }
+    }
+}
+
+extension SplitTreeView {
+    /// A comfortable pane in a split is a surface of its own; a compact one, a lone one and one in
+    /// a floating window (whose window is the surface) are tiles.
+    func paneSurface(of leaf: CanvasLayout.Leaf) -> Surface {
+        paneStyle == .comfortable && isSplit && leaf.window == nil ? .pane : .tile
     }
 }
 
@@ -618,7 +627,6 @@ struct PaneSlot: View {
             }
         }
         .background(theme.background, ignoresSafeAreaEdges: [])
-        .clipShape(.rect(cornerRadius: paneStyle == .comfortable && isSplit ? DS.Radius.pane : 0, style: .continuous))
         // Header, banners and bars sit on the terminal: its colours, even in a window kept apart.
         .terminalSurfaceChrome()
         // A mixed tab's panes stay with it: tabs merge into host tabs only.

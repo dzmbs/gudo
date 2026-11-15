@@ -9,42 +9,21 @@ import SwiftUI
 //    decoration.
 
 public extension View {
-    /// A floating panel over content. The glass is tinted with the chrome's own surface, so it
-    /// reads as the theme's material, not the system's grey; `elevated` casts the deeper panel
-    /// shadow for what sits above everything (the palette).
+    /// A floating panel over content: a glass `Surface.card`, or with `elevated` a
+    /// `Surface.panel` for what sits above everything (the palette).
     func floatingPanel(cornerRadius: CGFloat = DS.Radius.panel, elevated: Bool = false) -> some View {
-        modifier(ThemedGlass(shape: .rect(cornerRadius: cornerRadius, style: .continuous), interactive: false, elevated: elevated))
+        surface(elevated ? .panel : .card, in: .rect(cornerRadius: cornerRadius, style: .continuous))
     }
 
+    /// A floating glass capsule (toasts, notices, hint pills): a `Surface.card`.
     func floatingCapsule(interactive: Bool = false) -> some View {
-        modifier(ThemedGlass(shape: .capsule, interactive: interactive, elevated: false))
+        surface(.card, in: Capsule(), interactive: interactive)
     }
 
     /// The theme's surface as glass behind the content, opaque under Reduce Transparency: the
-    /// one fill every glass surface uses.
+    /// one fill every glass surface uses (through `Surface`).
     func themedGlass(in shape: some InsettableShape, interactive: Bool = false) -> some View {
         modifier(ThemedGlassFill(shape: shape, interactive: interactive))
-    }
-
-    /// A lit rim on dark chrome, a faint ink line on light (`DS.Palette.edge`), one pixel wide.
-    func glassEdge(_ shape: some InsettableShape) -> some View {
-        modifier(GlassEdge(shape: shape))
-    }
-}
-
-private struct GlassEdge<S: InsettableShape>: ViewModifier {
-    let shape: S
-    @Environment(\.chrome) private var chrome
-    @Environment(\.displayScale) private var scale
-
-    func body(content: Content) -> some View {
-        let dark = chrome.scheme == .dark
-        content.overlay {
-            shape
-                .strokeBorder(DS.Palette.edge, lineWidth: DS.Size.hairline(scale: scale))
-                .blendMode(dark ? .plusLighter : .normal)
-                .allowsHitTesting(false)
-        }
     }
 }
 
@@ -82,20 +61,6 @@ private struct ThemedGlassFill<S: InsettableShape>: ViewModifier {
         case .opaque(let surface):
             content.background(surface.color, in: shape)
         }
-    }
-}
-
-/// A floating surface: the themed glass with its edge and shadow.
-private struct ThemedGlass<S: InsettableShape>: ViewModifier {
-    let shape: S
-    let interactive: Bool
-    let elevated: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .themedGlass(in: shape, interactive: interactive)
-            .glassEdge(shape)
-            .shadow(elevated ? .panel : .float)
     }
 }
 

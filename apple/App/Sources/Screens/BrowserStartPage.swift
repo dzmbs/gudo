@@ -90,7 +90,7 @@ struct BrowserStartPage: View {
         }
         .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
         .overlay(RoundedRectangle.rounded(DS.Radius.panel).strokeBorder(DS.Palette.border))
-        .shadow(.float, visible: isFocused)
+        .shadow(.float, visible: isFocused) // style-exempt: the page's address field lifts only while it is focused
         .animation(DS.Motion.standard, value: isFocused)
     }
 

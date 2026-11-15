@@ -7,7 +7,6 @@ import SwiftUI
 /// one action that moves it on. Folds to `UpdateIndicator` in the footer.
 struct UpdateCard: View {
     let prompt: UpdatePrompt
-    @Environment(\.chrome) private var chrome
 
     private static let shape = RoundedRectangle(cornerRadius: DS.Radius.pane, style: .continuous)
 
@@ -32,26 +31,13 @@ struct UpdateCard: View {
             actions
         }
         .padding(DS.Space.m)
-        .background { surface }
-        .glassEdge(Self.shape)
-        .shadow(.float)
+        .surface(.card, in: Self.shape)
         .padding(.horizontal, DS.Space.l)
         .animation(DS.Motion.standard, value: prompt.phase)
         .animation(DS.Motion.standard, value: prompt.showsNotes)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(title)
         .accessibilityIdentifier("sidebar-update")
-    }
-
-    /// The theme's surface as glass, lit from the top corner with a breath of its accent.
-    private var surface: some View {
-        return Color.clear
-            .themedGlass(in: Self.shape)
-            .overlay {
-                Self.shape.fill(LinearGradient(
-                    colors: [chrome.color(.accentDim), .clear],
-                    startPoint: .topLeading, endPoint: .center))
-            }
     }
 
     // MARK: Header

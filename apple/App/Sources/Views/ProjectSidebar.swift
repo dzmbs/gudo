@@ -468,9 +468,8 @@ private struct DragLiftPreview: View {
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.s)
         .frame(minWidth: 160, alignment: .leading)
-        .background(DS.Palette.raised, in: RoundedRectangle.rounded(DS.Radius.control))
-        .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control), style: DS.Palette.border)
-        .shadow(DS.Shadow.float)
+        // The system draws the preview as an image, which glass would not survive.
+        .surface(.card, in: RoundedRectangle.rounded(DS.Radius.control), fill: DS.Palette.raised)
         .chromeContent()
     }
 }
