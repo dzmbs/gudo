@@ -8,12 +8,13 @@ struct FoldGutter: View {
     /// open, the crease itself does.
     var showsLine = false
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         Rectangle()
             .fill(DS.Palette.base)
             .overlay {
-                if showsLine { Rectangle().fill(theme.splitDivider).frame(width: DS.Size.dividerVisible) }
+                if showsLine { Rectangle().fill(theme.splitDivider).frame(width: DS.Size.hairline(scale: displayScale)) }
             }
             .accessibilityHidden(true)
             .allowsHitTesting(false)

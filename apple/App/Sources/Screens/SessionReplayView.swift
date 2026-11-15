@@ -485,7 +485,7 @@ struct ReplayThumbnail: View {
                 }
             }
             .clipShape(.rect(cornerRadius: DS.Radius.field, style: .continuous))
-            .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+            .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
             .task(id: name) {
                 guard let name, let data = ReplayStore.shared.keyframe(name, session: session) else { image = nil; return }
                 #if os(iOS)

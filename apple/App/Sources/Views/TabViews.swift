@@ -401,7 +401,7 @@ private struct HostGroupHeader: View {
                         .padding(.horizontal, DS.Space.xs)
                         .padding(.vertical, 1)
                         .fixedSize()
-                        .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
+                        .hairlineBorder(RoundedRectangle.rounded(DS.Radius.chip), style: DS.Palette.textTertiary)
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)

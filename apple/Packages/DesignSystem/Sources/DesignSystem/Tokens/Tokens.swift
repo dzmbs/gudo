@@ -64,7 +64,8 @@ public extension DS {
 
 public extension DS {
     nonisolated enum Size {
-        public static let dividerVisible: CGFloat = 1
+        /// A split divider's drawn line: one physical pixel (`hairline(scale:)`); its hit area
+        /// is wider.
         /// Extra invisible hit area around a divider with a pointer...
         public static let dividerHitPointer: CGFloat = 6
         /// ...and with a finger (44 pt is the HIG minimum; 20 keeps neighbouring cells tappable).
@@ -90,7 +91,7 @@ public extension DS {
         #else
         public static let paletteWidth: CGFloat = 640
         #endif
-        /// One physical pixel.
+        /// One physical pixel: every chrome line and split divider.
         public static func hairline(scale: CGFloat) -> CGFloat { 1 / max(scale, 1) }
         public static let keyBarPhone: CGFloat = 44
         public static let keyBarPad: CGFloat = 52

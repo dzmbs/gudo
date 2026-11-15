@@ -171,8 +171,7 @@ public struct Hairline: View {
     }
 
     public var body: some View {
-        // Never under half a point: a third of a point vanishes on glass.
-        let width = max(DS.Size.hairline(scale: scale), 0.5)
+        let width = DS.Size.hairline(scale: scale)
         Rectangle()
             .fill(style)
             .frame(width: axis == .vertical ? width : nil, height: axis == .horizontal ? width : nil)

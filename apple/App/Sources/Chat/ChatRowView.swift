@@ -123,7 +123,7 @@ struct ChatRowView: View {
                 }
             }
         case .separator:
-            Rectangle().fill(DS.Palette.separator).frame(height: DS.Size.dividerVisible).padding(.vertical, DS.Space.s)
+            Hairline(style: DS.Palette.separator).padding(.vertical, DS.Space.s)
         case .plain:
             Text(block.text).font(DS.Font.literal).fixedSize(horizontal: false, vertical: true)
         }

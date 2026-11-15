@@ -190,7 +190,7 @@ private struct TabChip: View {
             if isActive {
                 RoundedRectangle.rounded(DS.Radius.field)
                     .fill(DS.Palette.selectedFill)
-                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
                     .padding(.vertical, 3)
                     .motionTransition(.fade)
             } else if isHovered {

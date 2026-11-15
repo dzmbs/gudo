@@ -469,7 +469,7 @@ private struct DragLiftPreview: View {
         .padding(.vertical, DS.Space.s)
         .frame(minWidth: 160, alignment: .leading)
         .background(DS.Palette.raised, in: RoundedRectangle.rounded(DS.Radius.control))
-        .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.border, lineWidth: 0.5))
+        .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control), style: DS.Palette.border)
         .shadow(DS.Shadow.float)
         .chromeContent()
     }
@@ -604,7 +604,7 @@ struct ProjectMark: View {
             .overlay(shape.fill(DS.Palette.text).opacity(0.3).blendMode(.overlay)
                 // style-exempt: a mask, only its alpha counts
                 .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)))
-            .overlay(shape.strokeBorder(DS.Palette.border, lineWidth: 0.5))
+            .hairlineBorder(shape, style: DS.Palette.border)
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }

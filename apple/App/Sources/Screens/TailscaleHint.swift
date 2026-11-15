@@ -43,7 +43,7 @@ struct TailscaleTag: View {
             .foregroundStyle(DS.Palette.textSecondary)
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
-            .overlay(RoundedRectangle.rounded(DS.Radius.chip).strokeBorder(DS.Palette.textTertiary, lineWidth: 0.5))
+            .hairlineBorder(RoundedRectangle.rounded(DS.Radius.chip), style: DS.Palette.textTertiary)
             .fixedSize()
             .accessibilityLabel("On Tailscale")
             .accessibilityIdentifier("tailscale-tag")

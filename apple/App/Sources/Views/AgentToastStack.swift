@@ -61,7 +61,7 @@ private struct AgentToastCard: View {
                 .foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: 20, height: 20)
                 .background(DS.Palette.raised, in: .circle)
-                .overlay(Circle().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                .hairlineBorder(Circle(), style: DS.Palette.hairline)
                 .offset(x: 6, y: -6)
                 .motionTransition(.pill())
                 .accessibilityIdentifier("agent-toast-dismiss")
@@ -128,7 +128,7 @@ private struct AgentToastCard: View {
                     .padding(.vertical, DS.Space.xs)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
-                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)))
+                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline))
         case .question?:
             AgentToasts.summary(for: item).map { line in
                 AnyView(Text(verbatim: line).font(DS.Font.rowSubtitle).lineLimit(1))

@@ -281,7 +281,7 @@ struct SharedApproval: View {
                 .padding(.vertical, DS.Space.row)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
-                .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
             if block == nil, !session.approvedAlready(requestId: request) {
                 HStack(spacing: DS.Space.s) {
                     Spacer(minLength: 0)

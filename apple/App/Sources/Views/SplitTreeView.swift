@@ -125,6 +125,7 @@ struct SplitTreeView: View {
     var zoomed: PaneId?
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @Environment(\.displayScale) private var displayScale
     @State private var lastShape = ShapeMemo()
     @State private var lastLayout = LayoutMemo()
     @State private var ownArrangement = PaneArrangement()
@@ -170,7 +171,7 @@ struct SplitTreeView: View {
         return GeometryReader { geometry in
             var target = CanvasLayout(
                 node: node, floats: floats, zoomed: zoomed, focused: tree.focusedLeaf,
-                size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.dividerVisible,
+                size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.hairline(scale: displayScale),
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, headers: isSplit, live: arrangement.live,
                 zoomSettled: !animated || zoomed == settledZoom)
             // A new pane comes in under the panes making room for it, which uncover it; a pane

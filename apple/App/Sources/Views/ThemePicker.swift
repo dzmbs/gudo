@@ -121,10 +121,7 @@ private struct ThemeTile: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             ThemePreview(theme: theme)
                 .clipShape(.rect(cornerRadius: Self.radius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
-                        .strokeBorder(DS.Palette.border, lineWidth: 0.5)
-                }
+                .hairlineBorder(RoundedRectangle.rounded(Self.radius), style: DS.Palette.border)
                 .shadow(.float)
                 .padding(Self.ringGap)
                 .overlay {

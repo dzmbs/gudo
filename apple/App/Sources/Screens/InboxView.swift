@@ -807,7 +807,7 @@ private struct InboxRow: View {
                     .padding(.vertical, DS.Space.row)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
-                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
                     if let note = approval?.block ?? approval?.progress {
                         Label(note, systemImage: approval?.block != nil ? "lock" : "person.2")
                             .font(DS.Font.rowSubtitle)
@@ -982,7 +982,7 @@ private struct InboxRow: View {
                 .padding(.horizontal, DS.Space.gap10)
                 .padding(.vertical, DS.Space.s)
                 .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
-                .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control), style: DS.Palette.hairline)
                 .focused($isComposerFocused)
                 .onSubmit(send)
                 .submitLabel(.send)

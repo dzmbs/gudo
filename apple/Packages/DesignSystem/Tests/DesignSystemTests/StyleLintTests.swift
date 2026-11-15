@@ -28,6 +28,7 @@ struct StyleLintTests {
             pattern: #"(?<![\w.])(Color|UIColor|NSColor)?\.(red|green|blue|orange|yellow|purple|pink|gray|mint|teal|cyan|indigo|brown|systemRed|systemGreen|systemBlue|systemOrange|systemYellow|systemGray)\b(?!\w|:)|Color\.accentColor|\(\.accentColor\)"#,
             allowedIn: tokenFiles),
         Rule(name: "literal opacity on a colour", pattern: #"[A-Za-z_\]]\.opacity\([^()]*\d*\.\d+[^()]*\)"#, allowedIn: tokenFiles),
+        Rule(name: "half-point line (use hairlineBorder or Hairline: one physical pixel)", pattern: #"lineWidth:\s*0?\.5\b"#, allowedIn: []),
         Rule(name: "literal corner radius", pattern: #"cornerRadius:\s*-?\d|\.rounded\(\s*\d|cornerRadius\s*=\s*\d"#, allowedIn: ["DesignSystem/Sources/DesignSystem/Tokens/Tokens.swift"]),
     ]
 

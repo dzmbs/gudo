@@ -677,9 +677,7 @@ struct QRCodeView: View {
                 .padding(10)
                 // style-exempt: a QR code scans only on a white quiet zone
                 .background(.white, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
-                .overlay {
-                    RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)
-                }
+                .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control))
                 .accessibilityLabel(label)
         }
     }

@@ -516,7 +516,7 @@ struct MixedTabChip: View {
             if isActive {
                 RoundedRectangle.rounded(DS.Radius.field)
                     .fill(DS.Palette.selectedFill)
-                    .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
+                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
                     .padding(.vertical, 3)
             } else if isHovered {
                 RoundedRectangle.rounded(DS.Radius.field)
@@ -608,6 +608,7 @@ struct MergeWindowTabMenu: View {
 struct TwoColumnsView: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         if let columns = model.columns {
@@ -617,7 +618,7 @@ struct TwoColumnsView: View {
             } divider: {
                 Rectangle()
                     .fill(theme.splitDivider)
-                    .frame(width: DS.Size.dividerVisible)
+                    .frame(width: DS.Size.hairline(scale: displayScale))
             } trailing: {
                 column(columns.right, isLeft: false, isActive: !model.currentColumnIsLeft)
                     .accessibilityIdentifier("column-right")
