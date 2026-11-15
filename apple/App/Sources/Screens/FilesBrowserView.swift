@@ -451,9 +451,9 @@ private struct DirectoryListing: View {
             // Red, not `.destructive`: that role drops the row before the user confirms, and the
             // list then deletes it twice (a UICollectionView exception).
             Button("Trash", systemImage: "trash") { trashing = entry }
-                .tint(.red)
+                .tint(DS.Palette.error)
             Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
-                .tint(.gray)
+                .tint(DS.Palette.info)
         }
     }
 

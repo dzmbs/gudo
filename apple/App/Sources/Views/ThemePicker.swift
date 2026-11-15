@@ -113,7 +113,6 @@ struct ThemePicker: View {
 private struct ThemeTile: View {
     let theme: TerminalTheme
     let isSelected: Bool
-    @Environment(\.chrome) private var chrome
 
     private static let radius: CGFloat = 10
     private static let ringGap: CGFloat = 3
@@ -126,7 +125,7 @@ private struct ThemeTile: View {
                     RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
                         .strokeBorder(DS.Palette.border, lineWidth: 0.5)
                 }
-                .shadow(color: .black.opacity(chrome.scheme == .light ? 0.10 : 0.35), radius: 6, y: 2)
+                .shadow(.float)
                 .padding(Self.ringGap)
                 .overlay {
                     RoundedRectangle(cornerRadius: Self.radius + Self.ringGap, style: .continuous)

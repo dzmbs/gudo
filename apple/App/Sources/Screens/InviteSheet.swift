@@ -350,7 +350,7 @@ private struct ShareRoot: View {
                         if canRevoke(person) {
                             // Red, not `.destructive`: the row stays until the removal is confirmed.
                             Button("Remove", systemImage: "person.crop.circle.badge.xmark") { revoking = person }
-                                .tint(.red)
+                                .tint(DS.Palette.error)
                         }
                     }
             }
@@ -411,6 +411,7 @@ extension [GudoCore.Participant] {
 /// Roles as four tiles: Viewer is always on; the others toggle.
 private struct RolePicker: View {
     @Binding var roles: Set<Role>
+    @Environment(\.displayScale) private var scale
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var columns: Int { sizeClass == .regular ? 4 : 2 }
@@ -459,10 +460,10 @@ private struct RolePicker: View {
             }
             .padding(DS.Space.gap10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.10)) : AnyShapeStyle(DS.Palette.hoverFill), in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
+            .background(isOn ? DS.Palette.accentDim : DS.Palette.hoverFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
             .overlay {
                 RoundedRectangle.rounded(DS.Radius.control)
-                    .strokeBorder(isOn ? AnyShapeStyle(DS.Palette.accent.opacity(0.55)) : AnyShapeStyle(DS.Palette.hairline), lineWidth: isOn ? 1 : 0.5)
+                    .strokeBorder(isOn ? DS.Palette.accent : DS.Palette.hairline, lineWidth: isOn ? 1 : DS.Size.hairline(scale: scale))
             }
             .contentShape(.rect(cornerRadius: DS.Radius.control, style: .continuous))
         }
@@ -635,7 +636,7 @@ private struct PersonRow: View {
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .foregroundStyle(person.avatar.color)
-                            .background(person.avatar.color.opacity(0.14), in: .capsule)
+                            .background(DS.Palette.container(person.avatar.color), in: .capsule)
                             .fixedSize()
                     }
                 }
@@ -674,6 +675,7 @@ struct QRCodeView: View {
                 .resizable()
                 .scaledToFit()
                 .padding(10)
+                // style-exempt: a QR code scans only on a white quiet zone
                 .background(.white, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
                 .overlay {
                     RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.hairline, lineWidth: 0.5)

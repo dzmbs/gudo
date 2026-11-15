@@ -528,7 +528,7 @@ private struct Viewfinder: View {
     var body: some View {
         ZStack {
             RoundedRectangle.rounded(DS.Radius.panel)
-                .fill(.black)
+                .fill(.black) // style-exempt: the camera's viewfinder
             #if os(iOS)
             if isLive {
                 QRScannerView(found: found)
@@ -537,7 +537,8 @@ private struct Viewfinder: View {
             }
             #endif
             CornerBrackets()
-                .stroke(.white.opacity(isAccessOff ? 0.3 : 0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                .stroke(.white.opacity(isAccessOff ? 0.3 : 0.9), style: // style-exempt: over the live camera image
+                     StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 .padding(48)
                 .accessibilityHidden(true)
             #if os(iOS)
@@ -553,7 +554,7 @@ private struct Viewfinder: View {
                         .font(.footnote)
                         .multilineTextAlignment(.center)
                 }
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.white.opacity(0.7)) // style-exempt: over the live camera image
                 .padding(.horizontal, 72)
                 .accessibilityElement(children: .combine)
             }

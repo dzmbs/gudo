@@ -334,7 +334,7 @@ struct DiffReviewView: View {
                     send()
                 } label: {
                     if isSending {
-                        Spinner(color: .white).frame(width: 14, height: 14)
+                        Spinner(color: DS.Palette.onProminent).frame(width: 14, height: 14)
                     } else {
                         Text(reviewer.map { "Send to \($0)" } ?? "Send")
                     }
@@ -484,15 +484,15 @@ private struct StatusLetter: View {
             .font(.caption2.weight(.bold).monospaced())
             .foregroundStyle(color)
             .frame(width: 16, height: 16)
-            .background(color.opacity(0.14), in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
+            .background(DS.Palette.container(color), in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
             .accessibilityLabel(label)
     }
 
-    private var color: Color {
+    private var color: ChromeStyle {
         switch status {
-        case .added, .untracked: theme.ansi(2)
-        case .deleted: theme.ansi(1)
-        case .modified, .renamed: theme.ansi(3)
+        case .added, .untracked: DS.Palette.ansi(2)
+        case .deleted: DS.Palette.ansi(1)
+        case .modified, .renamed: DS.Palette.ansi(3)
         }
     }
 
@@ -631,7 +631,7 @@ struct DiffLineContent: View {
             .accessibilityAddTraits(onTapLine == nil ? .isStaticText : .isButton)
             .accessibilityIdentifier("diff-line-\(file.id)-\(line.id)\(oldSide ? "-old" : "")")
         } else {
-            Rectangle().fill(DS.Palette.hoverFill.opacity(0.5))
+            Rectangle().fill(DS.Palette.hoverFill)
                 .frame(width: columnWidth, height: lineHeight)
                 .frame(maxWidth: .infinity)
         }
@@ -709,8 +709,8 @@ private struct NoteCard: View {
                 .controlSize(.small)
         }
         .padding(DS.Space.gap10)
-        .background(DS.Palette.accent.opacity(0.1), in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
-        .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(DS.Palette.accent.opacity(0.35), lineWidth: 0.5))
+        .background(DS.Palette.accentDim, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
+        .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control), style: DS.Palette.accent)
         .padding(.leading, DiffLineContent.numberWidth + DS.Space.l)
         .padding(.trailing, DS.Space.l)
         .padding(.vertical, DS.Space.xs)

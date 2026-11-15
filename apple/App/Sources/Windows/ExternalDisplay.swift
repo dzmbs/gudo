@@ -50,7 +50,7 @@ final class ExternalDisplaySceneDelegate: NSObject, UIWindowSceneDelegate {
         let window = UIWindow(windowScene: scene)
         let root = ExternalDisplayRoot(model: model).environment(AppModel.shared)
         let controller = UIHostingController(rootView: root)
-        controller.view.backgroundColor = .black
+        controller.view.backgroundColor = UIColor(ChromePalette.fromPreferences().terminal.color)
         window.rootViewController = controller
         window.isHidden = false
         self.window = window

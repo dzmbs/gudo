@@ -271,15 +271,12 @@ private struct HeaderButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
-        let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isEnabled: isEnabled)
-        let shape = RoundedRectangle(cornerRadius: 5, style: .continuous)
+        let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isSelected: isLit, isEnabled: isEnabled, tint: .accent)
+        let shape = RoundedRectangle.rounded(DS.Radius.field)
         configuration.label
             .font(.caption.weight(.medium))
             .foregroundStyle(ink)
             .frame(width: 22, height: 20)
-            .background {
-                if isLit { shape.fill(DS.Palette.accent.opacity(isEnabled ? 0.14 : 0)) }
-            }
             .controlFill(state, in: shape)
             .contentShape(.rect)
             .onHover { isHovered = $0 }

@@ -344,7 +344,7 @@ private struct SpotlightLayer<Panel: View>: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .top) {
-                Color.black.opacity(chrome.scheme == .dark ? 0.28 : 0.10)
+                Rectangle().fill(DS.Palette.scrim)
                     .ignoresSafeArea()
                     .onTapGesture(perform: onDismiss)
                     .accessibilityHidden(true)

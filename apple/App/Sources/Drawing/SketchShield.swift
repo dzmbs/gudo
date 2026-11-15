@@ -202,11 +202,10 @@ struct SketchHereHint: View {
 struct SketchLeafShield: View {
     let leaf: PaneId
     let workspace: Workspace?
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         if SketchMode.shared.shields(leaf: leaf, in: workspace) {
-            theme.background.opacity(0.35)
+            Rectangle().fill(DS.Palette.veil)
                 .contentShape(.rect)
                 .onTapGesture {}
                 .accessibilityIdentifier("drawing.shield")

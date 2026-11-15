@@ -62,7 +62,7 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
                 capture = nil
                 return
             }
-            let capture = PencilCapture(start: start.location, color: isDarkTheme ? .white : .black)
+            let capture = PencilCapture(start: start.location, color: isDarkTheme ? .white : .black) // style-exempt: the pencil's ink in the drawing
             capture.preview.frame = view.bounds
             view.layer.addSublayer(capture.preview)
             capture.update(gesture.samples)
@@ -343,7 +343,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
         addSubview(menuButton)
         closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)), for: .normal)
         setPalette(ChromePalette.fromPreferences())
-        closeButton.layer.cornerRadius = 22
+        closeButton.layer.cornerRadius = DS.Size.touchTarget / 2
         closeButton.accessibilityLabel = "Remove image from terminal"
         closeButton.addTarget(self, action: #selector(closePlacement), for: .touchUpInside)
         addSubview(closeButton)
@@ -449,9 +449,9 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
     /// Outlines the placement for a moment, so the user sees where it went.
     func flash() {
         layer.borderColor = UIColor(ChromePalette.fromPreferences().accentColor).cgColor
-        layer.cornerRadius = 3
-        layer.borderWidth = 0
-        let fade = DS.Motion.Role.standard.layerAnimation(keyPath: "borderWidth")
+        layer.cornerRadius = DS.Radius.chip
+        layer.borderWidth = 1.5
+        let fade = CABasicAnimation(keyPath: "borderWidth")
         fade.fromValue = 1.5
         fade.toValue = 0
         fade.beginTime = CACurrentMediaTime() + 1.2
@@ -608,7 +608,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
         closeButton.isBordered = false
         closeButton.wantsLayer = true
         setPalette(ChromePalette.fromPreferences())
-        closeButton.layer?.cornerRadius = 14
+        closeButton.layer?.cornerRadius = 14 // style-exempt: the 28 pt close button's circle
         closeButton.target = self
         closeButton.action = #selector(closePlacement)
         closeButton.setAccessibilityLabel("Remove image from terminal")
@@ -681,7 +681,7 @@ final class PlacementMarker: NSView, NSDraggingSource {
     func flash() {
         wantsLayer = true
         layer?.borderColor = NSColor(ChromePalette.fromPreferences().accentColor).cgColor
-        layer?.cornerRadius = 3
+        layer?.cornerRadius = DS.Radius.chip
         layer?.borderWidth = 1.5
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in self?.layer?.borderWidth = 0 }
     }

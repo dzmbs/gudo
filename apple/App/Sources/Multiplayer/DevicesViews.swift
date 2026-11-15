@@ -184,13 +184,13 @@ struct DevicesSections: View {
                 if session.canRemove(device) {
                     // Red, not `.destructive`: the row stays until the removal is confirmed.
                     Button("Remove") { removing = device }
-                        .tint(.red)
+                        .tint(DS.Palette.error)
                 }
             }
             .swipeActions(edge: .leading) {
                 if canRename(device) {
                     Button("Rename") { renaming?.wrappedValue = device }
-                        .tint(.accentColor)
+                        .tint(DS.Palette.accent)
                 }
             }
             .contextMenu {

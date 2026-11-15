@@ -179,7 +179,7 @@ final class CanvasEditor: NSObject {
     private func paintBackground() {
         let red = CGFloat(background.r) / 255, green = CGFloat(background.g) / 255, blue = CGFloat(background.b) / 255
         #if os(iOS)
-        view.backgroundColor = UIColor(red: red, green: green, blue: blue, alpha: 1)
+        view.backgroundColor = UIColor(red: red, green: green, blue: blue, alpha: 1) // style-exempt: the canvas paints the terminal's background
         #else
         view.layer?.backgroundColor = CGColor(srgbRed: red, green: green, blue: blue, alpha: 1)
         #endif

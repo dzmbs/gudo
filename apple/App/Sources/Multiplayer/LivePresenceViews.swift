@@ -42,7 +42,7 @@ struct DraftMirror: View {
             HStack(spacing: DS.Space.s) {
                 Text(peer.firstName)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(DS.Palette.on(color))
                     .padding(.horizontal, DS.Space.s)
                     .padding(.vertical, 2)
                     .background(color, in: .capsule)

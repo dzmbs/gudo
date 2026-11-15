@@ -25,7 +25,7 @@ struct GrantsView: View {
                 ForEach(active, id: \.grant.grantId) { info in
                     GrantRow(info: info, session: session)
                         // Red, not `.destructive`: the row stays until the revocation is confirmed.
-                        .swipeActions { Button("Revoke") { revoking = info }.tint(.red) }
+                        .swipeActions { Button("Revoke") { revoking = info }.tint(DS.Palette.error) }
                         .contextMenu {
                             Button("Copy Grant ID", systemImage: "doc.on.doc") { Pasteboard.copy(info.grant.grantId) }
                             Button("Revoke…", systemImage: "xmark.circle", role: .destructive) { revoking = info }

@@ -400,7 +400,7 @@ private final class KeyCell: UICollectionViewCell {
         let configuration = UIPasteControl.Configuration()
         configuration.displayMode = .iconOnly
         configuration.cornerStyle = .fixed
-        configuration.cornerRadius = 9
+        configuration.cornerRadius = 9 // style-exempt: the system keyboard's key radius
         configuration.baseForegroundColor = KeyBarTheme.ink
         configuration.baseBackgroundColor = UIColor(KeyBarTheme.chrome.raised.color)
         let control = UIPasteControl(configuration: configuration)
@@ -440,7 +440,7 @@ private final class KeyCell: UICollectionViewCell {
         case .added: "checkmark.circle.fill"
         case .remove: "minus.circle.fill"
         }
-        badgeView.tintColor = badge == .added ? tintColor : badge == .remove ? .systemRed : .secondaryLabel
+        badgeView.tintColor = badge == .added ? tintColor : badge == .remove ? UIColor(KeyBarTheme.chrome.error.color) : .secondaryLabel
         badgeView.image = symbol.flatMap { UIImage(systemName: $0) }
         badgeView.isHidden = symbol == nil
         button.setNeedsUpdateConfiguration()
@@ -480,8 +480,8 @@ private final class KeyCell: UICollectionViewCell {
                 ? UIColor(white: 1, alpha: pressed ? 0.32 : 0.16)
                 : UIColor(white: pressed ? 0.82 : 1, alpha: 1)
         }
-        background.cornerRadius = 9
-        background.shadowProperties.color = .black
+        background.cornerRadius = 9 // style-exempt: the system keyboard's key radius
+        background.shadowProperties.color = .black // style-exempt: the system keyboard's key shadow
         background.shadowProperties.opacity = 0.18
         background.shadowProperties.radius = 0
         background.shadowProperties.offset = CGSize(width: 0, height: 1)

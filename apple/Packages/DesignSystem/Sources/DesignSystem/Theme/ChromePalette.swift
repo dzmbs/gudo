@@ -91,6 +91,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let edgeLevels = (light: 0.08, dark: 0.16)
     /// The dim behind a modal panel (light / dark chrome).
     public static let scrimLevels = (light: 0.10, dark: 0.28)
+    /// The terminal's own background over a pane it covers: a saved screen, a pane being moved,
+    /// one shielded while sketching. The pane still shows through.
+    public static let veilLevel = 0.4
     /// The bell's border: the theme's attention hue at half strength.
     public static let bellLevel = 0.5
     /// Minimum contrasts: text (WCAG AA), glyphs and the accent (WCAG non-text).

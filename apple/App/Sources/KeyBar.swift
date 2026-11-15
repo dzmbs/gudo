@@ -188,7 +188,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
 
         panelCard.isUserInteractionEnabled = false
         panelCard.clipsToBounds = true
-        panelCard.layer.cornerRadius = 22
+        panelCard.layer.cornerRadius = DS.Radius.card
         panelCard.layer.cornerCurve = .continuous
         addSubview(panelCard)
 

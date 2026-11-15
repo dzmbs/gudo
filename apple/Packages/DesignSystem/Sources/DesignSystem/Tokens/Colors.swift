@@ -90,6 +90,8 @@ public extension DS {
         public static let edge = ChromeStyle(.edge)
         /// The dim behind a modal panel (the palette).
         public static let scrim = ChromeStyle(.scrim)
+        /// The terminal's background laid over a pane it covers (a saved screen, a pane being moved).
+        public static let veil = ChromeStyle(.veil)
 
         /// Text: the theme's foreground at 90 / 60 / 40 / 20 %. Window and sheet roots set the
         /// first three as the hierarchical styles, so `.primary`, `.secondary` and `.tertiary`
@@ -133,7 +135,7 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
     public enum Token: Hashable, Sendable {
         case accent, selection, onSelection, prominent, onProminent
         case onAccent, accentDim, accentRing
-        case bell, scrollbar, scrollbarActive, edge, scrim
+        case bell, scrollbar, scrollbarActive, edge, scrim, veil
         indirect case container(Token)
         indirect case on(Token)
         case done, error, attention, working, info
@@ -202,6 +204,7 @@ nonisolated public extension ChromePalette {
         case .scrollbarActive: ChromeLayer(foreground, tertiaryLevel)
         case .edge: ChromeLayer(foreground, scheme == .dark ? Self.edgeLevels.dark : Self.edgeLevels.light)
         case .scrim: ChromeLayer(scrimColor, scheme == .dark ? Self.scrimLevels.dark : Self.scrimLevels.light)
+        case .veil: ChromeLayer(terminal, Self.veilLevel)
         case .container(let signal): ChromeLayer(layer(signal, theme: theme).color, Self.containerLevel)
         case .on(let fill): ChromeLayer(label(on: layer(fill, theme: theme).composited(over: base)))
         case .accent: ChromeLayer(accent)

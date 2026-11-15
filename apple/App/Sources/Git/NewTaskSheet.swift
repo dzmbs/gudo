@@ -388,8 +388,7 @@ private struct RunnerPicker: View {
                             if selected {
                                 Capsule()
                                     .fill(DS.Palette.overlay)
-                                    .overlay(Capsule().strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
-                                    .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
+                                    .hairlineBorder(Capsule())
                                     .matchedGeometryEffect(id: "pill", in: pill)
                             }
                         }

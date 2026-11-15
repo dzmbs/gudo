@@ -705,7 +705,7 @@ private struct FloatingChrome: ViewModifier {
     let leaf: CanvasLayout.Leaf
     let dragging: Bool
     @Environment(\.chrome) private var chrome
-    @Environment(\.terminalTheme) private var theme
+    @Environment(\.displayScale) private var scale
 
     func body(content: Content) -> some View {
         let dark = chrome.scheme == .dark
@@ -716,24 +716,22 @@ private struct FloatingChrome: ViewModifier {
             .clipShape(shape)
             .overlay {
                 shape
-                    .strokeBorder(dark ? Color.white.opacity(0.16) : Color.black.opacity(0.1), lineWidth: 0.5)
+                    .strokeBorder(DS.Palette.edge, lineWidth: DS.Size.hairline(scale: scale))
                     .blendMode(dark ? .plusLighter : .normal)
                     .opacity(lifted && !leaf.focusedWindow ? 1 : 0)
                     .allowsHitTesting(false)
             }
             .overlay {
                 shape
-                    .strokeBorder(DS.Palette.accent.opacity(0.7), lineWidth: 1)
+                    .strokeBorder(DS.Palette.accent, lineWidth: 1)
                     .opacity(lifted && leaf.focusedWindow ? 1 : 0)
                     .allowsHitTesting(false)
             }
-            .shadow(
-                color: .black.opacity(lifted ? DS.Shadow.panel.opacity(dark: dark) : 0),
-                radius: lifted ? DS.Shadow.panel.radius : 0, y: lifted ? DS.Shadow.panel.y : 0)
+            .shadow(.panel, visible: lifted)
             // Washed while it is being moved: an overlay, as the terminal's layer draws itself.
             .overlay {
                 if dragging {
-                    shape.fill(theme.background.opacity(0.55)).allowsHitTesting(false)
+                    shape.fill(DS.Palette.veil).allowsHitTesting(false)
                 }
             }
     }
@@ -745,10 +743,9 @@ struct FloatCardBackdrop: View {
     let card: CanvasLayout.Card
     @Environment(PaneArrangement.self) private var arrangement
     @Environment(\.terminalTheme) private var theme
-    @Environment(\.chrome) private var chrome
+    @Environment(\.displayScale) private var scale
 
     var body: some View {
-        let dark = chrome.scheme == .dark
         let shape = RoundedRectangle(cornerRadius: CanvasLayout.radius, style: .continuous)
         let shown = card.multi && card.visible
         shape
@@ -761,10 +758,10 @@ struct FloatCardBackdrop: View {
             }
             .overlay {
                 shape
-                    .strokeBorder(card.focused ? AnyShapeStyle(DS.Palette.accent.opacity(0.7)) : AnyShapeStyle(Color.white.opacity(dark ? 0.16 : 0)), lineWidth: card.focused ? 1 : 0.5)
+                    .strokeBorder(card.focused ? AnyShapeStyle(DS.Palette.accent) : AnyShapeStyle(DS.Palette.edge), lineWidth: card.focused ? 1 : DS.Size.hairline(scale: scale))
                     .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(shown ? DS.Shadow.panel.opacity(dark: dark) : 0), radius: DS.Shadow.panel.radius, y: DS.Shadow.panel.y)
+            .shadow(.panel, visible: shown)
             .frame(width: card.frame.width, height: card.frame.height)
             .overlay(alignment: .top) {
                 // The grip strip moves the window.
@@ -841,7 +838,7 @@ struct ArrangementOverlay: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(arrangement.guides.enumerated()), id: \.offset) { _, guide in
                 Rectangle()
-                    .fill(DS.Palette.accent.opacity(0.55))
+                    .fill(DS.Palette.accent)
                     .frame(
                         width: guide.axis == .vertical ? 1 : guide.to - guide.from,
                         height: guide.axis == .vertical ? guide.to - guide.from : 1)
@@ -880,8 +877,8 @@ private struct DropRegion: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: DS.Radius.pane, style: .continuous)
         shape
-            .fill(DS.Palette.accent.opacity(0.2))
-            .overlay(shape.strokeBorder(DS.Palette.accent.opacity(0.65), lineWidth: 1.5))
+            .fill(DS.Palette.accentDim)
+            .overlay(shape.strokeBorder(DS.Palette.accent, lineWidth: 1.5))
             .frame(width: max(0, rect.width - 2 * DS.Space.xs), height: max(0, rect.height - 2 * DS.Space.xs))
             .offset(x: rect.minX + DS.Space.xs, y: rect.minY + DS.Space.xs)
             .motionTransition(.fade)

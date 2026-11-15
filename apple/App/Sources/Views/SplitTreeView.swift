@@ -198,7 +198,7 @@ struct SplitTreeView: View {
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         // A pane zooming over its neighbours, or shrinking back onto them,
                         // keeps an edge against them on the way.
-                        .shadow(color: .black.opacity(leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving ? 0.3 : 0), radius: 10)
+                        .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && lastLayout.isMoving)
                         .frame(width: leaf.frame.width, height: leaf.frame.height)
                         .liftBeat(floating: leaf.window != nil)
                         .scaleEffect(leaf.scale, anchor: leaf.hiddenAnchor)

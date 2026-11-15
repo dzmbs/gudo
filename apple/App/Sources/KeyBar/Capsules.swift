@@ -79,7 +79,7 @@ final class CapsuleKey: UIButton {
         configuration.titleLineBreakMode = .byClipping
         let active = latch != .off
         let locked = latch == .locked
-        configuration.baseForegroundColor = locked ? .white : KeyBarTheme.ink.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
+        configuration.baseForegroundColor = locked ? UIColor(KeyBarTheme.chrome.onAccent.color) : KeyBarTheme.ink.withAlphaComponent(isHighlighted || active ? 1 : 0.9)
         if let title {
             var attributes = AttributeContainer()
             attributes.font = UIFont.systemFont(ofSize: metrics.fontSize, weight: active ? .semibold : .medium)

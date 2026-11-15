@@ -117,7 +117,8 @@ extension DrawOverlay {
                 }
                 let rgb = stroke.color.dropFirst()
                 let value = Int(rgb, radix: 16) ?? 0
-                let color = UIColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+                // style-exempt: the demo drawing's own ink
+        let color = UIColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255, blue: CGFloat(value & 0xFF) / 255, alpha: 1)
                 return PKStroke(ink: PKInk(.pen, color: color), path: PKStrokePath(controlPoints: points, creationDate: Date()))
             }
             ink.canvas.drawing = PKDrawing(strokes: ink.canvas.drawing.strokes + pencilStrokes)

@@ -90,7 +90,7 @@ struct BrowserStartPage: View {
         }
         .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.panel, style: .continuous))
         .overlay(RoundedRectangle.rounded(DS.Radius.panel).strokeBorder(DS.Palette.border))
-        .shadow(color: .black.opacity(isFocused ? 0.12 : 0.05), radius: isFocused ? 16 : 6, y: 4)
+        .shadow(.float, visible: isFocused)
         .animation(DS.Motion.standard, value: isFocused)
     }
 

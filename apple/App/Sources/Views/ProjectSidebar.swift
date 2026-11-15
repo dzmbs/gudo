@@ -369,7 +369,7 @@ private struct SidebarTabRow: View {
                         .padding(.horizontal, DS.Space.s)
                         .padding(.vertical, 2)
                         .background(DS.Palette.sidebar, in: .capsule)
-                        .overlay(Capsule().fill(tint.opacity(0.14)))
+                        .overlay(Capsule().fill(DS.Palette.container(tint)))
                         .padding(.trailing, DS.Space.l)
                         .motionTransition(.pill(anchor: .trailing))
                         .accessibilityHidden(true)
@@ -388,8 +388,9 @@ private struct SidebarTabRow: View {
             // "Will group": the row lights in the project's colour (the accent for a loose one).
             .background {
                 RoundedRectangle.rounded(DS.Radius.control)
-                    .fill(tint.opacity(isGroupTarget ? 0.16 : joined ? 0.12 : 0))
-                    .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(tint.opacity(isGroupTarget ? 0.7 : 0), lineWidth: 1.5))
+                    .fill(DS.Palette.container(tint))
+                    .overlay(RoundedRectangle.rounded(DS.Radius.control).strokeBorder(tint, lineWidth: 1.5).opacity(isGroupTarget ? 1 : 0))
+                    .opacity(isGroupTarget || joined ? 1 : 0)
                     .padding(.horizontal, DS.Space.s)
             }
             .scaleEffect(isGroupTarget ? 1.015 : 1)
@@ -601,6 +602,7 @@ struct ProjectMark: View {
             .fill(fill)
             // Light from above, in the theme's own text colour; the mask only fades it.
             .overlay(shape.fill(DS.Palette.text).opacity(0.3).blendMode(.overlay)
+                // style-exempt: a mask, only its alpha counts
                 .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)))
             .overlay(shape.strokeBorder(DS.Palette.border, lineWidth: 0.5))
             .frame(width: size, height: size)
@@ -932,7 +934,7 @@ private struct ProjectEmptyRow: View {
                     .frame(width: size, height: size)
                     .background {
                         RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
-                            .fill(tint.opacity(dropping ? 0.16 : 0))
+                            .fill(DS.Palette.container(tint).opacity(dropping ? 1 : 0))
                             .strokeBorder(dropping ? AnyShapeStyle(tint) : AnyShapeStyle(DS.Palette.border),
                                           style: StrokeStyle(lineWidth: 1, dash: dropping ? [] : [3, 2]))
                     }
@@ -993,7 +995,7 @@ struct ProjectsIntroRow: View {
         }
         .padding(.horizontal, DS.Space.m)
         .padding(.vertical, DS.Space.s)
-        .background(DS.Palette.ink.opacity(0.05), in: RoundedRectangle.rounded(DS.Radius.control))
+        .background(DS.Palette.hoverFill, in: RoundedRectangle.rounded(DS.Radius.control))
         .padding(.horizontal, DS.Space.s)
         .padding(.top, DS.Space.s)
         .accessibilityElement(children: .contain)

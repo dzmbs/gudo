@@ -187,7 +187,7 @@ private struct SettingAnchor: ViewModifier {
             // The row's own surface (as `chromeRows()`), with the accent washed over it while lit.
             .listRowBackground(
                 Rectangle().fill(DS.Palette.groupedRow)
-                    .overlay(Rectangle().fill(DS.Palette.accent.opacity(lit ? 0.18 : 0)))
+                    .overlay(Rectangle().fill(DS.Palette.accentDim).opacity(lit ? 1 : 0))
                     .animation(DS.Motion.standard, value: lit))
     }
 }

@@ -566,8 +566,7 @@ private struct InboxFilterBar: View {
                         if isSelected {
                             RoundedRectangle.rounded(DS.Radius.field)
                                 .fill(DS.Palette.overlay)
-                                .overlay(RoundedRectangle.rounded(DS.Radius.field).strokeBorder(DS.Palette.hairline, lineWidth: 0.5))
-                                .shadow(color: .black.opacity(0.08), radius: 1, y: 0.5)
+                                .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field))
                                 .matchedGeometryEffect(id: "pill", in: pill)
                         }
                     }
@@ -1070,7 +1069,7 @@ private struct AutoApprovalChip: View {
         }
         .padding(.horizontal, DS.Space.s)
         .padding(.vertical, DS.Space.xs)
-        .background(DS.Palette.done.opacity(0.10), in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
+        .background(DS.Palette.doneContainer, in: .rect(cornerRadius: DS.Radius.chip, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox-auto-approval")
     }

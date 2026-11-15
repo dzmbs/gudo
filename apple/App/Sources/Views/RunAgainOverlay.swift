@@ -68,7 +68,7 @@ struct RunAgainChip: View {
                     .fixedSize()
                 Text(command)
                     .font(DS.Font.literalSmall)
-                    .foregroundStyle(theme.foreground.opacity(0.75))
+                    .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -81,7 +81,7 @@ struct RunAgainChip: View {
         .font(DS.Font.meta)
         .foregroundStyle(theme.foreground)
         .background(theme.background, in: .capsule)
-        .overlay { Capsule().strokeBorder(theme.foreground.opacity(0.2), lineWidth: 1).allowsHitTesting(false) }
+        .overlay { Capsule().strokeBorder(DS.Palette.border, lineWidth: 1).allowsHitTesting(false) }
         .accessibilityLabel("Run again: \(command)")
         .accessibilityHint("Types the command that was running before the restart.")
         .accessibilityIdentifier("terminal-run-again")

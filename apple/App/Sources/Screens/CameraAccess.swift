@@ -61,15 +61,15 @@ struct CameraAccessOffView: View {
         VStack(spacing: DS.Space.m) {
             Image(systemName: "camera.fill")
                 .font(.title2)
-                .foregroundStyle(.white.opacity(0.6))
+                .foregroundStyle(.white.opacity(0.6)) // style-exempt: over the live camera image
                 .accessibilityHidden(true)
             VStack(spacing: DS.Space.xs) {
                 Text(restricted ? "Camera access is restricted" : "Camera access is off")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.white) // style-exempt: over the live camera image
                 Text(restricted ? "This device doesn’t allow the camera here." : "Allow it in Settings to scan the host’s code.")
                     .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.7)) // style-exempt: over the live camera image
             }
             .multilineTextAlignment(.center)
             .accessibilityElement(children: .combine)

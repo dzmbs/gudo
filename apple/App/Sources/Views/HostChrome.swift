@@ -231,13 +231,12 @@ struct StalePaneOverlay: View {
 /// meanwhile waits, and says so.
 struct SavedScreenOverlay: View {
     let pane: Pane
-    @Environment(\.terminalTheme) private var theme
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             if pane.showsSavedScreen {
-                theme.background.opacity(0.32)
-                    .motionTransition(.fade)
+                Rectangle().fill(DS.Palette.veil)
+                    .transition(.opacity)
             }
             if case .holding = pane.heldInput {
                 Label("Sends when connected", systemImage: "keyboard")

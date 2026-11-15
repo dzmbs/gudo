@@ -198,15 +198,22 @@ public extension DS {
 
 public extension View {
     func shadow(_ shadow: DS.Shadow) -> some View {
-        modifier(ShadowModifier(shadow: shadow))
+        modifier(ShadowModifier(shadow: shadow, isVisible: true))
+    }
+
+    /// The shadow only while `isVisible`, fading with whatever animates the change.
+    func shadow(_ shadow: DS.Shadow, visible isVisible: Bool) -> some View {
+        modifier(ShadowModifier(shadow: shadow, isVisible: isVisible))
     }
 }
 
 private struct ShadowModifier: ViewModifier {
     let shadow: DS.Shadow
+    let isVisible: Bool
     @Environment(\.chrome) private var chrome
 
     func body(content: Content) -> some View {
-        content.shadow(color: .black.opacity(shadow.opacity(dark: chrome.scheme == .dark)), radius: shadow.radius, y: shadow.y)
+        let opacity = isVisible ? shadow.opacity(dark: chrome.scheme == .dark) : 0
+        content.shadow(color: .black.opacity(opacity), radius: isVisible ? shadow.radius : 0, y: isVisible ? shadow.y : 0)
     }
 }

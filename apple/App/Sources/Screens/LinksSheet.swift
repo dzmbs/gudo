@@ -114,7 +114,7 @@ struct LinksSheet: View {
                         }
                         .swipeActions(edge: .trailing) {
                             Button("Copy", systemImage: "doc.on.doc") { LinksPasteboard.copy(link.resolved) }
-                                .tint(.gray)
+                                .tint(DS.Palette.info)
                         }
                     }
                 } footer: {

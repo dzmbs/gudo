@@ -46,7 +46,7 @@ final class JoystickView: UIView {
         label.font = .systemFont(ofSize: 10, weight: .semibold)
         label.textAlignment = .center
         addSubview(label)
-        dot.layer.cornerRadius = 3
+        dot.layer.cornerRadius = 3 // style-exempt: the 6 pt dot's circle
         dot.isHidden = true
         addSubview(dot)
         isAccessibilityElement = true

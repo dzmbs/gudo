@@ -359,7 +359,7 @@ struct FileLinesView: View {
         }
         .frame(height: Self.rowHeight, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isTarget ? chrome.accent.color.opacity(0.18) : .clear)
+        .background(DS.Palette.accentDim.opacity(isTarget ? 1 : 0))
         .accessibilityAddTraits(isTarget ? .isSelected : [])
     }
 

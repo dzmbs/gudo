@@ -160,7 +160,7 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         runButton.addAction(UIAction { [weak self] _ in self?.submit(run: true) }, for: .touchUpInside)
 
         message.font = .systemFont(ofSize: 12, weight: .medium)
-        message.textColor = .systemOrange
+        message.textColor = UIColor(KeyBarTheme.chrome.attention.color)
         message.isHidden = true
 
         let stack = UIStackView(arrangedSubviews: [field, runButton])

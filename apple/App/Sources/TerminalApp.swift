@@ -306,7 +306,7 @@ struct WindowContent: View {
             #if DEBUG
             .frame(maxWidth: model.debugWidth.map { CGFloat($0) } ?? .infinity, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.ignoresSafeArea())
+            .background(DS.Palette.terminal, ignoresSafeAreaEdges: .all)
             #endif
             .overlay(alignment: .leading) { WindowProbe() }
         #else

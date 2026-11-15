@@ -803,14 +803,14 @@ final class AnchorMark: PlatformView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
         backgroundColor = UIColor(ChromePalette.fromPreferences().accentColor)
-        layer.cornerRadius = 1
+        layer.cornerRadius = 1 // style-exempt: half the 2 pt anchor mark
     }
     #else
     override init(frame: CGRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor(ChromePalette.fromPreferences().accentColor).cgColor
-        layer?.cornerRadius = 1
+        layer?.cornerRadius = 1 // style-exempt: half the 2 pt anchor mark
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }

@@ -28,8 +28,8 @@ private struct TabDropTarget: ViewModifier {
                 .overlay(alignment: side.map(Self.alignment) ?? .center) {
                     if let side {
                         RoundedRectangle.rounded(DS.Radius.pane)
-                            .fill(DS.Palette.accent.opacity(0.25))
-                            .overlay(RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.accent.opacity(0.6), lineWidth: 1.5))
+                            .fill(DS.Palette.accentDim)
+                            .overlay(RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.accent, lineWidth: 1.5))
                             .frame(
                                 width: side.axis == .horizontal ? size.width / 2 : nil,
                                 height: side.axis == .vertical ? size.height / 2 : nil)

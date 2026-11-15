@@ -83,7 +83,7 @@ struct ScriptDef: Codable, Hashable, Identifiable, Sendable {
         case "yellow", "orange", "amber": AnyShapeStyle(DS.Palette.attention)
         case "blue": AnyShapeStyle(DS.Palette.info)
         case "purple", "magenta": AnyShapeStyle(DS.Palette.merged)
-        case let hex? where hex.hasPrefix("#") && hex.count == 7: AnyShapeStyle(Color(hex: hex))
+        case let hex? where hex.hasPrefix("#") && hex.count == 7: AnyShapeStyle(Color(hex: hex)) // style-exempt: a colour the agent's status asked for
         default: AnyShapeStyle(DS.Palette.textSecondary)
         }
     }

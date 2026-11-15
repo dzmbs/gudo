@@ -84,7 +84,7 @@ private struct AppIconImage: View {
             Image(uiImage: icon)
                 .resizable()
                 .interpolation(.high)
-                .clipShape(.rect(cornerRadius: 20, style: .continuous))
+                .clipShape(.rect(cornerRadius: DS.Radius.card, style: .continuous))
         } else {
             Image(systemName: "lock.fill")
                 .resizable()

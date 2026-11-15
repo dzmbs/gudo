@@ -34,7 +34,7 @@ struct UpdateCard: View {
         .padding(DS.Space.m)
         .background { surface }
         .glassEdge(Self.shape)
-        .shadow(color: .black.opacity(chrome.scheme == .dark ? 0.28 : 0.08), radius: 6, y: 2)
+        .shadow(.float)
         .padding(.horizontal, DS.Space.l)
         .animation(DS.Motion.standard, value: prompt.phase)
         .animation(DS.Motion.standard, value: prompt.showsNotes)
@@ -45,12 +45,11 @@ struct UpdateCard: View {
 
     /// The theme's surface as glass, lit from the top corner with a breath of its accent.
     private var surface: some View {
-        let light = chrome.scheme == .light
         return Color.clear
             .themedGlass(in: Self.shape)
             .overlay {
                 Self.shape.fill(LinearGradient(
-                    colors: [chrome.accentColor.opacity(light ? 0.08 : 0.12), .clear],
+                    colors: [chrome.color(.accentDim), .clear],
                     startPoint: .topLeading, endPoint: .center))
             }
     }
@@ -235,7 +234,7 @@ struct UpdateGlyph: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(tint.opacity(0.16))
+            Circle().fill(DS.Palette.container(tint))
             switch phase {
             case .checking, .installing, .preparing(nil), .downloading(nil):
                 ProgressView()
@@ -326,7 +325,7 @@ private struct UpdateProgressBar: View {
                         .animation(DS.Motion.micro, value: fraction)
                 }
             } else if reduceMotion {
-                Capsule().fill(DS.Palette.accent.opacity(0.5))
+                Capsule().fill(DS.Palette.accentRing)
             } else {
                 TimelineView(.animation) { context in
                     GeometryReader { proxy in
@@ -343,7 +342,7 @@ private struct UpdateProgressBar: View {
         }
         .frame(height: 4)
         .frame(maxWidth: .infinity)
-        .background(DS.Palette.ink.opacity(0.1), in: .capsule)
+        .background(DS.Palette.selectedFill, in: .capsule)
         .clipShape(.capsule)
         .padding(.top, DS.Space.xxs)
     }
@@ -362,8 +361,7 @@ private struct UpdateActionButtonStyle: ButtonStyle {
             .padding(.horizontal, DS.Space.gap10)
             .frame(minHeight: 24)
             .background(Capsule().fill(DS.Palette.prominent))
-            .overlay(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0 : isHovered ? 0.1 : 0)).blendMode(.plusLighter))
-            .overlay(Capsule().fill(Color.black.opacity(configuration.isPressed ? 0.15 : 0)))
+            .overlay(ControlFillShape(state: ControlState(isHovered: isHovered, isPressed: configuration.isPressed), shape: Capsule()))
             .contentShape(.capsule)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(DS.Motion.micro, value: configuration.isPressed)

@@ -99,6 +99,6 @@ struct PaneSizingChip: View {
         .foregroundStyle(theme.foreground)
         .padding(.horizontal, 10)
         .background(theme.background, in: .capsule)
-        .overlay { Capsule().strokeBorder(theme.foreground.opacity(0.2), lineWidth: 1).allowsHitTesting(false) }
+        .overlay { Capsule().strokeBorder(DS.Palette.border, lineWidth: 1).allowsHitTesting(false) }
     }
 }
