@@ -299,7 +299,7 @@ ending a drag within 40 pt of the bottom resumes following. A failed history pag
 with a note; the next drag may try again.
 The New capsule remains separate from the reusable cells.
 
-Markdown rows use prepared attributed values. Simple, single-line paragraph values reuse the
+Markdown rows use prepared attributed values. Agents wrap prose at the terminal's width, so a single newline inside a paragraph, list item or quote is a soft break and reads as a space; two trailing spaces or a backslash keep a hard break, and blank lines still separate paragraphs (`ChatLineBreaks`). Simple, single-line paragraph values reuse the
 existing Swift Markdown inline nodes instead of invoking a second parser. Unsupported/nested
 constructs, whitespace-sensitive input, smart-punctuation candidates, titled/reference links and
 bare URL/email candidates retain Foundation's existing interpretation and link policy. Parity

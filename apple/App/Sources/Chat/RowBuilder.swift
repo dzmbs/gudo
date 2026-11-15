@@ -362,13 +362,15 @@ nonisolated final class RowBuilder {
             return ChatMarkdownBlock(kind: .heading(heading.level), source: source, text: inline(content))
         }
         if let quote = markup as? BlockQuote {
-            let content = quote.children.map { inlineSource($0, original: original) }.joined(separator: "\n")
+            let content = quote.children.map { ChatLineBreaks.joiningSoftBreaks(inlineSource($0, original: original)) }
+                .joined(separator: "\n")
             return ChatMarkdownBlock(kind: .quote, source: source, text: inline(content))
         }
         if markup is HTMLBlock {
             return ChatMarkdownBlock(kind: .plain, source: source, text: AttributedString(source))
         }
-        return ChatMarkdownBlock(kind: .paragraph, source: source, text: inline(source, markup: markup))
+        return ChatMarkdownBlock(kind: .paragraph, source: source,
+                                 text: inline(ChatLineBreaks.joiningSoftBreaks(source), markup: markup))
     }
 
     private func listLines(_ markup: any Markup, depth: Int, original: MarkdownSource) -> [ChatListLine] {
@@ -389,7 +391,8 @@ nonisolated final class RowBuilder {
                 if content is UnorderedList || content is OrderedList {
                     lines += listLines(content, depth: depth + 1, original: original)
                 } else {
-                    let text = inline(inlineSource(content, original: original).trimmingCharacters(in: .newlines))
+                    let text = inline(ChatLineBreaks.joiningSoftBreaks(
+                        inlineSource(content, original: original).trimmingCharacters(in: .newlines)))
                     for chunk in textChunks(text) {
                         lines.append(ChatListLine(depth: depth, marker: isFirst ? marker : "", text: chunk))
                         isFirst = false

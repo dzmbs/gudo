@@ -44,7 +44,7 @@ final class ChatInlineValuesTests: XCTestCase {
             let rows = builder.rows(for: value)
             guard case .markdown(let block) = try XCTUnwrap(rows.first).content else { return XCTFail("Expected Markdown") }
             let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
-            XCTAssertEqual(block.text, try AttributedString(markdown: source, options: options))
+            XCTAssertEqual(block.text, try AttributedString(markdown: ChatLineBreaks.joiningSoftBreaks(source), options: options))
         }
     }
 

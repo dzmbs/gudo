@@ -31,7 +31,7 @@ final class ChatInlineCacheTests: XCTestCase {
         let rows = builder.rows(for: item)
         for row in rows {
             guard case .markdown(let block) = row.content, block.kind == .paragraph else { continue }
-            var expected = try AttributedString(markdown: block.source, options: .init(
+            var expected = try AttributedString(markdown: ChatLineBreaks.joiningSoftBreaks(block.source), options: .init(
                 interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible))
             for run in Array(expected.runs) {
                 if let url = run.link, !["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {

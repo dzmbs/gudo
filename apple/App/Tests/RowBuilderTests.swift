@@ -395,6 +395,41 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertLessThanOrEqual(count, 500)
     }
 
+    func testASingleNewlineInsideAParagraphIsASpace() async throws {
+        XCTAssertEqual(try texts("alpha beta\ngamma delta"), ["alpha beta gamma delta"])
+        XCTAssertEqual(try texts("alpha beta\r\n   gamma delta"), ["alpha beta gamma delta"])
+        XCTAssertEqual(try texts("**wrapped\nbold** text\nand `code\nspan`"), ["wrapped bold text and code span"])
+    }
+
+    func testHardBreaksAndBlankLinesKeepTheirMeaning() async throws {
+        XCTAssertEqual(try texts("two spaces  \nbreak"), ["two spaces\nbreak"])
+        XCTAssertEqual(try texts("backslash\\\nbreak"), ["backslash\nbreak"])
+        XCTAssertEqual(try texts("first paragraph\n\nsecond paragraph"), ["first paragraph", "second paragraph"])
+        XCTAssertEqual(try texts("code `ends with \\\nslash`"), ["code ends with \\ slash"])
+    }
+
+    func testSoftBreaksJoinInsideListItemsAndQuotes() async throws {
+        let list = try XCTUnwrap(blocks("- one wrapped\n  item\n- two").first)
+        XCTAssertEqual(list.list.map { String($0.text.characters) }, ["one wrapped item", "two"])
+        XCTAssertEqual(try texts("> a wrapped\n> quote\n>\n> next"), ["a wrapped quote\nnext"])
+    }
+
+    func testCodeBlocksKeepEveryNewline() async throws {
+        let code = try XCTUnwrap(blocks("```\nfirst\nsecond\n```").first)
+        XCTAssertEqual(String(code.text.characters), "first\nsecond\n")
+    }
+
+    private func blocks(_ markdown: String) throws -> [ChatMarkdownBlock] {
+        RowBuilder().rows(for: try assistant(markdown)).compactMap { row in
+            guard case .markdown(let block) = row.content else { return nil }
+            return block
+        }
+    }
+
+    private func texts(_ markdown: String) throws -> [String] {
+        try blocks(markdown).map { String($0.text.characters) }
+    }
+
     func testIdentifierComponentsCannotCollide() {
         XCTAssertNotEqual(ChatRowID(item: "a:1", part: 2).storageKey, ChatRowID(item: "a", part: 12).storageKey)
     }
