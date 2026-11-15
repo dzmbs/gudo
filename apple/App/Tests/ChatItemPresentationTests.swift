@@ -39,12 +39,24 @@ final class ChatItemPresentationTests: XCTestCase {
         for text in [nil, ""] as [String?] {
             let thinking = try thinking(text: text)
             XCTAssertFalse(ChatItemPresentation.hasThinkingText(thinking))
-            XCTAssertEqual(ChatItemPresentation.thinkingTitle(thinking), "Thinking text unavailable")
+            XCTAssertEqual(ChatItemPresentation.thinkingTitle(thinking), "Thinking")
         }
         let timed = try thinking(text: "Literal **thought**", duration: 12_345)
         XCTAssertTrue(ChatItemPresentation.hasThinkingText(timed))
         XCTAssertEqual(ChatItemPresentation.thinkingTitle(timed), "Thought for 12s")
         XCTAssertEqual(ChatItemPresentation.duration(UInt64.max), "307445734561825m 51s")
+    }
+
+    func testPromptTimesAreQuietAndNeverInvented() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let locale = Locale(identifier: "en_GB")
+        let now = Date(timeIntervalSince1970: 1_763_200_000)
+        XCTAssertNil(ChatItemPresentation.promptTime(0, now: now, calendar: calendar, locale: locale))
+        let today = try XCTUnwrap(ChatItemPresentation.promptTime(1_763_199_000_000, now: now, calendar: calendar, locale: locale))
+        XCTAssertTrue(today.contains("9:30") && !today.contains("Nov"), today)
+        let earlier = try XCTUnwrap(ChatItemPresentation.promptTime(1_762_999_000_000, now: now, calendar: calendar, locale: locale))
+        XCTAssertTrue(earlier.contains("Nov"), earlier)
     }
 
     func testInlineDiffIsPreparedOffMainWithSixBoundedLinesAndChargedToTheRenderCache() async throws {

@@ -11,6 +11,7 @@ nonisolated enum ChatRowSpacing {
     static func role(of row: ChatRow) -> Role {
         switch row.content {
         case .markdown, .omitted: return .reply
+        case .toolGroup: return .work
         case .showAll(let longText): return longText.role == .known(.user) ? .prompt : .reply
         case .item(let item):
             switch item.body {

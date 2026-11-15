@@ -23,8 +23,16 @@ nonisolated enum ChatDiffPreview {
     }
 
     static func groups(for target: ChatDiffTarget, rows: [ChatRow]) -> [ChatToolDiff] {
-        rows.compactMap { row in
-            guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return nil }
+        var seen: Set<String> = []
+        let items = rows.flatMap { row -> [TimelineItem] in
+            switch row.content {
+            case .item(let item): [item]
+            case .toolGroup(let group): group.tools
+            default: []
+            }
+        }
+        return items.compactMap { item in
+            guard seen.insert(item.id).inserted, case .tool(let tool) = item.body else { return nil }
             let files: [TimelineFileDiff]
             switch target {
             case .turn(let turn):

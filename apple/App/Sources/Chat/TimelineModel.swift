@@ -26,11 +26,12 @@ nonisolated enum TimelineJob: Sendable {
     case update(String)
     case older(String)
     case highlights
+    case regroup
 
     var bytes: Int {
         switch self {
         case .snapshot(let json), .update(let json), .older(let json): json.utf8.count
-        case .highlights: 0
+        case .highlights, .regroup: 0
         }
     }
 }
@@ -55,6 +56,7 @@ actor TimelineRenderWorker {
     private var capabilityGeneration = UUID()
     private var orderRevision = 0
     private var identifiers: [ChatRowID] = []
+    private var groupRows: [ChatRowID: ChatRow] = [:]
     private let pane: UInt64
 
     init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit,
@@ -64,7 +66,8 @@ actor TimelineRenderWorker {
         window = TimelineWindow(byteLimit: valueByteLimit)
     }
 
-    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil) throws -> TimelineRenderResult {
+    func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil,
+               expanded: Set<ChatRowID> = []) throws -> TimelineRenderResult {
         var next = window
         var changed: Set<String> = []
         var removed: Set<String> = []
@@ -92,7 +95,7 @@ actor TimelineRenderWorker {
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
                 changes = try next.prepend(snapshot, protecting: historyAnchor)
                 consumedHistory = true
-            case .highlights:
+            case .highlights, .regroup:
                 continue
             }
             changed.formUnion(changes.changed)
@@ -102,7 +105,7 @@ actor TimelineRenderWorker {
         removed.subtract(next.items.keys)
         changed.formUnion(builder.itemsAwaitingHighlights.subtracting(removed))
         let prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset)
-        let changedRows: [ChatRow]
+        var changedRows: [ChatRow]
         if let prepared {
             window = next
             rowsByItem = prepared.items
@@ -123,8 +126,19 @@ actor TimelineRenderWorker {
         }
         let parentRevision = revision
         revision += 1
-        let rows = window.order.flatMap { rowsByItem[$0]?.rows ?? [] }
+        let rows = ChatToolGroups.fold(window.order.flatMap { rowsByItem[$0]?.rows ?? [] },
+                                       expanded: expanded, previous: groupRows)
         let identifiers = rows.map(\.id)
+        // A group's line and the calls it uncovers are rows no item changed.
+        let shown = Set(self.identifiers)
+        var listed = Set(changedRows.lazy.map(\.id))
+        var groups: [ChatRowID: ChatRow] = [:]
+        for row in rows {
+            if case .toolGroup = row.content { groups[row.id] = row }
+            let isNew = groupRows[row.id].map { $0 != row } ?? !shown.contains(row.id)
+            if isNew, listed.insert(row.id).inserted { changedRows.append(row) }
+        }
+        groupRows = groups
         let keptOrder = zip(self.identifiers, identifiers).prefix { $0 == $1 }.count
         if keptOrder != identifiers.count || keptOrder != self.identifiers.count {
             orderRevision += 1
@@ -278,6 +292,7 @@ final class TimelineModel {
 
     func toggle(_ identifier: ChatRowID) {
         if expanded.contains(identifier) { expanded.remove(identifier) } else { expanded.insert(identifier) }
+        if ChatToolGroups.isGroup(identifier) { enqueue(.regroup) }
     }
 
     func reachedBottom() { hasNewItems = false }
@@ -338,7 +353,8 @@ final class TimelineModel {
                 pending.removeAll(keepingCapacity: true)
                 pendingBytes = 0
                 do {
-                    let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom, historyAnchor: readingItem)
+                    let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom,
+                                                        historyAnchor: readingItem, expanded: expanded)
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     if !followsBottom, result.hasLiveChanges { hasNewItems = true }
                     frame = result.frame

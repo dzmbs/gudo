@@ -1,4 +1,5 @@
 #if os(iOS)
+import Foundation
 import HostKit
 
 nonisolated enum ChatItemPresentation {
@@ -10,7 +11,19 @@ nonisolated enum ChatItemPresentation {
 
     static func thinkingTitle(_ thinking: TimelineThinking) -> String {
         if let time = thinking.durationMs { return "Thought for " + duration(time) }
-        return hasThinkingText(thinking) ? "Thinking" : "Thinking text unavailable"
+        return "Thinking"
+    }
+
+    /// "14:32" today, "12 Nov, 14:32" before; nothing for a prompt with no recorded time.
+    static func promptTime(_ milliseconds: UInt64, now: Date = .now, calendar: Calendar = .current,
+                           locale: Locale = .current) -> String? {
+        guard milliseconds > 0 else { return nil }
+        let date = Date(timeIntervalSince1970: Double(milliseconds) / 1_000)
+        var style = Date.FormatStyle(date: calendar.isDate(date, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
+        style.calendar = calendar
+        style.timeZone = calendar.timeZone
+        style.locale = locale
+        return date.formatted(style)
     }
 
     static func hasThinkingText(_ thinking: TimelineThinking) -> Bool { thinking.text?.isEmpty == false }
