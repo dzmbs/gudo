@@ -1088,3 +1088,61 @@ async fn parallel_opens_stay_within_the_pane_budget() {
     }
     assert_eq!(opened, 32);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_that_outlives_its_timeout_reads_cleanly_and_waits_with_its_output() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |config| config.shell = Some(zsh)).await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let agent_pane = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: agent_pane.0.to_string(),
+    };
+    let worker = agent.ok("cmd_run", json!({ "command": "true" })).await["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let run = agent
+        .ok(
+            "cmd_run",
+            json!({
+                "pane": worker,
+                "command": "printf 'LATE_%s\\n' START; sleep 1; printf 'LATE_%s\\n' END",
+                "timeoutMs": 300,
+            }),
+        )
+        .await;
+    assert_eq!(run["status"], "timeout", "{run}");
+    assert_eq!(run["timedOut"], true, "{run}");
+    assert_eq!(run["stillRunning"], true, "{run}");
+    assert_eq!(
+        run["output"]["text"], "LATE_START",
+        "the shell's echo reached the output: {run}"
+    );
+    let id = run["command"]["id"].as_u64().unwrap();
+    let cursor = run["output"]["cursor"].as_str().unwrap().to_owned();
+
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let waited = agent
+        .ok(
+            "pane_wait",
+            json!({ "pane": worker, "exit": id, "since": cursor, "timeoutMs": 5000 }),
+        )
+        .await;
+    assert_eq!(waited["status"], "exited", "{waited}");
+    assert!(
+        waited["output"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("LATE_END"),
+        "{waited}"
+    );
+    assert_ne!(waited["output"]["cursor"], cursor.as_str(), "{waited}");
+}

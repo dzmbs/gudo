@@ -2633,7 +2633,10 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
 - **Commands.** `cmd_run` waits for the shell's prompt, pastes the command, and follows its
   OSC 133 mark to the exit code and the command's own output. Shells without integration report
   `status: unknown` after the output settles. Waits default to 30 s and stop at 240 s with
-  `status: timeout`, never an error.
+  `status: timeout`, never an error. A command still running at the timeout adds `timedOut`,
+  `stillRunning` and `commandId`; its output so far is its own region of the screen, never the
+  shell's echo of the line. `pane_wait {exit, since}` on a command that already finished still
+  returns everything printed after `since`, with the cursor after it.
 - **Screens.** Full-screen programs (TUIs, pickers, agents' own dialogs, multiplexers) redraw
   in place, so their new output is no line-by-line text. `pane_read` of the screen (`screen:
   true`, or any read while the alternate screen is up) adds `screen {cols, rows, cursor {row,

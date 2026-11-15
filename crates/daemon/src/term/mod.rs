@@ -1520,21 +1520,26 @@ impl CallContext {
             }));
         };
         let finished = mark.finished.is_some();
-        let output = if finished {
-            let found = entry.pane.command_output(None, Some(mark.command_id)).ok();
-            found.map(|found| {
-                Output::new(found.text, max, entry.pane.head()).shared(self.shared(pane))
-            })
-        } else {
-            let (text, at) = self.output_since(&entry, start).await?;
-            Some(Output::new(text, max, at).shared(self.shared(pane)))
-        };
-        Ok(json!({
+        // The command's own region of the screen, so the shell's echo of the line stays out.
+        // The cursor is taken first: reading on from it may repeat a line, never skip one.
+        let at = entry.pane.head();
+        let output = entry
+            .pane
+            .command_output(None, Some(mark.command_id))
+            .ok()
+            .map(|found| Output::new(found.text, max, at).shared(self.shared(pane)));
+        let mut result = json!({
             "pane": pane_ref(pane),
             "command": CommandInfo::of(&mark),
             "status": if finished { "exited" } else { "timeout" },
             "output": output,
-        }))
+        });
+        if !finished {
+            result["timedOut"] = json!(true);
+            result["stillRunning"] = json!(true);
+            result["commandId"] = json!(mark.command_id);
+        }
+        Ok(result)
     }
 
     fn busy(entry: &PaneEntry) -> bool {
@@ -1596,6 +1601,16 @@ impl CallContext {
             .subscribe_from(since)
             .map_err(|error| ToolError::new(ErrorCode::CursorExpired, error.to_string()))?;
         let mut bytes = Vec::new();
+        let head = entry.pane.head();
+        while subscriber.position().get() < head.0 {
+            match tokio::time::timeout(Duration::from_secs(1), subscriber.recv()).await {
+                Ok(Ok(chunk)) => bytes.extend_from_slice(&chunk.data),
+                _ => break,
+            }
+        }
+        if bytes.len() > WAIT_KEEP {
+            bytes.drain(..bytes.len() - WAIT_KEEP / 2);
+        }
         let mut last_output = Instant::now();
         let cols = entry.pane.size().cols;
         // Output not yet searched, and when the pattern last ran.
