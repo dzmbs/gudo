@@ -151,6 +151,18 @@ extension WindowModel {
             }
             return
         }
+        // A tool works from its host's carrier tab (the folder it starts from), so that tab is the
+        // host's active one, not whichever tab was shown there last.
+        if let mixed = activeMixed, let tool = mixed.focusedTool {
+            if currentGroupId != tool.hostId, groups.group(tool.hostId) != nil {
+                show(tool.hostId == HostGroups.localId ? .local : .host(tool.hostId), keepingMixedTab: true)
+            }
+            if let carrier = mixed.carriers[tool.hostId], let open = workspace(ofGroup: tool.hostId),
+               open.session.activeTabId != carrier {
+                open.selectTab(carrier)
+            }
+            return
+        }
         guard let mixed = activeMixed, let member = mixed.focusedMember, let open = workspace(ofGroup: member.hostId) else { return }
         if currentGroupId != member.hostId {
             show(member.hostId == HostGroups.localId ? .local : .host(member.hostId), keepingMixedTab: true)

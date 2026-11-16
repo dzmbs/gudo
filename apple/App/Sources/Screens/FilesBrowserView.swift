@@ -256,6 +256,9 @@ private struct DirectoryListing: View {
     @State private var naming: Naming?
     @State private var draftName = ""
     @State private var trashing: FileEntry?
+    /// The row the keyboard is on (↑/↓ move it, Return opens, →/← expand and fold a folder).
+    @State private var selection: String?
+    @FocusState private var isListFocused: Bool
     @State private var transfer: Transfer?
     @State private var shared: SharedFile?
     @State private var repositoryRoot: String?
@@ -357,13 +360,24 @@ private struct DirectoryListing: View {
     @ViewBuilder private var content: some View {
         if entries != nil {
             let rows = rows
-            List {
+            List(selection: $selection) {
                 ForEach(rows) { row in
                     self.row(row.entry, depth: row.depth)
                         .listRowBackground(theme.background)
                 }
             }
             .listStyle(.plain)
+            .focused($isListFocused)
+            // A focused leaf's list has the keyboard, so the arrows land here.
+            .onChange(of: leaf?.isFocused == true, initial: true) { _, focused in
+                if focused, navigator != nil { isListFocused = true }
+            }
+            // The keys stay in the list: none of them may reach the window and move to a tab.
+            .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return]) { press in
+                guard press.modifiers.isEmpty else { return .ignored }
+                keyboardKey(press.key, in: rows)
+                return .handled
+            }
             .scrollContentBackground(.hidden)
             .background(theme.background)
             .refreshable { await load() }
@@ -410,6 +424,8 @@ private struct DirectoryListing: View {
                 HStack(spacing: DS.Space.xs) {
                     disclosure(entry, navigator: navigator)
                     Button {
+                        selection = entry.path
+                        isListFocused = true
                         navigator.open(entry.isDirectory ? .folder(entry.path) : .file(entry))
                     } label: {
                         label(entry)
@@ -460,6 +476,32 @@ private struct DirectoryListing: View {
                 .tint(DS.Palette.error)
             Button("Copy Path", systemImage: "doc.on.doc") { FilesPasteboard.copy(entry.path) }
                 .tint(DS.Palette.info)
+        }
+    }
+
+    private func keyboardKey(_ key: KeyEquivalent, in rows: [FileListingRow]) {
+        guard !rows.isEmpty else { return }
+        let index = rows.firstIndex { $0.id == selection }
+        switch key {
+        case .upArrow:
+            selection = rows[max((index ?? rows.count) - 1, 0)].id
+        case .downArrow:
+            selection = rows[min((index ?? -1) + 1, rows.count - 1)].id
+        case .return:
+            guard let index else { return }
+            let entry = rows[index].entry
+            navigator?.open(entry.isDirectory ? .folder(entry.path) : .file(entry))
+        case .rightArrow, .leftArrow:
+            guard let index, let navigator else { return }
+            let entry = rows[index].entry
+            let isExpanded = navigator.expanded.contains(entry.path)
+            if entry.isDirectory, isExpanded != (key == .rightArrow) {
+                toggle(entry, navigator: navigator)
+            } else if key == .leftArrow, rows[index].depth > 0 {
+                selection = rows[..<index].last { $0.depth < rows[index].depth }?.id
+            }
+        default:
+            break
         }
     }
 

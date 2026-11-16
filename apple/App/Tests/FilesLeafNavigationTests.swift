@@ -134,6 +134,65 @@ final class FilesLeafNavigationTests: XCTestCase {
         try assertStillBeside()
     }
 
+    private func press(_ key: Int, keyCode: UInt16) async {
+        let characters = String(Character(UnicodeScalar(key)!))
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            let event = NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: keyCode)!
+            window.sendEvent(event)
+        }
+        await pump(0.3)
+    }
+
+    func testArrowsMoveAVisibleSelectionAndStayInTheTab() async throws {
+        try await click(row: index(of: "apple"))
+        XCTAssertEqual(navigator.place, .folder("\(root)/apple"))
+        let tab = model.currentTab
+        let table = try list()
+        XCTAssertTrue((window.firstResponder as? NSView)?.isDescendant(of: table) == true, "the list has the keyboard: \(String(describing: window.firstResponder))")
+
+        await press(NSDownArrowFunctionKey, keyCode: 125)
+        XCTAssertEqual(table.selectedRow, 0, "↓ selects the first row")
+        await press(NSDownArrowFunctionKey, keyCode: 125)
+        XCTAssertEqual(table.selectedRow, 1, "↓ moves down")
+        await press(NSUpArrowFunctionKey, keyCode: 126)
+        await press(NSUpArrowFunctionKey, keyCode: 126)
+        await press(NSLeftArrowFunctionKey, keyCode: 123)
+        await press(NSRightArrowFunctionKey, keyCode: 124)
+        XCTAssertEqual(table.selectedRow, 0, "↑ stops at the top")
+        XCTAssertEqual(model.currentTab, tab, "the arrows never leave the tab")
+        XCTAssertNotNil(model.activeMixed?.focusedTool, "the Files leaf keeps the focus")
+        try assertStillBeside()
+    }
+
+    func testReturnOpensTheSelectedRow() async throws {
+        try await click(row: index(of: "apple"))
+        let table = try list()
+        await press(NSDownArrowFunctionKey, keyCode: 125)
+        let selected = table.selectedRow
+        XCTAssertGreaterThanOrEqual(selected, 0)
+        await press(13, keyCode: 36)
+        XCTAssertNotEqual(navigator.place, .folder("\(root)/apple"), "Return opens the row")
+    }
+
+    func testComingBackToTheTabKeepsTheToolOnItsOwnTerminalsFolder() async throws {
+        let workspace = try XCTUnwrap(model.workspace)
+        let mixed = try XCTUnwrap(model.activeMixed)
+        let carrier = try XCTUnwrap(mixed.carriers[HostGroups.localId])
+        XCTAssertNotNil(mixed.focusedTool)
+        let other = try XCTUnwrap(workspace.session.tabs.first { $0.id != carrier })
+        model.focus(TabRef(hostId: HostGroups.localId, tab: other.id))
+        await pump(0.5)
+        XCTAssertEqual(workspace.session.activeTabId, other.id)
+
+        model.focus(WindowModel.mixedRef(mixed.id))
+        await pump(0.5)
+        XCTAssertNotNil(model.activeMixed?.focusedTool, "the Files leaf has the focus again")
+        XCTAssertEqual(workspace.session.activeTabId, carrier, "the folder comes from the tab's own terminal, not the last tab shown")
+    }
+
     func testFoldersExpandInPlace() async throws {
         let rows = try list().numberOfRows
         try await click(row: index(of: "apple"), x: 14)
