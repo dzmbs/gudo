@@ -58,7 +58,7 @@ struct ThisMacSettingsSection: View {
                         .settingAnchor("this-mac-helper")
                 }
             } header: {
-                Text("This Mac")
+                PaneSectionTitle("This Mac")
             } footer: {
                 Text(footer(helper))
             }

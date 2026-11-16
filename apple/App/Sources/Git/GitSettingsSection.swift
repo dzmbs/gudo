@@ -30,7 +30,7 @@ struct GitSettingsSection: View {
                 NotificationCenter.default.post(name: GitSettings.autoDeleteChanged, object: nil)
             }
         } header: {
-            Text("Git")
+            PaneSectionTitle("Git")
         } footer: {
             Text("Only worktrees made from this app (New Agent, Check Out PR) are deleted, and never one with uncommitted changes. Branches stay. Pull requests come from each host's own gh.")
         }

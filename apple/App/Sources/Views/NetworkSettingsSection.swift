@@ -57,7 +57,7 @@ struct NetworkSettingsSection: View {
             }
             if let failure { problem(failure) }
         } header: {
-            Text("Network")
+            PaneSectionTitle("Network")
         } footer: {
             Text(footer)
         }

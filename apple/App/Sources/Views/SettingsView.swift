@@ -862,7 +862,7 @@ private struct SettingsSearchField: View {
 #endif
 
 /// A section named like its pane: the Mac's titlebar already says it, iOS's one form needs it.
-private struct PaneSectionTitle: View {
+struct PaneSectionTitle: View {
     let title: String
 
     init(_ title: String) {
