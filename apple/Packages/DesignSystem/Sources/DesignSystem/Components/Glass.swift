@@ -85,10 +85,14 @@ public extension PrimitiveButtonStyle where Self == PrimaryGlassButtonStyle {
 
 /// A plain, chrome-quiet button for bars: icon only, secondary until hovered or pressed.
 public struct BarButtonStyle: ButtonStyle {
+    /// The area a finger can hit, around the drawn button; nil for the button itself.
+    var hitArea: CGFloat?
     @State private var isHovered = false
     @Environment(\.isEnabled) private var isEnabled
 
-    public init() {}
+    public init(hitArea: CGFloat? = nil) {
+        self.hitArea = hitArea
+    }
 
     public func makeBody(configuration: Configuration) -> some View {
         let state = ControlState(isHovered: isHovered, isPressed: configuration.isPressed, isEnabled: isEnabled)
@@ -101,6 +105,7 @@ public struct BarButtonStyle: ButtonStyle {
             .background(
                 ControlFillShape(state: state, shape: .rounded(DS.Radius.field))
                     .animation(DS.Motion.micro, value: isLit))
+            .frame(minWidth: hitArea, minHeight: hitArea)
             .contentShape(.rect)
             .onHover { isHovered = $0 }
             #if os(iOS)
@@ -111,6 +116,8 @@ public struct BarButtonStyle: ButtonStyle {
 
 public extension ButtonStyle where Self == BarButtonStyle {
     static var bar: BarButtonStyle { BarButtonStyle() }
+    /// A bar button a finger hits in the full touch target, drawn at the bar's size.
+    static var touchBar: BarButtonStyle { BarButtonStyle(hitArea: DS.Size.touchTarget) }
 }
 
 /// A full-width list row with hover and pressed fills, for rows that are buttons.

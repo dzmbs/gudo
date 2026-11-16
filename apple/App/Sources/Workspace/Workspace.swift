@@ -171,6 +171,9 @@ final class Workspace {
     static var keyBarResizeUntil = ContinuousClock.now
     /// How long past the keyboard's slide the grids stay held: the layout can trail it.
     static let keyboardSettle = 0.15
+    /// How long a grid change counts as the keyboard's: a host's pane takes the size the host
+    /// answers with, a round trip after the slide (over a relay, most of a second).
+    static let keyboardResizeQuiet = Duration.seconds(2)
     /// The focused pane's repository workflows the key bar shows (`followWorkflows`).
     @ObservationIgnored let keyBarWorkflows = KeyBarWorkflowState()
     #endif
@@ -272,7 +275,7 @@ final class Workspace {
             let endFrame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.keyboardFrameChangeUntil = .now + .milliseconds(800)
+                self.keyboardFrameChangeUntil = .now + Self.keyboardResizeQuiet
                 // The keyboard slides: the terminals' grids change once it has.
                 if duration > 0 { TerminalSurface.holdGrids(for: .seconds(duration + Self.keyboardSettle)) }
                 let top = self.keyboardTop(screenFrame: endFrame)
@@ -281,7 +284,7 @@ final class Workspace {
                 withAnimation(duration > 0 ? .easeOut(duration: duration) : nil) { self.keyboardTop = top }
             }
         }
-        keyBar.onHeightChange = { Workspace.keyBarResizeUntil = .now + .milliseconds(800) }
+        keyBar.onHeightChange = { Workspace.keyBarResizeUntil = .now + Workspace.keyboardResizeQuiet }
         #endif
         _ = settingsObserver
     }

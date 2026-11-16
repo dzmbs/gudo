@@ -236,6 +236,11 @@ struct WorkspaceView: View {
             frame = newFrame
             #if os(macOS)
             model.windowWidthChanged(to: newFrame.width, sidebar: width + (page != nil ? layout.gutter : 0))
+            #else
+            // An iPhone on its side: the terminal keeps the width; the sidebar is a tap away.
+            if UIDevice.current.userInterfaceIdiom == .phone, page == nil {
+                model.windowWidthChanged(to: newFrame.width, sidebar: width)
+            }
             #endif
         }
         .animation(DS.Motion.structural, value: model.isSidebarShown)
@@ -308,8 +313,8 @@ struct StripRoom: ViewModifier {
     }
 }
 
-/// A Mac window too narrow for the sidebar beside a useful terminal hides it, and shows it again
-/// once it is wide enough, unless the user showed or hid it meanwhile.
+/// A Mac window or an iPhone in landscape too narrow for the sidebar beside a useful terminal
+/// hides it, and shows it again once it is wide enough, unless the user showed or hid it meanwhile.
 struct SidebarWidthFit {
     /// About 80 columns of terminal beside a sidebar of the standard width.
     static let hideBelow: CGFloat = 900
@@ -928,7 +933,9 @@ private struct CompactRoot: View {
         TabView(selection: $model.destination) {
             SwiftUI.Tab("Terminal", systemImage: "terminal", value: Destination.terminal) {
                 CompactTerminalView(workspace: workspace)
-                    .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .tabBar)
+                    // The key bar rides the keyboard's top, at the bottom edge with a hardware
+                    // keyboard: the tab bar gives way rather than sit under it.
+                    .toolbar(model.isEditorFullScreen || workspace.keyboardTop != nil ? .hidden : .automatic, for: .tabBar)
             }
             SwiftUI.Tab(Destination.inbox.title, systemImage: Destination.inbox.systemImage, value: Destination.inbox) {
                 NavigationStack {
@@ -1298,6 +1305,10 @@ private struct RenameTabPrompt: ViewModifier {
             isPresented: Binding(get: { workspace.renamingTab != nil }, set: { if !$0 { workspace.renamingTab = nil } })
         ) {
             TextField("Title", text: $draft)
+                .autocorrectionDisabled()
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
             Button("Rename") {
                 if let id = workspace.renamingTab { workspace.apply(.rename(id, draft)) }
             }

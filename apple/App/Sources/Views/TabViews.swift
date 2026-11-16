@@ -1191,6 +1191,7 @@ struct CompactTerminalView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @Environment(\.self) private var environment
+    @State private var tabSwipes = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1235,11 +1236,25 @@ struct CompactTerminalView: View {
                 .accessibilityIdentifier("open-palette")
             NewTabButton(workspace: workspace)
         }
-        .buttonStyle(.bar)
+        // Drawn in the 36 pt bar; a finger hits the full touch target, over the bar's edges.
+        .buttonStyle(.touchBar)
         .padding(.horizontal, DS.Space.s)
         // A 36 pt bar with a two-line title: grows with Dynamic Type only as far as it fits.
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
         .frame(height: 36)
+        // A sideways swipe along the bar moves to the next or previous tab, as along Safari's
+        // address bar. Not on the terminal: programs there take sideways drags themselves.
+        .contentShape(.rect)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: DS.Size.swipeTabDistance)
+                .onEnded { drag in
+                    guard abs(drag.translation.width) > 2 * abs(drag.translation.height) else { return }
+                    model.selectTab(offset: drag.translation.width < 0 ? 1 : -1)
+                    tabSwipes += 1
+                })
+        .sensoryFeedback(DS.Haptic.select, trigger: tabSwipes)
+        .accessibilityAction(named: "Next Tab") { model.selectTab(offset: 1) }
+        .accessibilityAction(named: "Previous Tab") { model.selectTab(offset: -1) }
     }
 
     private var tabSwitcher: some View {
@@ -1331,7 +1346,7 @@ struct CompactTerminalView: View {
                 }
             }
             .padding(.horizontal, DS.Space.xs)
-            .frame(minHeight: 30)
+            .frame(minHeight: DS.Size.touchTarget)
             .contentShape(.rect)
         }
         .menuOrder(.fixed)

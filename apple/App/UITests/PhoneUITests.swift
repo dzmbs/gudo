@@ -26,6 +26,36 @@ final class PhoneUITests: XCTestCase {
         switcher.tap()
     }
 
+    /// The terminal bar's controls are 44 pt touch targets, though drawn in a 36 pt bar.
+    func testTerminalBarControlsAreFullTouchTargets() throws {
+        let app = try launch()
+        XCTAssertTrue(app.descendants(matching: .any)["tab-switcher"].firstMatch.waitForExistence(timeout: 20))
+        for id in ["tab-switcher", "open-palette", "new-tab"] {
+            let frame = app.descendants(matching: .any)[id].firstMatch.frame
+            XCTAssertGreaterThanOrEqual(frame.height, 44, "\(id): \(frame)")
+            XCTAssertGreaterThanOrEqual(frame.width, 44, "\(id): \(frame)")
+        }
+    }
+
+    /// A sideways swipe along the terminal bar goes to the next tab and back.
+    func testSwipingTheBarChangesTabs() throws {
+        let app = try launch()
+        let switcher = app.descendants(matching: .any)["tab-switcher"].firstMatch
+        XCTAssertTrue(switcher.waitForExistence(timeout: 20))
+        let first = app.descendants(matching: .any)["pane-1"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        first.tap()
+        app.typeKey("t", modifierFlags: .command)
+        XCTAssertTrue(first.waitForNonExistence(timeout: 10), "a second tab shows in its place")
+        let panes = app.descendants(matching: .any).matching(NSPredicate(format: "identifier MATCHES 'pane-[0-9]+'"))
+        let second = app.descendants(matching: .any)[panes.firstMatch.identifier].firstMatch
+        XCTAssertTrue(second.exists)
+        switcher.swipeRight()
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "back to the first tab")
+        switcher.swipeLeft()
+        XCTAssertTrue(second.waitForExistence(timeout: 5), "on to the second tab")
+    }
+
     /// Open in New Window only where the system shows more than one window (not an iPhone; a
     /// foldable may).
     func testSwitcherOffersNewWindowOnlyWhereItCanOpen() throws {

@@ -94,6 +94,8 @@ public extension DS {
         public static let tabMaxWidth: CGFloat = 240
         /// The fade where strip chips run past an edge.
         public static let stripFade: CGFloat = 16
+        /// How far a finger travels along the iPhone terminal bar before the swipe changes tabs.
+        public static let swipeTabDistance: CGFloat = 24
         public static let avatar: CGFloat = 22
         /// Room for a title and its context on one line, wider for touch.
         #if os(macOS)
