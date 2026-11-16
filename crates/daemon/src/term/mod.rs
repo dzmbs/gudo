@@ -1816,6 +1816,22 @@ impl CallContext {
     }
 
     async fn pane_wait(&self, args: WaitArgs) -> Result<Value> {
+        let mut skipped_bytes = 0;
+        let mut result = self.wait_until(args, &mut skipped_bytes).await?;
+        if skipped_bytes > 0 {
+            result["skippedBytes"] = json!(skipped_bytes);
+            if result["note"].is_null() {
+                result["note"] = json!(format!(
+                    "{skipped_bytes} bytes of output went by faster than they could be searched and were skipped"
+                ));
+            }
+        }
+        Ok(result)
+    }
+
+    /// Waits for what `args` asks. Output a flood pushed out of the pane's buffer before it was
+    /// searched is skipped and counted in `skipped_bytes`.
+    async fn wait_until(&self, args: WaitArgs, skipped_bytes: &mut u64) -> Result<Value> {
         let (pane, entry) = self.resolve(args.pane.as_deref())?;
         self.may_read(pane)?;
         let regex = args
@@ -2064,7 +2080,17 @@ impl CallContext {
                     }
                     last_output = Instant::now();
                 }
-                Ok(Err(_)) => tokio::time::sleep(TICK).await,
+                Ok(Err(pty::RecvError::Evicted { requested, oldest })) => {
+                    let head = pty::Seq::new(entry.pane.head().0);
+                    if let Some(resumed) = [oldest, head]
+                        .into_iter()
+                        .find(|&resume_at| subscriber.seek(resume_at).is_ok())
+                    {
+                        *skipped_bytes += resumed.get().saturating_sub(requested.get());
+                    }
+                    fresh = true;
+                }
+                Ok(Err(pty::RecvError::Closed)) => tokio::time::sleep(TICK).await,
                 Err(_) => {}
             }
         }

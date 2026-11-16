@@ -1160,3 +1160,64 @@ async fn a_command_that_outlives_its_timeout_reads_cleanly_and_waits_with_its_ou
     );
     assert_ne!(waited["output"]["cursor"], cursor.as_str(), "{waited}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wait_finds_its_match_after_a_flood_that_outruns_the_ring() {
+    let Some(zsh) = zsh() else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_with(dir.path(), |config| {
+        config.shell = Some(zsh);
+        // A small buffer, so the flood outruns the wait on any machine.
+        config.ring_capacity = 16 * 1024;
+    })
+    .await;
+    let mut user = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let agent_pane = user.attach_and_follow().await;
+    let agent = Caller {
+        socket: daemon.hook_socket().to_owned(),
+        token: std::fs::read_to_string(dir.path().join("hook.token")).unwrap(),
+        pane: agent_pane.0.to_string(),
+    };
+    let worker = agent.ok("cmd_run", json!({ "command": "true" })).await["pane"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let cursor = agent.ok("pane_read", json!({ "pane": worker })).await["output"]["cursor"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    let waiter = {
+        let agent = agent.clone_as(agent.pane.clone());
+        let worker = worker.clone();
+        tokio::spawn(async move {
+            agent
+                .ok(
+                    "pane_wait",
+                    json!({ "pane": worker, "match": "^FLOOD_END$", "since": cursor, "timeoutMs": 15000 }),
+                )
+                .await
+        })
+    };
+    agent
+        .ok(
+            "pane_send",
+            json!({
+                "pane": worker,
+                "text": "yes | head -c 20000000; printf 'FLOOD_%s\\n' END",
+                "submit": true,
+            }),
+        )
+        .await;
+    let waited = waiter.await.unwrap();
+    assert_eq!(waited["status"], "matched", "{waited}");
+    assert!(
+        waited["skippedBytes"]
+            .as_u64()
+            .is_some_and(|skipped| skipped > 0),
+        "the gap went unreported: {waited}"
+    );
+}

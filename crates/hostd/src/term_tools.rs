@@ -412,6 +412,8 @@ fn tools_list() -> Vec<Tool> {
                     "command": { "anyOf": [command_schema(), { "type": "null" }] },
                     "output": output_schema(),
                     "screen": screen_schema(),
+                    "skippedBytes": { "type": "integer", "description": "Output that went by faster than it could be searched and was not searched." },
+                    "note": { "type": "string" },
                 },
                 "required": ["status", "output"],
             }),
