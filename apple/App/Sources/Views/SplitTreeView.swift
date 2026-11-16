@@ -724,7 +724,6 @@ struct PaneSlot: View {
             .opacity(terminalHidden ? 0 : 1)
             .animation(nil, value: terminalHidden)
             .clipped()
-            .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
             .overlay { SavedScreenOverlay(pane: pane) }
             .overlay(alignment: .top) { PaneSizingOverlay(pane: pane, workspace: workspace) }
             .overlay(alignment: .bottomLeading) { RunAgainOverlay(pane: pane, workspace: workspace) }

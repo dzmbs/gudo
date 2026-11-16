@@ -227,15 +227,20 @@ struct StalePaneOverlay: View {
     }
 }
 
-/// A pane showing the screen this device saved, before its host sends its own. Input typed
-/// meanwhile waits, and says so.
+/// A pane showing the screen this device saved, before its host sends its own: at nearly full
+/// contrast, lightly washed once the wait outlasts a grace (a quick connect shows nothing).
+/// Input typed meanwhile waits, and says so.
 struct SavedScreenOverlay: View {
     let pane: Pane
+    @State private var waitedPastGrace = false
+
+    static let wash = ChromePalette.waitingLevel
+    static let grace = Duration.seconds(1)
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            if pane.showsSavedScreen {
-                Rectangle().fill(DS.Palette.veil)
+            if pane.showsSavedScreen, waitedPastGrace {
+                Color.clear.fadedTowardTerminalBackground(Self.wash)
                     .motionTransition(.fade)
             }
             if case .holding = pane.heldInput {
@@ -249,8 +254,14 @@ struct SavedScreenOverlay: View {
                     .accessibilityIdentifier("held-input-\(pane.id)")
             }
         }
-        .animation(DS.Motion.standard, value: pane.showsSavedScreen)
+        .animation(DS.Motion.standard, value: pane.showsSavedScreen && waitedPastGrace)
         .animation(DS.Motion.standard, value: pane.heldInput)
+        .task(id: pane.showsSavedScreen) {
+            waitedPastGrace = false
+            guard pane.showsSavedScreen else { return }
+            try? await Task.sleep(for: Self.grace)
+            if !Task.isCancelled { waitedPastGrace = true }
+        }
         .allowsHitTesting(false)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(spoken)

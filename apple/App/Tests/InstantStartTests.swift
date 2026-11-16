@@ -447,6 +447,13 @@ final class InstantStartTests: XCTestCase {
         XCTAssertFalse(pane.view.surface.terminal.viewportAtBottom)
     }
 
+    /// A saved screen reads at nearly full contrast, and a connect quicker than the grace
+    /// shows no mark at all.
+    func testSavedScreensStayReadable() {
+        XCTAssertLessThanOrEqual(SavedScreenOverlay.wash, 0.15)
+        XCTAssertGreaterThanOrEqual(SavedScreenOverlay.grace, .milliseconds(200))
+    }
+
     func testInputBeforeLiveWaitsForTheHostsScreen() async throws {
         let (connection, client) = try InstantStartFixture.attach(.shared)
         let model = WindowModel(app: .shared)
