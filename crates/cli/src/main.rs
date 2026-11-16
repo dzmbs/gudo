@@ -186,8 +186,12 @@ enum Cmd {
     /// Move focus in a direction, or to a pane id.
     Focus { target: String },
     /// Grow (positive) or shrink the focused pane: `h` for width, `v` for height.
+    ///
+    /// The change is a fraction of the split the pane is in: `resize h 0.1` widens it by a
+    /// tenth of that split, `resize v -0.25` makes it a quarter shorter.
     Resize {
         axis: String,
+        /// A fraction between -1 and 1 of the split's size (0.05 is 5 %).
         #[arg(allow_hyphen_values = true)]
         delta: f32,
     },
@@ -974,6 +978,12 @@ async fn run(cli: Cli) -> Result<()> {
                 "v" | "vertical" | "height" => Axis::Vertical,
                 _ => bail!("axis is h or v"),
             };
+            if !(-1.0..=1.0).contains(&delta) {
+                bail!(
+                    "the change is a fraction of the split, between -1 and 1: {} for {delta} %",
+                    delta / 100.0
+                );
+            }
             let pane_id = conn.tab()?.focused;
             conn.op(LayoutOp::Resize {
                 pane_id,

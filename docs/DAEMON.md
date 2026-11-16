@@ -682,7 +682,8 @@ gudo pair 'gudo://pair/…'        # saves the ticket and a device key under ~/.
 gudo attach                         # focused pane in this terminal; follows focus; Ctrl-] detaches
 gudo ls
 gudo split [-v] [--agent claude|codex]
-gudo focus left|right|up|down|<pane>   gudo zoom   gudo close   gudo resize h|v <delta>
+gudo focus left|right|up|down|<pane>   gudo zoom   gudo close
+gudo resize h|v <delta>             # delta: fraction of the split, -1 to 1 (0.1 grows it by a tenth)
 gudo tab new [name]|close|next|prev|select <n>|move <n>|rename <name>
 gudo session new <name>|rename <name>|close      gudo -s <name> attach
 gudo forward <remote-port> [--local <port>]
