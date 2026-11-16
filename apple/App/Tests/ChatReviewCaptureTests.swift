@@ -209,6 +209,8 @@ final class ChatReviewCaptureTests: XCTestCase {
                 PaneChatView(pane: pane, state: state, hub: hub, permitsSending: true, working: working) { _ in Color.clear }
                     .navigationTitle("Review the change").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .principal) { PaneChatToggle(pane: pane, state: state) } }
+                    .chromeBarBackground(.base)
+                    .chromeBackground(DS.Palette.base)
             }
         })
         window.makeKeyAndVisible()
