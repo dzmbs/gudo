@@ -74,7 +74,7 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
                             busy(primary)
                         } else {
                             button(primary)
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(SheetButtonStyle(isDefault: true))
                                 .keyboardShortcut(.defaultAction)
                         }
                     }
@@ -95,7 +95,7 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
                             .accessibilityHidden(true)
                     }
                 }
-                .controlSize(.large)
+                .buttonStyle(SheetButtonStyle())
                 .padding(.horizontal, DS.Space.xl)
                 .padding(.top, DS.Space.s)
                 .padding(.bottom, DS.Space.xl)
@@ -147,6 +147,41 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
         }
     }
 }
+
+#if os(macOS)
+/// A Mac sheet's button: a capsule at the large control size on the theme's own fill, the
+/// default one on the prominent colour. Disabled, the default button keeps the plain bezel and
+/// its label drops to the tertiary ink, quieter than Cancel beside it.
+private struct SheetButtonStyle: ButtonStyle {
+    var isDefault = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(DS.Font.rowTitle)
+            .lineLimit(1)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, DS.Space.l)
+            .frame(minWidth: 72, minHeight: 28)
+            .background { fill(isPressed: configuration.isPressed) }
+            .contentShape(.capsule)
+            .animation(DS.Motion.micro, value: configuration.isPressed)
+    }
+
+    private var foreground: ChromeStyle {
+        guard isEnabled else { return DS.Palette.textTertiary }
+        return isDefault ? DS.Palette.onProminent : DS.Palette.text
+    }
+
+    @ViewBuilder private func fill(isPressed: Bool) -> some View {
+        if isDefault, isEnabled {
+            Capsule().fill(DS.Palette.prominent).brightness(isPressed ? -0.08 : 0)
+        } else {
+            Capsule().fill(isPressed && isEnabled ? DS.Palette.pressedFill : DS.Palette.selectedFill)
+        }
+    }
+}
+#endif
 
 /// A sheet's or tool window's title block on the Mac: the title in the system's headline
 /// (13 pt semibold) with an optional line under it, leading, on the 20 pt margin that the

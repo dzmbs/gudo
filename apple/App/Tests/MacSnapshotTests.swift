@@ -613,6 +613,7 @@ final class MacSnapshotTests: XCTestCase {
             await pump(1.5)
             let sheet = try XCTUnwrap(window.attachedSheet, "\(route)")
             try assertFits(sheet, "\(route)")
+            if route == .pairing { try assertQuietCancel(sheet) }
             model.sheet = nil
             for _ in 0..<30 where window.attachedSheet != nil { await pump(0.1) }
         }
@@ -643,6 +644,28 @@ final class MacSnapshotTests: XCTestCase {
         let rows = try XCTUnwrap(form.documentView).frame.height
         XCTAssertLessThanOrEqual(rows, shown + 1, "\(name) cuts off its form (\(rows) in \(shown))")
         XCTAssertLessThan(shown - rows, DS.Space.xxl, "\(name) has blank space under its form (\(rows) in \(shown))")
+    }
+
+    /// Cancel is a quiet bezel on the sheet's page, as on every Mac sheet, never a bright slab.
+    private func assertQuietCancel(_ sheet: NSWindow) throws {
+        let image = try XCTUnwrap(Self.windowImage(sheet.windowNumber))
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        let scale = CGFloat(bitmap.pixelsWide) / sheet.frame.width
+        func color(_ x: Int, _ y: Int) -> ThemeColor? {
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB).map { ThemeColor($0.redComponent, $0.greenComponent, $0.blueComponent) }
+        }
+        let bottom = bitmap.pixelsHigh - Int(DS.Space.xl * scale)
+        let page = try XCTUnwrap(color(bitmap.pixelsWide / 3, bitmap.pixelsHigh - Int(DS.Space.s * scale)))
+        // The buttons' line: the most common colour off the page there is their bezel.
+        var counts: [String: (color: ThemeColor, count: Int)] = [:]
+        for y in stride(from: bottom - Int(24 * scale), to: bottom, by: 2) {
+            for x in stride(from: bitmap.pixelsWide / 2, to: bitmap.pixelsWide - Int(DS.Space.xl * scale), by: 2) {
+                guard let pixel = color(x, y), pixel.contrast(with: page) > 1.05 else { continue }
+                counts[pixel.hex, default: (pixel, 0)].count += 1
+            }
+        }
+        let bezel = try XCTUnwrap(counts.values.max { $0.count < $1.count }?.color, "the buttons have a bezel")
+        XCTAssertLessThan(bezel.contrast(with: page), 2, "Cancel's bezel \(bezel) on the page \(page)")
     }
 
     /// Files, Changes, Ports and Replays beside the focused pane (the default on the Mac).
