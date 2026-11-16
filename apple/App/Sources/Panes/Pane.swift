@@ -162,7 +162,7 @@ final class Pane {
             savedShown.withLock { $0 = false }
             Task { @MainActor in self?.showsSavedScreen = false }
         }
-        let handle: @Sendable (PaneEvent) -> Void = { [weak self] event in
+        let apply: @Sendable (PaneEvent) -> Void = { [weak self] event in
             switch event {
             case .output, .snapshot: generation.withLock { $0 += 1 }
             default: break
@@ -216,6 +216,8 @@ final class Pane {
                 onExit()
             }
         }
+        let refill = ScrollbackRefill(terminal: terminal, requestHistory: { backend.requestHistory() }, apply: apply)
+        let handle: @Sendable (PaneEvent) -> Void = { refill.deliver($0) }
         if let shared = backend as? any SharedPaneTap {
             // Another window may show this pane already: start from its terminal, and let
             // windows opened later start from this one.
