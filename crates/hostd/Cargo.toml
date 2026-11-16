@@ -29,6 +29,7 @@ daemon.workspace = true
 proto.workspace = true
 libc.workspace = true
 qrcode.workspace = true
+ring.workspace = true
 rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -12,6 +12,8 @@
 //! gudo-hostd unpair <key>        remove one (a lost phone); live connections close at once
 //! gudo-hostd service install     run at login (systemd --user / launchd)
 //! gudo-hostd service uninstall
+//! gudo-hostd service start --json   run until logout as a launchd job, unless one runs (macOS)
+//! gudo-hostd service stop        stop that job; its sessions come back on the next start
 //! gudo-hostd build-info --json   this build (version, protocol level, OS, CPU, host name)
 //! gudo-hostd licenses           third-party licence notices for this binary
 //! gudo-hostd askpass <prompt>    the askpass helper (normally run as `gudo-hook askpass`)
@@ -23,6 +25,8 @@
 //! Run through a link named `gudo` (the install script and the Mac app make one), it is the
 //! same program under the short name: `gudo pair`, `gudo devices`.
 
+#[cfg(target_os = "macos")]
+mod app_job;
 mod askpass;
 mod devices;
 mod service;
@@ -139,7 +143,8 @@ enum Command {
         /// The device key, or its first 8 or more hex digits (see `devices`).
         device: String,
     },
-    /// Install or remove a per-user service that runs the daemon at login.
+    /// Install or remove a per-user service that runs the daemon at login, or start and stop
+    /// it until logout (macOS).
     Service {
         #[command(subcommand)]
         action: ServiceAction,
@@ -161,6 +166,53 @@ enum ServiceAction {
     Install,
     /// Stop and remove.
     Uninstall,
+    /// Start the daemon as a launchd job that runs until logout, unless one already runs on
+    /// the state directory, and wait until it can be reached (macOS). launchd starts it again
+    /// if it crashes. Exits with 3 when launchd refuses the job.
+    Start {
+        /// Print one JSON object (label, pid, daemon id, endpoint) instead.
+        #[arg(long)]
+        json: bool,
+        /// Seconds to wait for the daemon to record its endpoint.
+        #[arg(long, default_value_t = 20)]
+        timeout: u64,
+        #[command(flatten)]
+        serve: ServeOptions,
+    },
+    /// Stop the job `start` started. The daemon saves its sessions first; they come back on
+    /// the next start.
+    Stop,
+}
+
+/// `run` options a started job passes on.
+#[derive(clap::Args)]
+struct ServeOptions {
+    /// UDP address to bind (default: every interface, random port).
+    #[arg(long)]
+    bind: Option<SocketAddr>,
+    /// Direct connections only: no relays, no address lookup.
+    #[arg(long)]
+    no_relay: bool,
+    /// Shell for new panes (default: $SHELL, then the passwd entry).
+    #[arg(long)]
+    shell: Option<PathBuf>,
+}
+
+impl ServeOptions {
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn run_arguments(&self) -> Vec<std::ffi::OsString> {
+        let mut arguments = Vec::new();
+        if let Some(bind) = self.bind {
+            arguments.extend(["--bind".into(), bind.to_string().into()]);
+        }
+        if self.no_relay {
+            arguments.push("--no-relay".into());
+        }
+        if let Some(shell) = &self.shell {
+            arguments.extend(["--shell".into(), shell.clone().into_os_string()]);
+        }
+        arguments
+    }
 }
 
 fn main() -> Result<()> {
@@ -243,8 +295,57 @@ fn main() -> Result<()> {
         Command::Service { action } => match action {
             ServiceAction::Install => service::install(&state_dir),
             ServiceAction::Uninstall => service::uninstall(),
+            ServiceAction::Start {
+                json,
+                timeout,
+                serve,
+            } => start_job(&state_dir, json, Duration::from_secs(timeout), &serve),
+            ServiceAction::Stop => stop_job(&state_dir),
         },
     }
+}
+
+#[cfg(target_os = "macos")]
+fn start_job(state_dir: &Path, json: bool, timeout: Duration, serve: &ServeOptions) -> Result<()> {
+    let exe = std::env::current_exe()?
+        .canonicalize()
+        .context("locating this executable")?;
+    let started = match app_job::start(&exe, state_dir, &serve.run_arguments(), timeout) {
+        Ok(started) => started,
+        Err(error) if error.is::<app_job::LaunchdRefused>() => {
+            log_line!("{error:#}");
+            std::process::exit(app_job::LAUNCHD_REFUSED_EXIT);
+        }
+        Err(error) => return Err(error),
+    };
+    if json {
+        println!("{}", serde_json::to_string(&started)?);
+    } else if started.started {
+        println!("started {} (pid {})", started.label, started.pid);
+    } else {
+        println!("already running (pid {})", started.pid);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn stop_job(state_dir: &Path) -> Result<()> {
+    match app_job::stop(state_dir)? {
+        app_job::Stopped::Helper { pid } => println!("stopped (pid {pid})"),
+        app_job::Stopped::Job => println!("stopped"),
+        app_job::Stopped::NotLoaded => println!("not running as a job"),
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_job(_: &Path, _: bool, _: Duration, _: &ServeOptions) -> Result<()> {
+    bail!("`service start` is for macOS; use `service install`")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn stop_job(_: &Path) -> Result<()> {
+    bail!("`service stop` is for macOS; use `service uninstall`")
 }
 
 /// The arguments, under the short name when run through a link named [`brand::CLI_BIN`].

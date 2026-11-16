@@ -36,8 +36,12 @@ fn systemd_word(path: &Path) -> Result<String> {
 /// `path` as XML text for the property list.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn xml_text(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('&', "&amp;")
+    xml_escape(&path.to_string_lossy())
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
