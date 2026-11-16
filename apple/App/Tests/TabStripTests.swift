@@ -235,13 +235,28 @@ final class TabStripTests: XCTestCase {
         let shownPane = try XCTUnwrap(workspace.focusedPane.flatMap { workspace.pane($0) })
         try await eventually("the first tab is on screen") { shownPane.view.window != nil }
 
+        let shownRef = try XCTUnwrap(model.currentTab)
         model.newTab()
         let newPaneId = try XCTUnwrap(workspace.focusedPane)
         XCTAssertNotEqual(newPaneId, shownPane.id)
+        let newRef = try XCTUnwrap(model.currentTab)
+        func rows() -> [TabRef] {
+            model.sidebarItems(drop: nil, projectMove: nil).items.compactMap { if case .row(let ref, _) = $0 { ref } else { nil } }
+        }
+        // The row, the selection and the title wait for the content.
+        XCTAssertEqual(model.arrivingTab, newRef)
+        XCTAssertFalse(rows().contains(newRef), "the new row leads its content")
+        XCTAssertEqual(model.shownTab, shownRef)
         try await eventually("the new terminal is laid out") { workspace.pane(newPaneId)?.view.window != nil }
         XCTAssertNotNil(shownPane.view.window, "the shown terminal stays meanwhile")
+        XCTAssertEqual(model.shownTab, shownRef)
         try await eventually("the new tab takes over") { shownPane.view.window == nil }
         XCTAssertNotNil(workspace.pane(newPaneId)?.view.window)
+        XCTAssertNil(model.arrivingTab)
+        XCTAssertEqual(model.shownTab, newRef)
+        XCTAssertTrue(rows().contains(newRef))
+        let title = try XCTUnwrap(workspace.shownTab.map(workspace.title(of:)))
+        XCTAssertNotEqual(title, "Shell", "the row comes with its name")
     }
     #endif
 
@@ -299,6 +314,32 @@ final class TabStripTests: XCTestCase {
         readiness.ready.insert(second)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(handoff.shown, first)
+    }
+
+    func testANewTabArrivesWithItsContent() async throws {
+        let handoff = TabHandoff(deadline: .seconds(60))
+        let readiness = Readiness()
+        let first = TabId(1), second = TabId(2)
+        handoff.select(first) { true }
+        handoff.arrive(second)
+        handoff.select(second) { readiness.ready.contains(second) }
+        XCTAssertEqual(handoff.arriving, second)
+        readiness.ready.insert(second)
+        try await eventually("shown once ready") { handoff.shown == second }
+        XCTAssertNil(handoff.arriving)
+    }
+
+    func testAnArrivalNeverSelectedLetsGoAtTheDeadline() async throws {
+        let handoff = TabHandoff(deadline: .milliseconds(50))
+        handoff.select(TabId(1)) { true }
+        handoff.arrive(TabId(2))
+        XCTAssertEqual(handoff.arriving, TabId(2))
+        try await eventually("let go") { handoff.arriving == nil }
+
+        handoff.arrive(TabId(3))
+        handoff.select(TabId(1)) { true }
+        handoff.select(TabId(4)) { true }
+        XCTAssertNil(handoff.arriving, "another selection wins")
     }
 
     func testATabThatNeverDrawsShowsAtTheDeadline() async throws {

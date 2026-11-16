@@ -18,7 +18,7 @@ struct TabBar: View {
         #if DEBUG
         let _ = ChromeRenders.note("tab-bar")
         #endif
-        let active = model.destination == .terminal ? model.currentTab : nil
+        let active = model.destination == .terminal ? model.shownTab : nil
         let refs = chipRefs
         HStack(spacing: 0) {
             ScrollViewReader { scroller in
@@ -82,9 +82,11 @@ struct TabBar: View {
         }
     }
 
-    /// Every chip in strip order: the unified order the sidebar lists and ⌘1…⌘9 number.
+    /// Every chip in strip order: the unified order the sidebar lists and ⌘1…⌘9 number. A tab
+    /// still arriving joins with its content.
     private var chipRefs: [TabRef] {
-        model.groups.tabs
+        let arriving = model.arrivingTab
+        return model.groups.tabs.filter { $0 != arriving }
     }
 
     private func chips(_ refs: [TabRef], active: TabRef?) -> some View {

@@ -435,7 +435,7 @@ struct MixedTabRow: View {
 
     var body: some View {
         let ref = WindowModel.mixedRef(tab.id)
-        let isActive = model.destination == .terminal && model.currentTab == ref
+        let isActive = model.destination == .terminal && model.shownTab == ref
         let title = model.title(ofMixedTab: tab)
         let program = model.programIdentity(ofMixedTab: tab)
         let state = AgentState.mostUrgent(tab.leaves.compactMap { tab.members[$0] }

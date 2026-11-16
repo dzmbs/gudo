@@ -7,7 +7,11 @@ import PaneLayout
 final class TabHandoff {
     private(set) var shown: TabId?
     private(set) var incoming: TabId?
+    /// A tab just made that is not on screen yet: its row and chip wait for it, so they never
+    /// lead its content or read a name it has not got yet.
+    private(set) var arriving: TabId?
     @ObservationIgnored private var waiting: Task<Void, Never>?
+    @ObservationIgnored private var arrival: Task<Void, Never>?
     @ObservationIgnored private let deadline: Duration
 
     /// About one display frame: readiness is a frame having been presented.
@@ -17,8 +21,21 @@ final class TabHandoff {
         self.deadline = deadline
     }
 
+    /// `tab` was just made and selected; held back no longer than a selection waits.
+    func arrive(_ tab: TabId) {
+        guard tab != shown else { return }
+        arriving = tab
+        arrival?.cancel()
+        arrival = Task { [weak self, deadline] in
+            try? await Task.sleep(for: deadline)
+            guard !Task.isCancelled, let self, self.arriving == tab else { return }
+            self.arriving = nil
+        }
+    }
+
     /// The tab selected now; `isReady` says whether its panes have presented their screens.
     func select(_ tab: TabId?, isReady: @escaping @MainActor () -> Bool) {
+        defer { if arriving != nil, arriving != incoming { arriving = nil } }
         guard tab != (incoming ?? shown) else { return }
         waiting?.cancel()
         waiting = nil
@@ -39,6 +56,7 @@ final class TabHandoff {
             guard !Task.isCancelled, let self, self.incoming == tab else { return }
             self.incoming = nil
             self.shown = tab
+            if self.arriving == tab { self.arriving = nil }
             self.waiting = nil
             TabTimeline.mark(ready ? .firstFramePresented : .deadlinePassed)
         }

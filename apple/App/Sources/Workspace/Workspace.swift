@@ -59,6 +59,8 @@ final class Workspace {
     /// The tab whose rename prompt is showing.
     var renamingTab: TabId?
     @ObservationIgnored let tabHandoff = TabHandoff()
+    /// The tabs at the last layout change; nil before the first.
+    @ObservationIgnored private var knownTabs: Set<TabId>?
     /// Each pane's terminal grid, for the resize overlay.
     private(set) var grids: [PaneId: GridSize] = [:]
     /// Transient per-pane states drawn over the terminal (Ghostty's surface overlays).
@@ -456,6 +458,14 @@ final class Workspace {
 
     /// Gives every unnamed tab a friendly name, once. On a daemon the rename goes to the host, so
     /// all devices show the same name.
+    /// A tab that appeared selected since the last look is arriving (`TabHandoff.arrive`).
+    private func noteArrivingTab() {
+        let tabs = Set(session.tabs.map(\.id))
+        defer { knownTabs = tabs }
+        guard let known = knownTabs, !known.isEmpty, let active = session.activeTabId, !known.contains(active), tabs.contains(active) else { return }
+        tabHandoff.arrive(active)
+    }
+
     private func nameNewTabs() {
         let unnamed = session.tabs.filter { $0.title == nil && !namingRequested.contains($0.id) }
         guard !unnamed.isEmpty else { return }
@@ -658,6 +668,7 @@ final class Workspace {
     private func reconcilePanes() {
         guard !isClosed else { return }
         nameNewTabs()
+        noteArrivingTab()
         let live = session.panes
         var changed = false
         var departed: [PaneId: CGImage] = [:]

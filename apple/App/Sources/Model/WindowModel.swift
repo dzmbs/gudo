@@ -641,6 +641,19 @@ final class WindowModel {
         return workspace?.session.activeTabId.map { TabRef(hostId: currentGroupId, tab: $0) }
     }
 
+    /// The tab whose content is on screen: the current one once it has drawn (`TabHandoff`), so
+    /// rows, chips and the title change with the content.
+    var shownTab: TabRef? {
+        if activeMixedTab != nil { return currentTab }
+        return workspace?.shownTab.map { TabRef(hostId: currentGroupId, tab: $0.id) }
+    }
+
+    /// A tab just made whose content is not on screen yet: its row and chip wait for it.
+    var arrivingTab: TabRef? {
+        guard activeMixedTab == nil, let workspace, let tab = workspace.tabHandoff.arriving else { return nil }
+        return TabRef(hostId: currentGroupId, tab: tab)
+    }
+
     /// The focused pane of the current tab (none in a mixed tab).
     var currentPane: PaneId? {
         activeMixedTab == nil ? workspace?.session.activeTab?.focused : nil

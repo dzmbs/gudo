@@ -137,8 +137,10 @@ extension WindowModel {
         func rows(_ container: SidebarContainer) -> [TabRef] {
             sections.first { $0.container == container }?.rows ?? []
         }
+        // A tab still arriving gets its row with its content.
+        let arriving = arrivingTab
         func tabItems(_ refs: [TabRef], in container: SidebarContainer) -> [SidebarItem] {
-            refs.flatMap { ref -> [SidebarItem] in
+            refs.filter { $0 != arriving }.flatMap { ref -> [SidebarItem] in
                 guard opensPanes, expandedTabs.contains(ref),
                       let panes = groups.group(ref.hostId)?.tabs.first(where: { $0.id == ref.tab })?.root.panes, panes.count > 1
                 else { return [.row(ref, container)] }

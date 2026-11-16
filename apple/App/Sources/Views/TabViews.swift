@@ -161,7 +161,7 @@ private struct ActiveRowReveal: View {
 
     var body: some View {
         Color.clear
-            .onChange(of: model.destination == .terminal ? model.currentTab : nil) { _, ref in
+            .onChange(of: model.destination == .terminal ? model.shownTab : nil) { _, ref in
                 guard let ref else { return }
                 // Once the list has laid out the row a new tab adds.
                 Task { @MainActor in geometry.reveal(ref, scroll: scroll, proxy: proxy) }
@@ -898,7 +898,7 @@ struct TabRow: View {
         #if DEBUG
         let _ = ChromeRenders.note("tab-row \(ref.hostId)/\(ref.tab.rawValue)")
         #endif
-        let isActive = model.destination == .terminal && model.currentTab == ref
+        let isActive = model.destination == .terminal && model.shownTab == ref
         let state = AgentState.mostUrgent(tab.root.panes.compactMap { model.agentState(ofPane: $0, onGroup: group.id) })
         let program = model.programIdentity(of: tab, onGroup: group.id)
         let title = workspace?.title(of: tab, agentName: program.kind == .agent ? program.displayName : nil) ?? tab.title ?? "Shell"
