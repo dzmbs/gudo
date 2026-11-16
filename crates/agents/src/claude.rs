@@ -961,6 +961,35 @@ mod tests {
     }
 
     #[test]
+    fn screen_detects_the_sign_in_and_first_run_setup() {
+        let sign_in = "\
+ Claude Code can be used with your Claude subscription or billed based on API usage.
+
+ Select login method:
+
+ ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise
+
+   2. Anthropic Console account · API usage billing";
+        assert_eq!(
+            screen_state(sign_in, "✳ Claude Code"),
+            (AgentState::Blocked, Some("sign_in_required".into()), true)
+        );
+        let setup = "\
+ Welcome to Claude Code
+
+ Let's get started.
+
+ Choose the text style that looks best with your terminal
+
+ ❯ 1. Dark mode ✔
+   2. Light mode";
+        assert_eq!(
+            screen_state(setup, ""),
+            (AgentState::Blocked, Some("first_run_setup".into()), true)
+        );
+    }
+
+    #[test]
     fn screen_detects_the_idle_prompt() {
         let screen = "\
 ⏺ Done. All tests pass.

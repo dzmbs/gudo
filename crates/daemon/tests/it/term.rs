@@ -471,14 +471,11 @@ async fn an_agent_runs_a_worker_agent_and_reads_its_answers() {
         eprintln!("skipping: zsh not installed");
         return;
     };
-    // A stand-in for Claude Code: it echoes what it is given; the test sends its hooks.
+    // A stand-in for Claude Code: it shows its prompt box and echoes what it is given; the
+    // test sends its hooks.
     let bin = tempfile::tempdir().unwrap();
     let fake = bin.path().join("claude");
-    std::fs::write(
-        &fake,
-        "#!/bin/sh\nwhile IFS= read -r line; do echo \"got: $line\"; done\n",
-    )
-    .unwrap();
+    std::fs::write(&fake, crate::workers::CLAUDE_AT_PROMPT).unwrap();
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let path = format!("{}:/usr/bin:/bin", bin.path().display());
     // A home of its own: the user's rc files would put the real agent first on the PATH.

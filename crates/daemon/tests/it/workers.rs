@@ -261,6 +261,12 @@ async fn a_codex_turn_ends_only_on_its_own_end_of_turn_signal() {
 
 const CLAUDE_ECHO: &str = "#!/bin/sh\nwhile IFS= read -r line; do echo \"got: $line\"; done\n";
 
+/// A Claude Code at its prompt box that echoes what it is given.
+pub(crate) const CLAUDE_AT_PROMPT: &str = r#"#!/bin/sh
+printf '────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n'
+while IFS= read -r line; do echo "got: $line"; done
+"#;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn results_outlive_the_worker_pane() {
     let Some(host) = host(&[("claude", CLAUDE_ECHO)]).await else {
@@ -566,6 +572,135 @@ async fn the_first_prompt_waits_behind_a_trust_dialog_until_the_user_answers() {
     assert_eq!(delivered["status"], "matched", "{delivered}");
     let after = lead.ok("agent_result", json!({ "pane": worker_ref })).await;
     assert_eq!(after["agent"]["promptDelivery"], "accepted", "{after}");
+}
+
+/// A Claude Code that is not signed in: its login screen first, its prompt box once the user
+/// has signed in.
+const CLAUDE_SIGNED_OUT: &str = r#"#!/bin/sh
+printf '\033[2J\033[H'
+printf ' Claude Code can be used with your Claude subscription or billed based on API usage.\n\n'
+printf ' Select login method:\n\n'
+printf ' ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise\n\n'
+printf '   2. Anthropic Console account · API usage billing\n'
+IFS= read -r answer
+printf '\033[2J\033[H'
+printf '────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n'
+while IFS= read -r line; do echo "got: $line"; done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_prompt_waits_while_claude_is_not_signed_in() {
+    let Some(host) = host(&[("claude", CLAUDE_SIGNED_OUT)]).await else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let lead = &host.lead;
+    let spawned = lead
+        .ok(
+            "agent_spawn",
+            json!({ "kind": "claude", "prompt": "fix the parser", "timeoutMs": 20000 }),
+        )
+        .await;
+    let worker = pane_number(&spawned);
+    let worker_ref = format!("p{worker}");
+    // Claude may report its session before the user has signed in.
+    claude_hook(
+        &lead.socket,
+        &lead.token,
+        &worker,
+        "SessionStart",
+        1,
+        hook_payload("SessionStart", json!({ "source": "startup" })),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let waiting = lead.ok("agent_result", json!({ "pane": worker_ref })).await;
+    assert_eq!(waiting["agent"]["promptDelivery"], "queued", "{waiting}");
+    assert_eq!(waiting["agent"]["state"], "blocked", "{waiting}");
+    assert_eq!(waiting["agent"]["status"]["kind"], "auth", "{waiting}");
+    assert_eq!(
+        waiting["agent"]["status"]["message"], "Claude Code is not signed in on this host",
+        "{waiting}"
+    );
+    let screen = lead
+        .ok("pane_read", json!({ "pane": worker_ref, "since": "c0" }))
+        .await;
+    assert!(
+        !screen.to_string().contains("fix the parser"),
+        "the prompt went into the login screen: {screen}"
+    );
+
+    host.user.type_line(PaneId(worker.parse().unwrap()), "");
+    let delivered = lead
+        .ok("pane_wait", json!({ "pane": worker_ref, "match": "got: fix the parser", "since": "c0", "timeoutMs": 10000 }))
+        .await;
+    assert_eq!(delivered["status"], "matched", "{delivered}");
+}
+
+/// A Claude Code that shows a screen Gudo does not know, then its prompt box.
+const CLAUDE_UNKNOWN_SCREEN: &str = r#"#!/bin/sh
+printf '\033[2J\033[H'
+printf ' Something Claude Code has never shown before\n\n Press any key\n'
+IFS= read -r answer
+printf '\033[2J\033[H'
+printf '────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n'
+while IFS= read -r line; do echo "got: $line"; done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_first_prompt_waits_for_claudes_prompt_box() {
+    let Some(host) = host(&[("claude", CLAUDE_UNKNOWN_SCREEN)]).await else {
+        eprintln!("skipping: zsh not installed");
+        return;
+    };
+    let lead = &host.lead;
+    let spawning = {
+        let lead = lead.clone_as(lead.pane.clone());
+        tokio::spawn(async move {
+            spawn(
+                &lead,
+                json!({ "kind": "claude", "prompt": "fix the parser", "timeoutMs": 30000 }),
+            )
+            .await
+        })
+    };
+    let worker = loop {
+        let list = lead.ok("pane_list", json!({})).await;
+        if let Some(pane) = list["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pane| pane["kind"] == "agent")
+        {
+            break pane["id"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches('p')
+                .to_owned();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    claude_hook(
+        &lead.socket,
+        &lead.token,
+        &worker,
+        "SessionStart",
+        1,
+        hook_payload("SessionStart", json!({ "source": "startup" })),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert!(
+        !spawning.is_finished(),
+        "the prompt went into an unknown screen"
+    );
+    host.user.type_line(PaneId(worker.parse().unwrap()), "");
+    let spawned = spawning.await.unwrap();
+    assert_eq!(spawned["promptDelivery"], "accepted", "{spawned}");
+    let delivered = lead
+        .ok("pane_wait", json!({ "pane": format!("p{worker}"), "match": "got: fix the parser", "since": "c0", "timeoutMs": 10000 }))
+        .await;
+    assert_eq!(delivered["status"], "matched", "{delivered}");
 }
 
 /// A Codex waiting on approval says what it waits on.

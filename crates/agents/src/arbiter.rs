@@ -204,6 +204,7 @@ fn screen_blocker_reason(rule_id: Option<&str>) -> BlockedReason {
         ("update", BlockedReason::Update),
         ("permission", BlockedReason::Permission),
         ("elicitation", BlockedReason::Elicitation),
+        ("sign_in", BlockedReason::Auth),
     ]
     .into_iter()
     .find(|(word, _)| rule.contains(word))
@@ -352,6 +353,26 @@ impl Arbiter {
     /// Returns whether the agent's process has exited.
     pub fn has_exited(&self) -> bool {
         self.process == Process::Exited
+    }
+
+    /// Returns where the evidence that the agent is at rest comes from: an end-of-turn report
+    /// of its own, or a live idle element on its screen or in its title. `None` while it is
+    /// not at rest, or when that is only inferred from a screen no rule recognised.
+    pub fn idle_evidence(&self) -> Option<Source> {
+        if !matches!(self.status.state(), AgentState::Idle | AgentState::Error) {
+            return None;
+        }
+        if let Some(claim) = self
+            .claim
+            .as_ref()
+            .filter(|claim| matches!(claim.state(), AgentState::Idle | AgentState::Error))
+        {
+            return Some(claim.source);
+        }
+        self.screen
+            .as_ref()
+            .filter(|screen| screen.visible && screen.state == AgentState::Idle)
+            .map(|screen| screen.source)
     }
 
     /// Returns the accepted decision for the current or most recent request.
@@ -1139,9 +1160,27 @@ mod tests {
         assert_eq!(reason(&arbiter), BlockedReason::Trust);
         let _ = arbiter.observe_screen(&dialog("startup_update"), at(100));
         assert_eq!(reason(&arbiter), BlockedReason::Update);
+        let _ = arbiter.observe_screen(&dialog("sign_in_required"), at(200));
+        assert_eq!(reason(&arbiter), BlockedReason::Auth);
         let mut unnamed = new_arbiter(HookCoverage::Partial);
         let _ = unnamed.observe_screen(&dialog("weak_blocker"), at(0));
         assert_eq!(reason(&unnamed), BlockedReason::Other);
+    }
+
+    #[test]
+    fn rest_is_evidenced_only_by_a_report_or_a_live_element() {
+        let mut arbiter = new_arbiter(HookCoverage::Partial);
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, false), at(0));
+        assert_eq!(arbiter.status().state(), AgentState::Idle);
+        assert_eq!(arbiter.idle_evidence(), None);
+        let _ = arbiter.observe_screen(&screen(AgentState::Idle, true), at(100));
+        assert_eq!(arbiter.idle_evidence(), Some(Source::Screen));
+        let _ = arbiter.observe_screen(&screen(AgentState::Blocked, true), at(200));
+        assert_eq!(arbiter.idle_evidence(), None);
+
+        let mut reported = new_arbiter(HookCoverage::Partial);
+        let _ = reported.apply(hook(EventKind::TurnEnded, Claim::Idle, 1), at(0));
+        assert_eq!(reported.idle_evidence(), Some(Source::Hook));
     }
 
     #[test]

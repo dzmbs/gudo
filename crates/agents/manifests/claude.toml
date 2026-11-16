@@ -20,6 +20,30 @@ all = [
   { contains = ["Yes, I trust this folder"] },
 ]
 
+# Not from herdr: the sign-in Claude Code shows when it is not signed in, which no hook reports.
+[[rules]]
+id = "sign_in_required"
+state = "blocked"
+priority = 1150
+region = "bottom_non_empty_lines(30)"
+visible_blocker = true
+any = [
+  { contains = ["Select login method"] },
+  { contains = ["Paste code here if prompted"] },
+]
+
+# Not from herdr: the first-run setup before the sign-in.
+[[rules]]
+id = "first_run_setup"
+state = "blocked"
+priority = 1150
+region = "bottom_non_empty_lines(30)"
+visible_blocker = true
+any = [
+  { contains = ["Choose the text style that looks best with your terminal"] },
+  { contains = ["Let's get started"] },
+]
+
 [[rules]]
 id = "osc_title_working"
 state = "working"

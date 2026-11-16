@@ -102,10 +102,15 @@ pub(crate) fn names_an_agent(report: &agents::ProgramStatus) -> bool {
 
 /// What a blocked agent asks, as people see and approve it. It may come from printed text
 /// (OSC 9, OSC 7501) or a prompt-injected tool call: every line kept, nothing invisible.
-pub(crate) fn shown_summary(blocker: &agents::Blocker) -> String {
+pub(crate) fn shown_summary(kind: AgentKind, blocker: &agents::Blocker) -> String {
     let text = blocker.summary.as_ref().or(blocker.tool.as_ref());
-    text.map(|text| proto::clean_prompt_text(text, SUMMARY_CHARS))
-        .unwrap_or_default()
+    match text {
+        Some(text) => proto::clean_prompt_text(text, SUMMARY_CHARS),
+        None if blocker.reason == agents::BlockedReason::Auth => {
+            format!("{} is not signed in on this host", product_name(kind))
+        }
+        None => String::new(),
+    }
 }
 
 /// Longest blocked summary, in characters (the adapters cut tool calls at 200 already).
@@ -116,6 +121,14 @@ pub(crate) fn program(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
+    }
+}
+
+/// The agent's name as people know it, for messages.
+pub(crate) fn product_name(kind: AgentKind) -> &'static str {
+    match kind {
+        AgentKind::Claude => "Claude Code",
+        AgentKind::Codex => "Codex",
     }
 }
 
@@ -301,6 +314,10 @@ impl AgentRuntime {
         self.arbiter.has_exited()
     }
 
+    pub fn idle_evidence(&self) -> Option<agents::Source> {
+        self.arbiter.idle_evidence()
+    }
+
     fn wire_request(&mut self, id: &agents::RequestId) -> RequestId {
         if let Some((wire, _)) = self.requests.iter().find(|(_, known)| known == id) {
             return *wire;
@@ -325,7 +342,7 @@ impl AgentRuntime {
                 let request_id = self.wire_request(&blocked.request_id);
                 AgentState::Blocked(Blocker {
                     request_id,
-                    summary: shown_summary(&blocked.blocker),
+                    summary: shown_summary(self.kind, &blocked.blocker),
                     options: blocked
                         .blocker
                         .options
@@ -511,7 +528,7 @@ impl AgentRuntime {
         let wire = self.wire_request(&blocked.request_id);
         Some(BlockedDetail {
             wire,
-            summary: shown_summary(&blocked.blocker),
+            summary: shown_summary(self.kind, &blocked.blocker),
             options: blocked
                 .blocker
                 .options
@@ -541,7 +558,7 @@ impl AgentRuntime {
             tool: blocked.blocker.tool.clone(),
             allows: chosen.map(|chosen| chosen.id != ApprovalChoice::Deny),
             option: chosen.map(|chosen| chosen.label.clone()),
-            summary: shown_summary(&blocked.blocker),
+            summary: shown_summary(self.kind, &blocked.blocker),
             request,
         })
     }
@@ -605,7 +622,7 @@ impl AgentRuntime {
             request: request.clone(),
             option: chosen.label.clone(),
             tool: blocked.blocker.tool.clone(),
-            summary: shown_summary(&blocked.blocker),
+            summary: shown_summary(self.kind, &blocked.blocker),
         };
         let decision = Decision {
             request_id: request,

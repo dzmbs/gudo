@@ -173,7 +173,7 @@ fn agent_status(entry: &PaneEntry) -> Option<Value> {
     let runtime = agent.as_ref()?;
     let app = crate::agent::program(runtime.kind());
     if let Some(blocker) = runtime.blocker() {
-        let summary = crate::agent::shown_summary(blocker);
+        let summary = crate::agent::shown_summary(runtime.kind(), blocker);
         let kind = blocked_kind(blocker.reason);
         let tool = blocker.tool.clone();
         drop(agent);
@@ -310,8 +310,9 @@ enum Readiness {
     Gone,
 }
 
-/// Whether the agent can take a prompt: started (its prompt showing, or its session reported)
-/// and not working, not blocked, not exited.
+/// Whether the agent can take a prompt: something positive says it is at rest (an end-of-turn
+/// report, or its prompt on screen), and it is not working, blocked or exited. A reported
+/// session is not enough: Claude Code reports one while it still shows its sign-in.
 fn readiness(entry: &PaneEntry) -> Readiness {
     if lock(&entry.meta).exit.is_some() {
         return Readiness::Gone;
@@ -336,8 +337,14 @@ fn readiness(entry: &PaneEntry) -> Readiness {
     match runtime.state() {
         agents::AgentState::Blocked => Readiness::Blocked,
         agents::AgentState::Working => Readiness::Starting,
-        agents::AgentState::Idle | agents::AgentState::Error => Readiness::Ready,
-        agents::AgentState::Unknown if runtime.session().native_id.is_some() => Readiness::Ready,
+        agents::AgentState::Idle | agents::AgentState::Error => match runtime.idle_evidence() {
+            // Claude Code's title can say idle over any screen; only its prompt box counts.
+            Some(agents::Source::Title) if runtime.kind() == AgentKind::Claude => {
+                Readiness::Starting
+            }
+            Some(_) => Readiness::Ready,
+            None => Readiness::Starting,
+        },
         agents::AgentState::Unknown => Readiness::Starting,
     }
 }
