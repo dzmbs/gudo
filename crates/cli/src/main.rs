@@ -612,7 +612,7 @@ impl Conn {
             .tabs
             .iter()
             .find(|tab| Some(tab.tab_id) == layout.active_tab)
-            .context("session has no tabs")
+            .context("the session has no tabs; open one with `gudo tab new`")
     }
 
     /// Waits for the event `pick` accepts and returns what it extracted.
@@ -992,20 +992,24 @@ async fn run(cli: Cli) -> Result<()> {
             })
             .await?
         }
-        Cmd::Tab { action } => {
+        // A session whose last pane exited has no tabs; a new one is how to carry on.
+        Cmd::Tab {
+            action: TabCmd::New { name },
+        } => {
             let session_id = conn.layout().session_id;
+            conn.op(LayoutOp::NewTab {
+                session_id,
+                name: name.unwrap_or_default(),
+                launch: shell,
+            })
+            .await?
+        }
+        Cmd::Tab { action } => {
             let tabs: Vec<_> = conn.layout().tabs.iter().map(|tab| tab.tab_id).collect();
             let current = conn.tab()?.tab_id;
             let position = tabs.iter().position(|&tab| tab == current).unwrap_or(0);
             match action {
-                TabCmd::New { name } => {
-                    conn.op(LayoutOp::NewTab {
-                        session_id,
-                        name: name.unwrap_or_default(),
-                        launch: shell,
-                    })
-                    .await?
-                }
+                TabCmd::New { .. } => unreachable!("handled above"),
                 TabCmd::Close => conn.op(LayoutOp::CloseTab { tab_id: current }).await?,
                 TabCmd::Next | TabCmd::Prev => {
                     let count = tabs.len();
