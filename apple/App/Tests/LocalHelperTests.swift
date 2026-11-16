@@ -1,4 +1,5 @@
 #if os(macOS)
+import HostKit
 import XCTest
 @testable import App
 
@@ -166,6 +167,20 @@ final class LocalHelperTests: XCTestCase {
         timeline.mark("helper listening")
         XCTAssertEqual(timeline.steps.map(\.name), ["plan launch", "helper listening"])
         XCTAssertTrue(timeline.steps.allSatisfy { $0.took >= .zero })
+    }
+
+    func testTheHelperStartsAtLoginUnlessTurnedOffOrInATestLaunch() throws {
+        func helper(isIsolated: Bool, startsAtLogin: Bool?) throws -> LocalHelper {
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: "starts-at-login-\(UUID().uuidString)"))
+            if let startsAtLogin { defaults.set(startsAtLogin, forKey: LocalHelper.startsAtLoginKey) }
+            let state = FileManager.default.temporaryDirectory.appending(path: "sal-\(UUID().uuidString.prefix(8))")
+            let hosts = HostsModel(
+                secrets: MemorySecretStore(), repository: HostRepository(directory: state), configuration: .init())
+            return LocalHelper(hosts: hosts, binary: nil, stateDirectory: state, isIsolated: isIsolated, defaults: defaults)
+        }
+        XCTAssertTrue(try helper(isIsolated: false, startsAtLogin: nil).startsAtLogin, "phones reach This Mac after a restart")
+        XCTAssertFalse(try helper(isIsolated: false, startsAtLogin: false).startsAtLogin)
+        XCTAssertFalse(try helper(isIsolated: true, startsAtLogin: nil).startsAtLogin)
     }
 }
 #endif

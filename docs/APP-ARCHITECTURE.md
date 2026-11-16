@@ -459,7 +459,7 @@ re-signing or updating the app leaves the running helper and its launchd job alo
   again by launchd after a crash, never at login. It returns at once when a helper already runs
   there. Only when launchd refuses the job (exit 3), when Settings ▸ This Mac ▸ Keep Sessions
   Running After You Quit is off, or in test launches, the helper runs as the app's child.
-  **Start Helper at Login** (off by default) runs `service install` from `Versions/Current`
+  **Start Helper at Login** (on by default, so phones reach This Mac after a restart) runs `service install` from `Versions/Current`
   instead, a LaunchAgent in `~/Library/LaunchAgents`; switching either setting restarts the
   helper (shells start again, agents resume, screens are restored).
 - **What runs.** The executable of the helper on the folder tells (`LocalHelper.runningHelper`):

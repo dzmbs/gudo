@@ -93,9 +93,10 @@ final class LocalHelper {
         flag(Self.keepsRunningKey) ?? !isIsolated
     }
 
-    /// The helper also starts at login (`hostd service install`). Off by default.
+    /// The helper also starts at login (`hostd service install`), so phones reach This Mac after
+    /// a restart. On by default, except in test launches.
     var startsAtLogin: Bool {
-        keepsRunning && !isIsolated && (flag(Self.startsAtLoginKey) ?? false)
+        keepsRunning && !isIsolated && (flag(Self.startsAtLoginKey) ?? true)
     }
 
     /// Where the helper's installed builds live.
