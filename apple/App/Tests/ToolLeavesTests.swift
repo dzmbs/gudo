@@ -96,6 +96,18 @@ final class ToolLeavesTests: XCTestCase {
         XCTAssertEqual(ToolProblem(notRepo), notRepo, "a classified problem passes through")
     }
 
+    func testNoAccessNamesTheSharedFoldersAndHowToChangeThem() {
+        let denied = ToolProblem(
+            WorkspaceError.Denied(message: "/private/tmp/qa is outside the allowed directories"), path: "/private/tmp/qa")
+        XCTAssertEqual(denied.title, "No Access")
+        XCTAssertTrue(denied.message.contains("“qa” is outside the folders the host shares"), denied.message)
+        XCTAssertTrue(denied.message.contains("home folder"))
+        XCTAssertTrue(denied.message.contains("files.allow"), "says how to change them")
+        XCTAssertEqual(denied.detail, "/private/tmp/qa", "the folder, not the host's sentence cut in the middle")
+        XCTAssertFalse(denied.canRetry, "asking again can't help")
+        XCTAssertTrue(ToolProblem(WorkspaceError.Failed(message: "boom")).canRetry)
+    }
+
     func testOtherSheetsStaySheets() {
         let model = WindowModel(app: .shared)
         model.sheet = .shortcuts

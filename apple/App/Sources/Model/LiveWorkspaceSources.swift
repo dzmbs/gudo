@@ -159,7 +159,8 @@ enum ToolProblem: Error, Equatable {
         switch self {
         case .notARepository(let folder): "\(Self.name(folder) ?? "This folder") isn't inside a Git repository."
         case .folderNotFound(let path): "\(Self.name(path) ?? "This folder") isn't on the host any more."
-        case .notAllowed(let path, _): "The host doesn't allow reading \(Self.name(path) ?? "this folder")."
+        case .notAllowed(let path, _):
+            "\(Self.name(path) ?? "This folder") is outside the folders the host shares: your home folder, and folders listed under files.allow in the helper's config.toml. Add it there and restart the helper."
         case .disconnected: "It picks up again when the host is back."
         case .unavailable(let message): message
         case .failed: "The host couldn't finish this."
@@ -170,9 +171,18 @@ enum ToolProblem: Error, Equatable {
     var detail: String? {
         switch self {
         case .notARepository(let path), .folderNotFound(let path): path.nonEmpty
-        case .notAllowed(_, let detail), .failed(let detail): detail.nonEmpty
+        // The host's sentence would only repeat the message; the path says which folder.
+        case .notAllowed(let path, let detail): path?.nonEmpty ?? detail.nonEmpty
+        case .failed(let detail): detail.nonEmpty
         case .disconnected, .unavailable: nil
         }
+    }
+
+    /// Whether asking again could end differently: a folder outside the shared ones stays
+    /// outside until the helper's settings change.
+    var canRetry: Bool {
+        if case .notAllowed = self { return false }
+        return true
     }
 
     /// "“proj”", or nil for no path.

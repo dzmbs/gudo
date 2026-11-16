@@ -265,8 +265,10 @@ private struct FileViewerBody: View {
                 problem.title ?? "Couldn't Open \(target.name)", systemImage: problem.systemImage, message: problem.message,
                 detail: problem.detail
             ) {
-                Button("Try Again") { Task { await model.load() } }
-                    .buttonStyle(.glass)
+                if problem.canRetry {
+                    Button("Try Again") { Task { await model.load() } }
+                        .buttonStyle(.glass)
+                }
             }
         }
     }

@@ -161,8 +161,10 @@ struct DiffReviewView: View {
                     Button("Browse Files") { model.sheet = .files }
                         .buttonStyle(.glass)
                 }
-                Button("Try Again") { Task { await load() } }
-                    .buttonStyle(.glass)
+                if problem.canRetry {
+                    Button("Try Again") { Task { await load() } }
+                        .buttonStyle(.glass)
+                }
             }
         } else {
             VStack(spacing: DS.Space.s) {

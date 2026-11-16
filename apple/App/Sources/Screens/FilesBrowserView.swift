@@ -403,8 +403,10 @@ private struct DirectoryListing: View {
                     Button("Go to Home", systemImage: "house") { goHome() }
                         .buttonStyle(.glass)
                 }
-                Button("Try Again") { Task { await load() } }
-                    .buttonStyle(.glass)
+                if problem.canRetry {
+                    Button("Try Again") { Task { await load() } }
+                        .buttonStyle(.glass)
+                }
             }
         } else {
             Spinner()
@@ -920,8 +922,10 @@ struct FilePreviewScreen: View {
                     "Couldn't Open \(entry.name)", systemImage: problem.systemImage, message: problem.message,
                     detail: problem.detail.map(source.display)
                 ) {
-                    Button("Try Again") { Task { await load() } }
-                        .buttonStyle(.glass)
+                    if problem.canRetry {
+                        Button("Try Again") { Task { await load() } }
+                            .buttonStyle(.glass)
+                    }
                 }
             } else {
                 Color.clear
