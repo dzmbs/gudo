@@ -191,12 +191,14 @@ nonisolated public enum ProgramCatalog {
         "rustc": .init("RustLogo", sources: ["https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo.svg", "https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo-white-outline.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
         "cargo": .init("CargoLogo", sources: ["https://raw.githubusercontent.com/rust-lang/cargo/master/doc/book/src/images/Cargo-Logo-Small.png"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
         "psql": .init("PostgreSQLLogo", sources: ["https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg"], retrieved: "2026-10-21", clearance: .ownerApprovedRisk),
+        // MIT (© 2025 Mario Zechner): pi's mark in its repository, in the colours pi draws it
+        // in the terminal; the same mark as pi.dev's.
+        "pi": .init("PiLogo", sources: ["https://raw.githubusercontent.com/earendil-works/pi/747c217b81980206063a89e46645b362de7ac8b1/apps/p2/public/icons/favicon.svg"], retrieved: "2026-11-16", clearance: .licensed),
     ]
 
     /// Our own simple glyphs for agents without artwork we may ship, drawn in the ink like a
     /// symbol. Not the programs' logos and not derived from them.
     public static let glyphs: [String: ProgramIdentity.Logo] = [
-        "pi": .init("PiGlyph", template: true, sources: [], retrieved: "", clearance: .original),
         "opencode": .init("OpencodeGlyph", template: true, sources: [], retrieved: "", clearance: .original),
         "amp": .init("AmpGlyph", template: true, sources: [], retrieved: "", clearance: .original),
     ]
@@ -207,7 +209,7 @@ nonisolated public enum ProgramCatalog {
         "codex-cli": "codex",
         "gemini-cli": "gemini",
         "github-copilot-cli": "copilot",
-        "pi-coding-agent": "pi",
+        "pi-coding-agent": "pi", "pi-rpc": "pi",
         "opencode-ai": "opencode",
         "vi": "vim", "view": "vim", "vimdiff": "vim", "gvim": "vim", "mvim": "vim",
         "nvim": "neovim",
@@ -254,7 +256,7 @@ nonisolated public enum ProgramCatalog {
     /// Agents whose names hide inside other words (`pip`, `sample`): named only by a whole
     /// directory of their package, or a script of their own name (`/usr/local/bin/pi`).
     static let scriptPackages: [String: String] = [
-        "pi-coding-agent": "pi",
+        "pi-coding-agent": "pi", "pi-rpc": "pi",
         "opencode-ai": "opencode",
         "opencode": "opencode",
         "@sourcegraph/amp": "amp",
@@ -285,8 +287,9 @@ nonisolated public enum ProgramCatalog {
     public static func identity(title: String) -> ProgramIdentity? {
         let trimmedTitle = title.trimmingCharacters(in: .whitespaces)
         guard let firstScalar = trimmedTitle.unicodeScalars.first else { return nil }
-        // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working).
+        // Claude Code titles its terminal "✳ <task>" (a spinner glyph while working), pi "π - <folder>".
         if "✳✻✽✶✢".unicodeScalars.contains(firstScalar) { return byId["claude"] }
+        if firstScalar == "π" { return byId["pi"] }
         let word = trimmedTitle.split(whereSeparator: { $0.isWhitespace || $0 == ":" }).first.map(String.init) ?? trimmedTitle
         guard let name = normalize(word), let known = byId[name], !known.isShell else { return nil }
         return known

@@ -348,7 +348,7 @@ pane headers and the palette.
 - **Tiles.** A program's mark sits on a small tile (`ProgramTile`): the `tile` fill, a hairline
   edge, a one-pixel `edge` light along its top, continuous corners (`chip` up to 20 pt, `field`
   above). The mark on it is unchanged: an official logo as its owner publishes it, else our own
-  glyph (`ProgramCatalog.glyphs`: pi's π, opencode, Amp; simple drawings, not those programs'
+  glyph (`ProgramCatalog.glyphs`: opencode, Amp; simple drawings, not those programs'
   artwork) or the kind's SF Symbol in the ink. A selected row or chip keeps its tile (the row's
   fill marks it), its mark in full colour where quiet rows mute it. Settings ▸ Appearance ▸
   Program Marks: Original (neutral tile, symbols in the muted ink), Monochrome (symbols in the full

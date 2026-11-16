@@ -9,6 +9,7 @@ import Testing
     ("npx", "node"), ("bunx", "bun"), ("-zsh", "zsh"), ("--bash", "bash"), ("/opt/homebrew/bin/fish", "fish"),
     ("k9s", "k9s"), ("redis-cli", "redis-cli"), ("rustup", "rustc"), ("claude", "claude"), ("CLAUDE", "claude"),
     ("htop", "htop"), ("mosh-client", "mosh"), ("pwsh.exe", "pwsh"), ("lazygit", "lazygit"),
+    ("pi-rpc", "pi"),
 ])
 func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.normalize(name) == id)
@@ -53,7 +54,7 @@ func programNamesNormalize(name: String, id: String) {
         #expect(ProgramCatalog.entry(id: id)?.logo == logo, "logo for \(id)")
     }
     // The agents' and runtimes' official marks ship.
-    for id in ["claude", "codex", "gemini", "copilot", "vim", "emacs", "htop", "docker", "kubectl", "python", "node",
+    for id in ["claude", "codex", "gemini", "copilot", "pi", "vim", "emacs", "htop", "docker", "kubectl", "python", "node",
                "bun", "deno", "go", "rustc", "cargo", "psql"] {
         #expect(ProgramCatalog.entry(id: id)?.logo != nil, "\(id) ships its logo")
     }
@@ -98,6 +99,9 @@ func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.identity(title: "zsh") == nil)
     #expect(ProgramCatalog.identity(title: "") == nil)
     #expect(ProgramCatalog.identity(title: "make: building") == nil)
+    // pi titles its terminal "π - <folder>".
+    #expect(ProgramCatalog.identity(title: "π - gudo")?.id == "pi")
+    #expect(ProgramCatalog.identity(title: "π")?.id == "pi")
 }
 
 @Test func agentsRunAsScriptsOrBinariesAreNamed() {
@@ -114,12 +118,16 @@ func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.normalize("node", arguments: words("node scripts/api-server.js")) == "node")
     #expect(ProgramCatalog.normalize("node", arguments: words("node examples/sample/main.js")) == "node")
     #expect(ProgramCatalog.normalize("python", arguments: words("python -m pip install pipx")) == "python")
-    for id in ["pi", "opencode", "amp"] {
+    for id in ["opencode", "amp"] {
         let identity = ProgramCatalog.identity(process: id)
         #expect(identity.kind == .agent, "\(id) is an agent")
         #expect(identity.logo?.template == true, "\(id) draws its glyph in the ink")
         #expect(identity.logo?.clearance == .original, "\(id)'s glyph is our own drawing")
     }
+    // pi's own mark, from its MIT repository, in its own colours as pi draws it in the terminal.
+    let pi = ProgramCatalog.identity(process: "pi")
+    #expect(pi.kind == .agent)
+    #expect(pi.logo?.asset == "PiLogo" && pi.logo?.template == false && pi.logo?.clearance == .licensed)
     #expect(ProgramCatalog.identity(title: "pi")?.id == "pi")
 }
 
