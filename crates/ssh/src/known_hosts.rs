@@ -143,6 +143,9 @@ pub struct KnownHosts {
     entries: Mutex<Vec<Entry>>,
     path: Option<PathBuf>,
     listener: Option<Arc<dyn KnownHostsListener>>,
+    /// The user's own known_hosts (`~/.ssh/known_hosts`), read when this store has no record
+    /// for a host and never written.
+    fallback: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for KnownHosts {
@@ -172,6 +175,15 @@ impl KnownHosts {
     #[must_use]
     pub fn with_listener(mut self, listener: Arc<dyn KnownHostsListener>) -> Self {
         self.listener = Some(listener);
+        self
+    }
+
+    /// Consults the known_hosts file at `path` for hosts this store has no record of, as
+    /// `ssh` does: a key on record there is trusted (and recorded here), a different key is
+    /// a changed key. The file is read at each such lookup and never written.
+    #[must_use]
+    pub fn with_fallback(mut self, path: impl Into<PathBuf>) -> Self {
+        self.fallback = Some(path.into());
         self
     }
 
@@ -239,8 +251,21 @@ impl KnownHosts {
         }
     }
 
-    /// Key types on record for `host:port`, for ordering the host-key negotiation.
+    /// Key types on record for `host:port` (in the fallback file when none are here), for
+    /// ordering the host-key negotiation.
     pub fn algorithms_for(&self, host: &str, port: u16) -> Vec<Algorithm> {
+        let algorithms = self.own_algorithms_for(host, port);
+        if !algorithms.is_empty() {
+            return algorithms;
+        }
+        self.fallback
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| Self::from_text(&text).own_algorithms_for(host, port))
+            .unwrap_or_default()
+    }
+
+    fn own_algorithms_for(&self, host: &str, port: u16) -> Vec<Algorithm> {
         let name = host_name(host, port);
         let mut algorithms = Vec::new();
         for entry in self.lock().iter() {
@@ -368,6 +393,38 @@ impl KnownHosts {
                 expected,
                 actual: fingerprint(key),
             }),
+            HostKeyStatus::Unknown => self.verify_unknown(spec, key, policy),
+        }
+    }
+
+    fn verify_unknown(
+        &self,
+        spec: &HostSpec,
+        key: &PublicKey,
+        policy: &HostKeyPolicy,
+    ) -> Result<Option<Undecided>, SshError> {
+        let host = spec.key_host();
+        let info = || HostKeyInfo::new(host_name(host, spec.port), key);
+        match self.fallback_status(host, spec.port, key) {
+            HostKeyStatus::Trusted => {
+                self.add(host, spec.port, key)?;
+                Ok(None)
+            }
+            HostKeyStatus::Revoked => Err(SshError::HostKeyRejected {
+                host: host_name(host, spec.port),
+                fingerprint: format!("{} (revoked)", fingerprint(key)),
+            }),
+            HostKeyStatus::Mismatch(expected) if matches!(policy, HostKeyPolicy::Ask(_)) => {
+                Ok(Some(Undecided {
+                    info: info(),
+                    expected: Some(expected),
+                }))
+            }
+            HostKeyStatus::Mismatch(expected) => Err(SshError::HostKeyMismatch {
+                host: host_name(host, spec.port),
+                expected,
+                actual: fingerprint(key),
+            }),
             HostKeyStatus::Unknown => match policy {
                 HostKeyPolicy::Strict => Err(SshError::HostKeyRejected {
                     host: host_name(host, spec.port),
@@ -382,6 +439,17 @@ impl KnownHosts {
                     expected: None,
                 })),
             },
+        }
+    }
+
+    /// What the fallback file says about `key`; `Unknown` without one, or when it can't be read.
+    fn fallback_status(&self, host: &str, port: u16, key: &PublicKey) -> HostKeyStatus {
+        let Some(path) = &self.fallback else {
+            return HostKeyStatus::Unknown;
+        };
+        match std::fs::read_to_string(path) {
+            Ok(text) => Self::from_text(&text).check(host, port, key),
+            Err(_) => HostKeyStatus::Unknown,
         }
     }
 
@@ -679,6 +747,72 @@ mod tests {
             store.verify(&spec, &key(KEY_B), &ask),
             Err(SshError::HostKeyMismatch { .. })
         ));
+    }
+
+    struct Yes;
+    impl HostKeyPrompt for Yes {
+        fn trust_new_host(&self, _: HostKeyInfo) -> bool {
+            true
+        }
+    }
+
+    fn fallback_file(text: &str) -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("known_hosts");
+        std::fs::write(&path, text).unwrap();
+        (directory, path)
+    }
+
+    #[test]
+    fn a_key_in_the_fallback_file_is_trusted_without_asking_and_recorded() {
+        let (_directory, path) = fallback_file(&format!(
+            "{} {KEY_A}\n",
+            hashed("box", b"0123456789abcdef0123")
+        ));
+        let store = KnownHosts::in_memory().with_fallback(&path);
+        let spec = HostSpec::new("box", "me");
+        let ask = HostKeyPolicy::Ask(Arc::new(Yes));
+        assert!(store.verify(&spec, &key(KEY_A), &ask).unwrap().is_none());
+        assert_eq!(store.check("box", 22, &key(KEY_A)), HostKeyStatus::Trusted);
+        assert_eq!(store.algorithms_for("box", 22), [Algorithm::Ed25519]);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            1,
+            "the fallback file is never written"
+        );
+    }
+
+    #[test]
+    fn a_different_key_in_the_fallback_file_is_a_changed_key() {
+        let (_directory, path) = fallback_file(&format!("box {KEY_A}\n"));
+        let store = KnownHosts::in_memory().with_fallback(&path);
+        let spec = HostSpec::new("box", "me");
+        let undecided = store
+            .verify(&spec, &key(KEY_B), &HostKeyPolicy::Ask(Arc::new(Yes)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(undecided.expected, Some(vec![fingerprint(&key(KEY_A))]));
+        assert!(matches!(
+            store.verify(&spec, &key(KEY_B), &HostKeyPolicy::AcceptNew),
+            Err(SshError::HostKeyMismatch { .. })
+        ));
+        assert_eq!(store.check("box", 22, &key(KEY_B)), HostKeyStatus::Unknown);
+    }
+
+    #[test]
+    fn the_store_wins_over_the_fallback_file() {
+        let (_directory, path) = fallback_file(&format!("box {KEY_A}\n@revoked other {KEY_A}\n"));
+        let store = KnownHosts::from_text(&format!("box {KEY_B}\n")).with_fallback(&path);
+        let spec = HostSpec::new("box", "me");
+        let ask = HostKeyPolicy::Ask(Arc::new(Yes));
+        assert!(store.verify(&spec, &key(KEY_B), &ask).unwrap().is_none());
+        assert!(matches!(
+            store.verify(&HostSpec::new("other", "me"), &key(KEY_A), &ask),
+            Err(SshError::HostKeyRejected { .. })
+        ));
+        let missing = KnownHosts::in_memory().with_fallback("/nonexistent/known_hosts");
+        let undecided = missing.verify(&spec, &key(KEY_A), &ask).unwrap().unwrap();
+        assert_eq!(undecided.expected, None, "no file: a new host");
     }
 
     #[test]

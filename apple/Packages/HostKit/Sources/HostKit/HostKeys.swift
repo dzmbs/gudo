@@ -90,9 +90,19 @@ nonisolated private final class PromptDelegate: HostKeyDelegate {
 nonisolated public enum KnownHosts {
     static let key = "known_hosts"
 
-    public static func load(from secrets: any SecretStore) -> KnownHostsStore {
+    /// `fallback`: a known_hosts file consulted for hosts with no record here (`~/.ssh/known_hosts`
+    /// on the Mac, as `ssh` reads it).
+    public static func load(from secrets: any SecretStore, fallback: String? = desktopFile) -> KnownHostsStore {
         let text = (try? secrets.string(for: key)) ?? ""
-        return KnownHostsStore(text: text, listener: Saver(secrets: secrets))
+        return KnownHostsStore(text: text, listener: Saver(secrets: secrets), fallbackPath: fallback)
+    }
+
+    public static var desktopFile: String? {
+        #if os(macOS)
+        HostsModel.homeDirectory + "/.ssh/known_hosts"
+        #else
+        nil
+        #endif
     }
 
     private final class Saver: KnownHostsListener {

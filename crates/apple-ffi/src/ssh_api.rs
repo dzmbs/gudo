@@ -985,12 +985,20 @@ pub struct KnownHostsStore {
 #[uniffi::export]
 impl KnownHostsStore {
     /// A store holding `text` (OpenSSH known_hosts lines; unparsable lines are skipped),
-    /// reporting every change to `listener`.
-    #[uniffi::constructor(default(text = "", listener = None))]
-    pub fn new(text: String, listener: Option<Arc<dyn KnownHostsListener>>) -> Arc<Self> {
+    /// reporting every change to `listener`. Hosts it has no record of are looked up in the
+    /// known_hosts file at `fallback_path` (the user's `~/.ssh/known_hosts`), read only.
+    #[uniffi::constructor(default(text = "", listener = None, fallback_path = None))]
+    pub fn new(
+        text: String,
+        listener: Option<Arc<dyn KnownHostsListener>>,
+        fallback_path: Option<String>,
+    ) -> Arc<Self> {
         let mut store = ssh::KnownHosts::from_text(&text);
         if let Some(listener) = listener {
             store = store.with_listener(Arc::new(KnownHostsAdapter(listener)));
+        }
+        if let Some(path) = fallback_path {
+            store = store.with_fallback(path);
         }
         Arc::new(Self {
             inner: Arc::new(store),
