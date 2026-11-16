@@ -97,6 +97,16 @@ final class LocalHelper {
 
     private var isFailed: Bool { if case .failed = state { true } else { false } }
 
+    /// Whether This Mac's link reads as the helper starting rather than a lost link: it is
+    /// starting, or it runs and this launch has not reached it yet (`connectionCount`).
+    static func readsAsStarting(_ state: State, connectionCount: Int) -> Bool {
+        switch state {
+        case .starting: true
+        case .running: connectionCount == 0
+        case .off, .failed: false
+        }
+    }
+
     // MARK: Starting and stopping
 
     /// Starts the helper if needed and pairs with it once.

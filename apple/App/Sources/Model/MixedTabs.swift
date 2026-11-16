@@ -114,7 +114,7 @@ extension WindowModel {
         guard id != HostGroups.localId else { return .connected }
         guard let status = workspace(ofGroup: id)?.host?.status ?? app.hosts.connection(id)?.status else { return .disconnected }
         if case .idle = status { return .disconnected }
-        return ConnectionState(status, since: hostDownSince[id] ?? .now)
+        return ConnectionState(status, since: hostDownSince[id] ?? .now, helperStarting: app.isStartingHelper(id))
     }
 
     // MARK: Focus

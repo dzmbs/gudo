@@ -103,6 +103,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// The terminal's own background over a pane it covers: a saved screen, a pane being moved,
     /// one shielded while sketching. The pane still shows through.
     public static let veilLevel = 0.4
+    /// The terminal's own background over a screen waiting for its host (saved, or its helper
+    /// starting): marked, yet read at nearly full contrast.
+    public static let waitingLevel = 0.12
     /// The bell's border: the theme's attention hue at half strength.
     public static let bellLevel = 0.5
     /// Minimum contrasts: text (WCAG AA), glyphs and the accent (WCAG non-text).

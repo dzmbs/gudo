@@ -614,8 +614,9 @@ private struct DetailColumn: View {
         }
         guard let tab = workspace.shownTab else { return "" }
         let subtitle = workspace.windowSubtitle(of: tab)
-        guard workspace.showsSavedWorkspace, !model.connection.isFailure else { return subtitle }
-        return subtitle.isEmpty ? "Connecting…" : "\(subtitle) · Connecting…"
+        let waiting = model.connection == .starting ? "Starting…" : "Connecting…"
+        guard workspace.showsSavedWorkspace || model.connection == .starting, !model.connection.isFailure else { return subtitle }
+        return subtitle.isEmpty ? waiting : "\(subtitle) · \(waiting)"
     }
 }
 
@@ -1020,6 +1021,7 @@ struct ActiveTabView: View {
                 // Lost link: the last frame stays, faded toward the background, under the card.
                 .connectionOverlay(
                     model.connection, hostName: model.hostName, showsSavedState: workspace.showsSavedWorkspace,
+                    isThisDevice: workspace.hostId != nil && workspace.hostId == model.app.thisDeviceHostId,
                     onRetry: { model.retryConnection() },
                     onDisconnect: { model.disconnect() })
             } else if workspace.host?.isReady == false {
@@ -1127,6 +1129,7 @@ private struct ConnectingView: View {
     private var title: String {
         switch state {
         case .reconnecting: "Reconnecting to \(hostName)…"
+        case .starting: "Starting…"
         case .offline: "Offline"
         case .needsAttention: "Can't connect to \(hostName)"
         case .unreachable: "Can't reach \(hostName)"

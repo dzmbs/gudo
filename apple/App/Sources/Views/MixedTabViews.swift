@@ -392,7 +392,7 @@ private struct HostLinkOverlay: ViewModifier {
 
     func body(content: Content) -> some View {
         content.connectionOverlay(
-            model.connectionState(ofGroup: groupId), hostName: model.groupName(groupId),
+            model.connectionState(ofGroup: groupId), hostName: model.groupName(groupId), isThisDevice: groupId == model.app.thisDeviceHostId,
             onRetry: { model.hosts.retry(groupId) },
             onDisconnect: { model.closeHost(groupId) })
     }
@@ -686,7 +686,7 @@ private struct TabColumn: View {
                 tree: HostTabTree(workspace: workspace, tab: tab.id, model: model, isActive: isActive), isSplit: isSplit)
                 .id(ref)
                 .connectionOverlay(
-                    model.connectionState(ofGroup: ref.hostId), hostName: model.groupName(ref.hostId),
+                    model.connectionState(ofGroup: ref.hostId), hostName: model.groupName(ref.hostId), isThisDevice: ref.hostId == model.app.thisDeviceHostId,
                     onRetry: { model.hosts.retry(ref.hostId) }, onDisconnect: { model.closeHost(ref.hostId) })
                 .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
                     if isActive, !model.isPresentation, model.terminalArea != size { model.terminalArea = size }

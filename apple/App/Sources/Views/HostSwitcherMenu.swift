@@ -148,7 +148,7 @@ extension WindowModel {
     private static func link(_ state: ConnectionState) -> HostSwitcherHost.Link {
         switch state {
         case .connected, .slow: .live
-        case .connecting, .reconnecting: .connecting
+        case .connecting, .starting, .reconnecting: .connecting
         case .offline, .needsAttention, .unreachable: .down
         case .paused, .disconnected: .closed
         }

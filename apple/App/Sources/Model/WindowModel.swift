@@ -1177,7 +1177,9 @@ final class WindowModel {
             downSince = .now
         }
         // No host: this device's own shell is "connected"; an iPhone or iPad without one is not.
-        let next = status.map { ConnectionState($0, since: downSince ?? .now) } ?? (LaunchOptions.hasLocalShell ? .connected : .disconnected)
+        let starting = workspace?.hostId.map(app.isStartingHelper) ?? false
+        let next = status.map { ConnectionState($0, since: downSince ?? .now, helperStarting: starting) }
+            ?? (LaunchOptions.hasLocalShell ? .connected : .disconnected)
         if next != liveConnection { liveConnection = next }
         if next.isLive, workspace?.host != nil { LaunchTimeline.live(hostName) }
         guard let host = workspace?.host else { return }
@@ -1190,6 +1192,7 @@ final class WindowModel {
         withObservationTracking {
             _ = host.status
             _ = daemon?.notice
+            _ = observed?.hostId.map(app.isStartingHelper)
         } onChange: { [weak self, weak observed] in
             // Weak: the host's status may not change for days after the window leaves it.
             Task { @MainActor [weak self, weak observed] in
@@ -1202,9 +1205,12 @@ final class WindowModel {
 }
 
 extension ConnectionState {
-    /// HostKit's status in the design system's vocabulary. `since` is when the link went down.
-    init(_ status: ConnectionStatus, since: Date) {
+    /// HostKit's status in the design system's vocabulary. `since` is when the link went down;
+    /// `helperStarting`: the host is this device's helper, starting (`AppModel.isStartingHelper`).
+    init(_ status: ConnectionStatus, since: Date, helperStarting: Bool = false) {
         switch status {
+        case .connecting where helperStarting, .reconnecting where helperStarting:
+            self = .starting
         case .connected(let rtt):
             if status.isSlow, let rtt { self = .slow(rtt: rtt) } else { self = .connected }
         case .idle:

@@ -11,6 +11,9 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
     case slow(rtt: Duration)
     /// On the way to live; `phase` says what it waits for ("Opening session…").
     case connecting(phase: String?)
+    /// This device's own helper is starting (the app's launch, or after it stopped): nothing
+    /// was lost on the way, so there is no last contact to count from.
+    case starting
     /// Lost and redialling; `attempt` counts from 1, `since` is when the link went down.
     case reconnecting(attempt: Int, since: Date)
     /// The device has no network; resumes when it is back.
@@ -55,6 +58,7 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
         case .connected: "Connected"
         case .slow(let rtt): "Slow connection · \(rtt.milliseconds) ms"
         case .connecting(let phase): phase ?? "Connecting…"
+        case .starting: "Starting…"
         case .reconnecting: "Reconnecting…"
         case .offline: "Offline · waiting for network"
         case .paused: "Paused"
@@ -68,13 +72,15 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
     /// (healthy, paused, never dialled) or a spinner (connecting).
     public var symbol: String? {
         switch self {
-        case .connected, .paused, .disconnected, .connecting: nil
+        case .connected, .paused, .disconnected, .connecting, .starting: nil
         case .slow: "wifi.exclamationmark"
         case .reconnecting: "arrow.triangle.2.circlepath"
         case .offline: "wifi.slash"
         case .needsAttention, .unreachable: "exclamationmark.triangle.fill"
         }
     }
+
+    var isConnecting: Bool { if case .connecting = self { true } else { false } }
 
     public var color: ChromeStyle {
         switch self {
@@ -110,7 +116,7 @@ public struct ConnectionGlyph: View {
 
     public var body: some View {
         Group {
-            if case .connecting = state {
+            if state == .starting || state.isConnecting {
                 GraceSpinner()
             } else if let symbol = state.symbol {
                 Image(systemName: symbol)
@@ -163,23 +169,20 @@ private struct ConnectionOverlayModifier: ViewModifier {
     /// The panes show the screens this device saved (instant start), already marked quietly
     /// on each pane and in the header: while connecting, no dim and no notice for the grace.
     let showsSavedState: Bool
+    /// The host is this device's own helper.
+    let isThisDevice: Bool
     let onRetry: () -> Void
     let onDisconnect: () -> Void
-
-    /// How long a link may be on its way or down before a notice says so, before the pane dims,
-    /// and before the card replaces the notice. A quick connect shows nothing. The notice grace
-    /// sits just under the timeline's 1 s tick so it shows on the first tick past it.
-    static let noticeAfter: TimeInterval = 0.9
-    static let dimAfter: TimeInterval = 2
-    static let cardAfter: TimeInterval = 40
 
     @State private var downSince: Date?
 
     func body(content: Content) -> some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let presentation = presentation(now: context.date)
+            let presentation = ConnectionPresentation(
+                state: state, hostName: hostName, showsSavedState: showsSavedState, isThisDevice: isThisDevice,
+                downFor: downSince.map { context.date.timeIntervalSince($0) } ?? 0, now: context.date)
             content
-                .fadedTowardTerminalBackground(presentation.dimmed ? 0.45 : 0)
+                .fadedTowardTerminalBackground(presentation.fade)
                 // A link that drops for a moment leaves the panes as they were: the terminal keeps
                 // the keyboard and its place (a view that stops taking touches gives the keyboard
                 // up, and the grid moves under it). Only the card takes the panes away.
@@ -212,49 +215,65 @@ private struct ConnectionOverlayModifier: ViewModifier {
             downSince = healthy ? nil : (downSince ?? .now)
         }
     }
+}
 
-    private struct Presentation: Equatable {
-        var dimmed = false
-        var notice: NoticeCopy?
-        var card: CardCopy?
-    }
+/// What the overlay shows for a state that has lasted `downFor` seconds.
+struct ConnectionPresentation: Equatable {
+    /// How far the panes fade toward the terminal's background.
+    var fade = 0.0
+    var notice: NoticeCopy?
+    var card: CardCopy?
 
-    private func presentation(now: Date) -> Presentation {
-        let downFor = downSince.map { now.timeIntervalSince($0) } ?? 0
-        var result = Presentation(dimmed: !state.isLive && !state.isQuiet && downFor >= Self.dimAfter)
+    /// How long a link may be on its way or down before a notice says so, before the pane dims,
+    /// and before the card replaces the notice. A quick connect shows nothing. The notice grace
+    /// sits just under the timeline's 1 s tick so it shows on the first tick past it.
+    static let noticeAfter: TimeInterval = 0.9
+    static let dimAfter: TimeInterval = 2
+    static let cardAfter: TimeInterval = 40
+    static let dimLevel = 0.45
+
+    init() {}
+
+    init(state: ConnectionState, hostName: String, showsSavedState: Bool, isThisDevice: Bool, downFor: TimeInterval, now: Date) {
+        // Saved screens carry their own light wash: nothing dims them further while they wait.
+        if !state.isLive, !state.isQuiet, !showsSavedState, downFor >= Self.dimAfter { fade = Self.dimLevel }
         switch state {
         case .connected, .slow, .paused, .disconnected:
-            result.dimmed = false
+            fade = 0
+        case .starting:
+            fade = !showsSavedState && downFor >= Self.noticeAfter ? ChromePalette.waitingLevel : 0
+            if downFor >= Self.dimAfter { notice = NoticeCopy(before: "Starting…") }
         case .connecting where showsSavedState:
-            result.dimmed = false
-            if downFor >= Self.dimAfter { result.notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
+            if downFor >= Self.dimAfter { notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
         case .connecting(let phase):
             guard downFor >= Self.noticeAfter else { break }
-            result.notice = phase.map { NoticeCopy(before: "\($0.trimmingCharacters(in: ["…"])) on ", host: hostName, after: "…") }
+            notice = phase.map { NoticeCopy(before: "\($0.trimmingCharacters(in: ["…"])) on ", host: hostName, after: "…") }
                 ?? NoticeCopy(before: "Connecting to ", host: hostName, after: "…")
         case .reconnecting(_, let since):
             let goneFor = now.timeIntervalSince(since)
             if downFor < Self.noticeAfter {
                 break
             } else if goneFor >= Self.cardAfter {
-                result.card = CardCopy(
+                card = CardCopy(
                     title: "Lost connection to \(hostName)",
-                    detail: "Sessions keep running on the host. Reconnecting automatically.",
+                    // This device's own helper may be what stopped, and its sessions with it.
+                    detail: isThisDevice
+                        ? "The helper on this Mac isn't answering. Reconnecting automatically."
+                        : "Sessions keep running on the host. Reconnecting automatically.",
                     action: "Reconnect Now")
             } else {
-                result.notice = NoticeCopy.reconnecting(to: hostName, ago: Self.ago(goneFor))
+                notice = NoticeCopy.reconnecting(to: hostName, ago: Self.ago(goneFor))
             }
         case .offline:
-            result.notice = NoticeCopy(before: "Offline · waiting for network")
+            notice = NoticeCopy(before: "Offline · waiting for network")
         case .needsAttention(let reason, let action):
-            result.card = CardCopy(title: "Can't connect to \(hostName)", detail: reason, action: action ?? "Retry")
+            card = CardCopy(title: "Can't connect to \(hostName)", detail: reason, action: action ?? "Retry")
         case .unreachable(let reason, let hint):
-            result.card = CardCopy(
+            card = CardCopy(
                 title: "Can't reach \(hostName)",
                 detail: [reason, hint].compactMap(\.self).joined(separator: " "),
                 action: "Retry")
         }
-        return result
     }
 
     static func ago(_ seconds: TimeInterval) -> String {
@@ -381,10 +400,11 @@ private struct ConnectionCard: View {
 
 public extension View {
     func connectionOverlay(
-        _ state: ConnectionState, hostName: String, showsSavedState: Bool = false,
+        _ state: ConnectionState, hostName: String, showsSavedState: Bool = false, isThisDevice: Bool = false,
         onRetry: @escaping () -> Void, onDisconnect: @escaping () -> Void
     ) -> some View {
         modifier(ConnectionOverlayModifier(
-            state: state, hostName: hostName, showsSavedState: showsSavedState, onRetry: onRetry, onDisconnect: onDisconnect))
+            state: state, hostName: hostName, showsSavedState: showsSavedState, isThisDevice: isThisDevice,
+            onRetry: onRetry, onDisconnect: onDisconnect))
     }
 }

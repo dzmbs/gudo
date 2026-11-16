@@ -329,7 +329,7 @@ private struct HostGroups {
 private extension ConnectionState {
     var isDialledOrLive: Bool {
         switch self {
-        case .connected, .slow, .connecting, .reconnecting, .offline, .paused: true
+        case .connected, .slow, .connecting, .starting, .reconnecting, .offline, .paused: true
         case .needsAttention, .unreachable, .disconnected: false
         }
     }
@@ -468,7 +468,7 @@ private struct HostRow: View {
                 Text("\(Text("Reconnecting").foregroundStyle(DS.Palette.attention)) · attempt \(attempt)")
                     .font(.footnote)
                     .foregroundStyle(DS.Palette.textSecondary)
-            case .connecting, .offline:
+            case .connecting, .starting, .offline:
                 Text(host.connection.title)
                     .font(.footnote)
                     .foregroundStyle(DS.Palette.textSecondary)

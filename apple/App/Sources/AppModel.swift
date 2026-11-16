@@ -237,6 +237,18 @@ final class AppModel {
     }
     #endif
 
+    /// Whether `hostId` is This Mac's helper while it starts (the app's launch, or again after
+    /// it stopped): its link reads as starting, not as lost.
+    func isStartingHelper(_ hostId: String) -> Bool {
+        #if os(macOS)
+        guard let localHelper, localHelper.isEnabled, hostId == hosts.thisDeviceId else { return false }
+        let connectionCount = (hosts.connection(hostId) as? DaemonConnection)?.connectionCount ?? 0
+        return LocalHelper.readsAsStarting(localHelper.state, connectionCount: connectionCount)
+        #else
+        false
+        #endif
+    }
+
     /// The host of this device's helper while it serves This Mac.
     var thisDeviceHostId: String? {
         #if os(macOS)
