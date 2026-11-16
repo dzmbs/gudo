@@ -1775,7 +1775,11 @@ mod tests {
     fn redial_waits_are_spread_so_clients_never_redial_in_step() {
         for backoff in [MIN_BACKOFF, Duration::from_secs(1), MAX_BACKOFF] {
             let waits: Vec<Duration> = (0..64).map(|_| redial_wait(backoff)).collect();
-            assert!(waits.iter().all(|wait| *wait >= backoff && *wait <= backoff * 3 / 2));
+            assert!(
+                waits
+                    .iter()
+                    .all(|wait| *wait >= backoff && *wait <= backoff * 3 / 2)
+            );
             assert!(waits.iter().any(|wait| *wait != waits[0]));
         }
     }
