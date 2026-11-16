@@ -122,6 +122,13 @@ final class ThemeConsistencyTests: XCTestCase {
             for x in [300.0, 500, 700] {
                 try picture.expect(palette.groupedPage, at: CGPoint(x: x, y: 40), "\(name): the band under the title, rows scrolled under it")
             }
+            // The band ends with the title bar: rows show right under it.
+            let rowsUnderBand = stride(from: 56.0, through: 96, by: 2).contains { y in
+                let shown = picture.color(at: CGPoint(x: 500, y: y))
+                let page = palette.groupedPage
+                return Int((max(abs(shown.r - page.r), abs(shown.g - page.g), abs(shown.b - page.b)) * 255).rounded()) > Self.tolerance
+            }
+            XCTAssertTrue(rowsUnderBand, "\(name): rows show just under the title bar, not under a taller band")
         }
     }
 

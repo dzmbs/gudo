@@ -809,7 +809,9 @@ private struct TitleBarEdge: ViewModifier {
             }
             .onGeometryChange(for: TitleBand.self) { proxy in
                 let formTop = proxy.frame(in: .global).minY
-                return TitleBand(height: proxy.safeAreaInsets.top + formTop, formTop: formTop)
+                // Laid out under the title bar, the form's top is its window's; laid out below
+                // it, the band fills the space above.
+                return TitleBand(height: formTop > 0 ? formTop : proxy.safeAreaInsets.top, formTop: formTop)
             } action: { band = $0 }
             .overlay(alignment: .top) {
                 Rectangle()
