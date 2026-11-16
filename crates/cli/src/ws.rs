@@ -300,7 +300,16 @@ impl Conn {
     }
 }
 
-fn print_diff(diff: &GitDiff, stat: bool) {
+/// Where a diff whose lines were left out can be read in full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullDiff {
+    /// Asking for the files one at a time.
+    OneFileAtATime,
+    /// Only with git on the host.
+    OnTheHost,
+}
+
+fn print_diff(diff: &GitDiff, stat: bool, full_diff: FullDiff) {
     for file in &diff.files {
         let name = match &file.old_path {
             Some(old) => format!("{old} → {}", file.path),
@@ -316,7 +325,7 @@ fn print_diff(diff: &GitDiff, stat: bool) {
             continue;
         }
         if file.hunks_omitted {
-            println!("  (hunks omitted: too large)");
+            println!("  (lines left out: too large to show)");
         }
         for hunk in &file.hunks {
             println!(
@@ -334,9 +343,44 @@ fn print_diff(diff: &GitDiff, stat: bool) {
             }
         }
     }
-    if diff.truncated {
-        println!("(some hunks were left out; ask for single files)");
+    if !stat && let Some(note) = left_out_note(diff, full_diff) {
+        println!("({note})");
     }
+}
+
+/// What was left out of a diff and how to read it.
+fn left_out_note(diff: &GitDiff, full_diff: FullDiff) -> Option<String> {
+    let left_out = diff
+        .files
+        .iter()
+        .filter(|file| file.hunks_omitted && !file.binary)
+        .count();
+    if left_out == 0 {
+        return None;
+    }
+    if diff.files.len() == 1 {
+        return Some(
+            "This file's diff is over 1 MiB, so its lines are left out. Run git diff on the \
+             host to read it."
+                .into(),
+        );
+    }
+    let count = if left_out == 1 {
+        "1 file".to_owned()
+    } else {
+        format!("{left_out} files")
+    };
+    Some(match full_diff {
+        FullDiff::OneFileAtATime => format!(
+            "Lines of {count} were left out to keep the diff small. `{} git diff FILE` shows \
+             one file; one over 1 MiB needs git diff on the host.",
+            brand::CLI_BIN
+        ),
+        FullDiff::OnTheHost => format!(
+            "Lines of {count} were left out to keep the diff small. Run git diff on the host \
+             to read them."
+        ),
+    })
 }
 
 /// `git status --short --branch`.
@@ -696,7 +740,7 @@ pub(crate) async fn run(conn: &mut Conn, command: WsCmd) -> Result<()> {
                         hunks: !stat,
                     })
                     .await?;
-                print_diff(&diff, stat);
+                print_diff(&diff, stat, FullDiff::OneFileAtATime);
             }
         },
         WsCmd::Turns { pane, diff, stat } => {
@@ -705,7 +749,7 @@ pub(crate) async fn run(conn: &mut Conn, command: WsCmd) -> Result<()> {
                 Some(turn) => {
                     let turn = (turn != 0).then_some(turn);
                     let turn_diff = client.turn_diff(pane_id, turn, 3, !stat).await?;
-                    print_diff(&turn_diff, stat);
+                    print_diff(&turn_diff, stat, FullDiff::OnTheHost);
                 }
                 None => {
                     for turn in client.list_turns(pane_id).await? {
@@ -1004,7 +1048,7 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use client_core::proto::{GitFileStatus, UnixMillis};
+    use client_core::proto::{FileDiff, GitFileStatus, UnixMillis};
 
     use super::*;
 
@@ -1044,6 +1088,56 @@ mod tests {
                 "?? notes.txt",
                 "R  old.rs -> new.rs",
             ]
+        );
+    }
+
+    fn diff_of(files: &[(&str, bool)]) -> GitDiff {
+        GitDiff {
+            root: "/repo".into(),
+            from: "a".into(),
+            to: "b".into(),
+            files: files
+                .iter()
+                .map(|(path, hunks_omitted)| FileDiff {
+                    path: (*path).into(),
+                    old_path: None,
+                    change: FileChange::Modified,
+                    binary: false,
+                    additions: 1,
+                    deletions: 0,
+                    hunks: Vec::new(),
+                    hunks_omitted: *hunks_omitted,
+                })
+                .collect(),
+            truncated: files.iter().any(|(_, hunks_omitted)| *hunks_omitted),
+        }
+    }
+
+    #[test]
+    fn a_diff_says_what_was_left_out_and_how_to_read_it() {
+        let one_large_file =
+            left_out_note(&diff_of(&[("big.json", true)]), FullDiff::OneFileAtATime).unwrap();
+        assert!(!one_large_file.contains("FILE"), "{one_large_file}");
+        assert!(one_large_file.contains("over 1 MiB"));
+        assert!(one_large_file.contains("git diff on the host"));
+
+        let many = left_out_note(
+            &diff_of(&[("a.rs", false), ("b.rs", true), ("c.rs", true)]),
+            FullDiff::OneFileAtATime,
+        )
+        .unwrap();
+        assert!(many.contains("Lines of 2 files"), "{many}");
+        assert!(many.contains("git diff FILE"), "{many}");
+        let turn = left_out_note(
+            &diff_of(&[("a.rs", true), ("b.rs", true)]),
+            FullDiff::OnTheHost,
+        )
+        .unwrap();
+        assert!(!turn.contains("FILE"), "{turn}");
+
+        assert_eq!(
+            left_out_note(&diff_of(&[("a.rs", false)]), FullDiff::OneFileAtATime),
+            None
         );
     }
 
