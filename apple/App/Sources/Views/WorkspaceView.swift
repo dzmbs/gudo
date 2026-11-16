@@ -1223,7 +1223,7 @@ struct ActiveTabView: View {
         // A zoomed pane keeps its header: its lit Zoom button is the way back.
         let isSplit = !compact && (tiled.panes.count > 1 || !floats.windows.isEmpty)
         return SplitTreeView(
-            node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, isSplit: isSplit, animated: !compact,
+            node: compact ? .leaf(tab.focused) : tiled, workspace: workspace, tab: tab.id, isSplit: isSplit, animated: !compact,
             floats: floats, zoomed: compact ? nil : tab.zoomed)
             .overlay {
                 if compact { PictureInPicture(workspace: workspace, tab: tab) }

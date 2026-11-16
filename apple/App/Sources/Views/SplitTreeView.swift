@@ -69,7 +69,13 @@ struct HostTabTree: PaneTree {
     var cellSize: CGSize? { workspace.cellSize }
     var padding: CGFloat { workspace.appearance.padding }
     var namesHosts: Bool { false }
-    var arranges: Workspace? { isActive ? workspace : nil }
+    /// Only the tab its host has active: a tab leaving the screen (closed, or handed off under
+    /// the next one) is still laid out on its way out, and must not take the window's
+    /// arrangement back to its panes.
+    var arranges: Workspace? {
+        guard isActive, tab == nil || tab == workspace.session.activeTabId else { return nil }
+        return workspace
+    }
 }
 
 /// The floating windows over a tab, as its canvas draws them.
@@ -148,9 +154,9 @@ struct SplitTreeView: View {
         self.zoomed = zoomed
     }
 
-    /// A host's active tab.
-    init(node: Node, workspace: Workspace, isSplit: Bool, animated: Bool = true, floats: FloatScene = .none, zoomed: PaneId? = nil) {
-        self.init(node: node, tree: HostTabTree(workspace: workspace), isSplit: isSplit, animated: animated, floats: floats, zoomed: zoomed)
+    /// A host's tab, arranging it while it is the host's active one.
+    init(node: Node, workspace: Workspace, tab: TabId, isSplit: Bool, animated: Bool = true, floats: FloatScene = .none, zoomed: PaneId? = nil) {
+        self.init(node: node, tree: HostTabTree(workspace: workspace, tab: tab), isSplit: isSplit, animated: animated, floats: floats, zoomed: zoomed)
     }
 
     var body: some View {

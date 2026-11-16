@@ -68,6 +68,18 @@ final class PaneArrangementTests: XCTestCase {
         super.tearDown()
     }
 
+    /// A tab still laid out on its way off screen (closed, or under the next one while it hands
+    /// off) leaves the window's arrangement to the tab its host has active.
+    func testOnlyTheActiveTabArrangesItsHost() throws {
+        make()
+        let leaving = try XCTUnwrap(workspace.session.activeTabId)
+        workspace.apply(.newTab)
+        let active = try XCTUnwrap(workspace.session.activeTabId)
+        XCTAssertNotEqual(leaving, active)
+        XCTAssertNil(HostTabTree(workspace: workspace, tab: leaving).arranges)
+        XCTAssertTrue(HostTabTree(workspace: workspace, tab: active).arranges === workspace)
+    }
+
     func testDraggingOntoAPaneLightsWhereItWillBeAndDropsThere() {
         let (left, right, _) = make()
         let target = frame(of: right)
