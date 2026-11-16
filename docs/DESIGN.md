@@ -414,10 +414,12 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   sidebar a bare glyph beside the traffic lights with the title starting at the detail column;
   with the sidebar hidden too); the tab's name and its context on one line (`WindowTitleLine`,
   the name in `rowTitleEmphasis`, the context after it in the secondary ink) in a compact
-  unified toolbar, the shortest band macOS has; with the strip on top the row drops the name,
-  which the selected tab already shows. Trailing, at most three controls: the host picker as
-  plain text, then one monochrome glass group with Split (the pane menu) and the command
-  palette. Presence avatars show only while someone else is here, and a worktree's pull request
+  unified toolbar, the shortest band macOS has. With the sidebar hidden the tab strip takes the
+  name's place in that same row, beside the traffic lights and the window's controls, so the
+  window's chrome stays one row (`TitleBarTabsTests`). Trailing, at most three controls, all in one style: the host picker as
+  plain text, then Split (the pane menu) and the command palette as bare monochrome glyphs. No
+  capsule: nothing in the bar comes or goes with the window's focus; an inactive window greys
+  every control the same way. Presence avatars show only while someone else is here, and a worktree's pull request
   as a quiet word, neither in a capsule. Find (⌘F), Sketch on Pane (⌃⌘D), New Drawing, Share
   Session, Open In and Run live in the menu bar, the palette and their shortcuts. Never
   accent-tinted. `ChromeUITests.testToolbarIsTheSameInBothTabPlacements` compares the
@@ -431,8 +433,11 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   when the link is not fine or agents wait (else the address, SF Mono), then New Tab, New Agent…,
   Connect via SSH…, Pair with a Ticket…, Join a Session… and All Hosts; only the hosts scroll.
   Typing an address no host matches offers Connect to it. Every icon control has a tooltip with its shortcut.
-- The toolbar background is hidden: the sidebar color runs up behind the traffic lights and the
-  terminal background behind the rest. A local tab's folder is the window's represented
+- The toolbar background is hidden: the sidebar color runs up behind the traffic lights to the
+  window's top edge, its divider full height, and the terminal background behind the rest. The
+  window's content runs under the title bar (full-size content view); the layout clips only its
+  sides, never its top (`ThemeConsistencyTests.testMainWindowToolbarAndPanes` samples the
+  sidebar's column from the window's top edge down). A local tab's folder is the window's represented
   folder (`RepresentedDirectory`), for the Window menu and Mission Control.
 - Switching to vertical tabs always shows the sidebar; covered by
   `testSidebarAppearsAfterSwitchingFromTabStrip` and the `toggle` screenshot fixture. The divider
@@ -543,11 +548,12 @@ what needs you); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
 tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill, `Surface.selection`
-(the ink at 10 %, its edge and top light, radius `field`; the ink at 5 % in an inactive window), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
+(the ink at 12 %, its edge and top light, radius `field`; the ink at 4 % in an inactive window), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
 ⌘ hints appear after ⌘ is held 750 ms; a title truncates at its tail, a path title keeps its end; the tooltip is the
 title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).
-The strip sits under the shared toolbar (Mac and iPad alike) on the window base (the terminal
-background) with a one-pixel `separator` rule. Drag
+On the Mac the strip is the title bar's own row (28 pt chips, no rule of its own); on iPad it
+sits under the shared toolbar on the window base (the terminal background) with a one-pixel
+`separator` rule. Drag
 tabs to reorder.
 
 ### Splits, panes, overlays: Ghostty 1:1

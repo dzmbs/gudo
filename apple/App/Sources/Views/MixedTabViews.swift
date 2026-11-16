@@ -514,6 +514,7 @@ struct MixedTabChip: View {
     let tab: CompositeTab
     let isActive: Bool
     @Environment(WindowModel.self) private var model
+    @Environment(\.tabStripHeight) private var stripHeight
     @State private var isHovered = false
 
     var body: some View {
@@ -540,7 +541,7 @@ struct MixedTabChip: View {
         .foregroundStyle(isActive || changed ? DS.Palette.text : DS.Palette.textSecondary)
         .padding(.horizontal, DS.Space.xxxl)
         .frame(maxWidth: .infinity)
-        .frame(height: DS.Size.tabStrip)
+        .frame(height: stripHeight)
         .background {
             if isActive {
                 Color.clear

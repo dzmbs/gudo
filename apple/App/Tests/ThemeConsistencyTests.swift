@@ -154,6 +154,11 @@ final class ThemeConsistencyTests: XCTestCase {
             }
             try picture.expect(palette.base, at: CGPoint(x: 760, y: 8), "\(name): the toolbar band over the panes")
             try picture.expect(palette.sidebar, at: CGPoint(x: 200, y: 740), "\(name): the sidebar")
+            // One column from the window's top edge down: no band of another colour behind the
+            // traffic lights or along the title bar.
+            for y in [2.0, 8, 20, 30] {
+                try picture.expect(palette.sidebar, at: CGPoint(x: 200, y: y), "\(name): the sidebar under the title bar at \(y) pt")
+            }
         }
     }
     #else

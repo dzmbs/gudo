@@ -13,6 +13,7 @@ struct HostToolbarButton: View {
     /// A command chosen in the popover, run once it has closed: a sheet presented while a
     /// popover is still dismissing is dropped.
     @State private var afterClose: (() -> Void)?
+    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         @Bindable var model = model
@@ -23,6 +24,8 @@ struct HostToolbarButton: View {
             HostSwitcherLabel(model.hostName) {
                 ConnectionGlyph(model.connection, healthy: Image(systemName: model.showsNoHost ? "server.rack" : WindowModel.symbol(forHost: model.currentGroupId, kind: nil)))
             }
+            // Recedes with the window as the bar's glyphs do.
+            .foregroundStyle(appearsActive ? .primary : .secondary)
         }
         .buttonStyle(.plain)
         .popover(isPresented: $model.isHostSwitcherShown, arrowEdge: .top) {

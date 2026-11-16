@@ -198,7 +198,7 @@ struct WorkspaceView: View {
                         .accessibilityHidden(!shown)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-                .clipped()
+                .clipShape(SidesOnly())
             }
             .onChange(of: shown) { _, shown in
                 guard model.destination == .terminal, !model.isEditorFullScreen, deck == nil else { return }
@@ -238,6 +238,14 @@ struct WorkspaceView: View {
         #if os(macOS)
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
         #endif
+    }
+}
+
+/// Clips what slides past the window's sides, and nothing at the top: the sidebar's colour and
+/// its divider run up under the title bar to the window's edge.
+private nonisolated struct SidesOnly: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: 0, dy: -rect.height))
     }
 }
 
@@ -501,16 +509,19 @@ private struct DetailColumn: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
+    @State private var titleBarMetrics = TitleBarMetrics()
 
     var body: some View {
         VStack(spacing: 0) {
             // Across a fold each page's header names its tab and the sidebar is the tab list: a
-            // strip would run over the crease.
+            // strip would run over the crease. On the Mac it is the title bar's own row.
+            #if os(iOS)
             if showsStrip {
                 TabBar(workspace: workspace)
                     .chromeContent()
                     .motionTransition(.panel(from: .top))
             }
+            #endif
             switch model.destination {
             case .terminal:
                 TerminalArea(workspace: workspace)
@@ -549,7 +560,7 @@ private struct DetailColumn: View {
             // the window's controls, so the two read as one band.
             TerminalToolbar(
                 workspace: workspace, title: showsStrip ? nil : title,
-                subtitle: model.destination == .terminal ? subtitle : "")
+                subtitle: model.destination == .terminal ? subtitle : "", showsStrip: showsStrip, metrics: titleBarMetrics)
         }
         #if os(iOS)
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .navigationBar)
@@ -652,6 +663,9 @@ private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
     let title: String?
     let subtitle: String
+    /// The tabs as a strip: beside the traffic lights in the title bar's row on the Mac.
+    let showsStrip: Bool
+    let metrics: TitleBarMetrics
     @Environment(WindowModel.self) private var model
     #if os(macOS)
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
@@ -661,6 +675,7 @@ private struct TerminalToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         #if os(macOS)
+        let fit = self.fit
         // Over the sidebar the toggle is a bare glyph beside the traffic lights and the title
         // starts where the detail column does; with the sidebar hidden it is a regular button.
         ToolbarItem(placement: .navigation) {
@@ -678,24 +693,42 @@ private struct TerminalToolbar: ToolbarContent {
         if let title {
             ToolbarItem(placement: .navigation) {
                 WindowTitleLine(title: title, subtitle: subtitle)
+                    .frame(maxWidth: fit.room, alignment: .leading)
             }
             .sharedBackgroundVisibility(.hidden)
+        }
+        if showsStrip {
+            ToolbarItem(placement: .navigation) {
+                TabBar(workspace: workspace, inTitleBar: true)
+                    .chromeContent()
+                    .frame(width: fit.room)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            // Without the system title nothing else pushes the controls to the trailing edge.
+            ToolbarSpacer(.flexible, placement: .primaryAction)
+        }
+        if fit.foldsControls {
+            ToolbarItem(placement: .primaryAction) {
+                TitleBarOverflowMenu(workspace: workspace)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            trailingControls
         }
         #else
         ToolbarItem(placement: .navigation) {
             SidebarToggle()
         }
-        #endif
-        #if os(iOS)
         if model.destination == .terminal, workspace.session.activeTab?.root.panes.count == 1,
            let id = workspace.focusedPane, let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil {
             ToolbarItem(placement: .principal) { PaneChatToggle(pane: pane, state: chat) }
         }
+        trailingControls
         #endif
-        #if os(macOS)
-        // Without the system title nothing else pushes the controls to the trailing edge.
-        ToolbarSpacer(.flexible, placement: .primaryAction)
-        #endif
+    }
+
+    @ToolbarContentBuilder private var trailingControls: some ToolbarContent {
         // People here now: their faces, not a control (sharing starts from the palette).
         if let session = workspace.multiplayer, !session.others.isEmpty {
             ToolbarItem(placement: .primaryAction) {
@@ -703,6 +736,7 @@ private struct TerminalToolbar: ToolbarContent {
                     workspace.session.tabs.first { $0.root.panes.contains(PaneId(pane)) }.map(workspace.title(of:))
                 }) { model.sheet = .invite }
                     .buttonStyle(.plain)
+                    .titleBarWidth(.presence, in: metrics)
             }
             .sharedBackgroundVisibility(.hidden)
         }
@@ -711,31 +745,30 @@ private struct TerminalToolbar: ToolbarContent {
         if model.destination == .terminal, let worktree = model.git.worktree {
             ToolbarItem(placement: .primaryAction) {
                 PRToolbarButton(git: model.git, worktree: worktree)
+                    .titleBarWidth(.pullRequest, in: metrics)
             }
             .sharedBackgroundVisibility(.hidden)
         }
         // A title-bar picker: its name in plain text, no capsule beside the one group.
         ToolbarItem(placement: .primaryAction) {
             HostToolbarButton(workspace: workspace)
+                .titleBarWidth(.host, in: metrics)
         }
         .sharedBackgroundVisibility(.hidden)
         // Find, drawing, sharing and the editor are in the menu bar, the palette and their
         // shortcuts: the bar keeps the two things reached for most.
+        #if os(macOS)
+        // One style across the bar: every control a bare monochrome glyph or word that the
+        // system greys with the window, never a capsule that comes and goes with it.
+        paneControls.sharedBackgroundVisibility(.hidden)
+        #else
+        paneControls
+        #endif
+    }
+
+    private var paneControls: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
-            Menu("Split", systemImage: "rectangle.split.2x1") {
-                PaneMenuItems(workspace: workspace, model: model)
-                Divider()
-                Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
-                    get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
-                    .accessibilityIdentifier("two-columns")
-            }
-            .help("Split, zoom, float or close the pane")
-            .menuIndicator(.hidden)
-            .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
-            .accessibilityIdentifier("pane-menu")
-            Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
-                .help("Command Palette (⌘K)")
-                .accessibilityIdentifier("open-palette")
+            PaneControls(workspace: workspace)
         }
     }
 
@@ -743,13 +776,136 @@ private struct TerminalToolbar: ToolbarContent {
     private var overSidebar: Bool { model.isSidebarShown && !model.isEditorFullScreen }
 
     /// From the toggle to the detail column's text margin: the traffic lights, the toggle and
-    /// the items' spacing take the sidebar's first 148 pt.
+    /// the items' spacing take the sidebar's first `TitleBarFit.leadingReserve`.
     private var titleInset: CGFloat {
-        max(0, SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) - 148 + DS.Space.m)
+        max(0, SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) - TitleBarFit.leadingReserve + DS.Space.m)
+    }
+
+    private var fit: TitleBarFit {
+        var shown: [TitleBarMetrics.Control] = [.host]
+        if let session = workspace.multiplayer, !session.others.isEmpty { shown.append(.presence) }
+        if model.destination == .terminal, model.git.worktree != nil { shown.append(.pullRequest) }
+        return TitleBarFit(
+            window: model.windowWidth,
+            contentStart: overSidebar ? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) : TitleBarFit.leadingReserve - DS.Space.m,
+            controls: metrics.width(of: shown))
     }
     #endif
 }
 
+/// Split (the pane menu) and the command palette: the two controls the bar always keeps.
+private struct PaneControls: View {
+    let workspace: Workspace
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        Menu("Split", systemImage: "rectangle.split.2x1") {
+            PaneMenuItems(workspace: workspace, model: model)
+            Divider()
+            Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
+                get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
+                .accessibilityIdentifier("two-columns")
+        }
+        .help("Split, zoom, float or close the pane")
+        .menuIndicator(.hidden)
+        .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
+        .accessibilityIdentifier("pane-menu")
+        Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+            .help("Command Palette (⌘K)")
+            .accessibilityIdentifier("open-palette")
+    }
+}
+
+/// How wide the title bar's trailing controls are as drawn, for fitting the row
+/// (`TitleBarFit`). Each keeps its last width while folded away, so the choice holds steady.
+@MainActor
+@Observable
+final class TitleBarMetrics {
+    enum Control: Hashable {
+        case presence, pullRequest, host
+    }
+
+    private var widths: [Control: CGFloat] = [:]
+
+    func record(_ width: CGFloat, of control: Control) {
+        if widths[control] != width { widths[control] = width }
+    }
+
+    /// `controls` and the two pane glyphs, with the spacing between items.
+    func width(of controls: [Control]) -> CGFloat {
+        controls.reduce(TitleBarFit.paneControls) { total, control in total + (widths[control] ?? 0) + DS.Space.s }
+    }
+}
+
+private extension View {
+    func titleBarWidth(_ control: TitleBarMetrics.Control, in metrics: TitleBarMetrics) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.size.width } action: { metrics.record($0, of: control) }
+    }
+}
+
+/// The title bar's one row: the title or the tab strip gets what the traffic lights, the
+/// sidebar toggle and the trailing controls leave. Where that would fall under a tab's width,
+/// the controls fold into one menu, so nothing is pushed out of the bar.
+struct TitleBarFit {
+    /// The traffic lights, the sidebar toggle and the items' spacing.
+    static let leadingReserve: CGFloat = 148
+    /// Split and the command palette: two toolbar glyphs.
+    static let paneControls: CGFloat = 2 * DS.Size.touchTarget
+    /// The one menu the controls fold into.
+    static let foldedControls = DS.Size.touchTarget
+    /// The least the title or the strip is given before the controls fold.
+    static let minimumRoom = DS.Size.tabMinWidth
+    /// The window's trailing edge and the bar's own spacing between its groups, with room to
+    /// spare: a control that does not fit is dropped by the toolbar, so the fit errs short.
+    static let trailingMargin = DS.Space.xxxl
+
+    /// The window's width; zero until it is known.
+    let window: CGFloat
+    /// Where the title or strip begins: past the sidebar, or past the toggle.
+    let contentStart: CGFloat
+    let controls: CGFloat
+
+    var foldsControls: Bool { window > 0 && room(beside: controls) < Self.minimumRoom }
+
+    var room: CGFloat {
+        guard window > 0 else { return Self.minimumRoom }
+        return max(0, room(beside: foldsControls ? Self.foldedControls : controls))
+    }
+
+    private func room(beside trailing: CGFloat) -> CGFloat {
+        window - contentStart - DS.Space.s - trailing - Self.trailingMargin
+    }
+}
+
+#if os(macOS)
+/// The trailing controls folded into one menu for a narrow window: the hosts, Split and the
+/// command palette.
+private struct TitleBarOverflowMenu: View {
+    let workspace: Workspace
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        Menu {
+            Section("Hosts") {
+                ForEach(model.switcherHosts) { host in
+                    Button(host.name, systemImage: host.isCurrent ? "checkmark" : host.systemImage) { model.selectHost(id: host.id) }
+                }
+            }
+            Menu("Split", systemImage: "rectangle.split.2x1") {
+                PaneMenuItems(workspace: workspace, model: model)
+            }
+            .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
+            Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+        } label: {
+            Label("More", systemImage: "ellipsis.circle")
+                .labelStyle(.iconOnly)
+        }
+        .menuIndicator(.hidden)
+        .help("\(model.hostName), Split and Command Palette")
+        .accessibilityIdentifier("toolbar-overflow")
+    }
+}
+#endif
 
 #if os(iOS)
 /// iPhone: Terminal, Inbox and Hosts as tabs in the system's floating Liquid Glass tab bar.

@@ -159,12 +159,15 @@ final class WindowModel {
             quietLayoutResizes()
         }
     }
+    /// The window's width, which the title bar's row is fitted to (`TitleBarFit`).
+    private(set) var windowWidth: CGFloat = 0
     @ObservationIgnored private var sidebarWidthFit = SidebarWidthFit()
     @ObservationIgnored private var isFittingSidebar = false
 
     /// Hides the sidebar while the window is too narrow for it (`SidebarWidthFit`); the next
     /// window still starts with the user's own choice.
     func windowWidthChanged(to width: CGFloat) {
+        if windowWidth != width { windowWidth = width }
         guard let shown = sidebarWidthFit.widthChanged(to: width, isShown: isSidebarShown) else { return }
         isFittingSidebar = true
         isSidebarShown = shown

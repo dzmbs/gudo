@@ -7,6 +7,9 @@ import SwiftUI
 /// `DS.Size.tabMinWidth...tabMaxWidth`; more than fit scroll, faded at the edge they run past.
 struct TabBar: View {
     let workspace: Workspace
+    /// In the title bar's own row (the Mac with the sidebar hidden): the band's height, on what
+    /// is under it, with no rule of its own.
+    var inTitleBar = false
     @Environment(WindowModel.self) private var model
     @State private var edges = StripEdges()
     @State private var spans = StripSpans()
@@ -46,15 +49,18 @@ struct TabBar: View {
                 .padding(.leading, DS.Space.xs)
         }
         .buttonStyle(.bar)
-        .padding(.horizontal, DS.Space.row)
-        .frame(height: DS.Size.tabStrip)
-        .background(DS.Palette.base)
-        .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+        .padding(.horizontal, inTitleBar ? 0 : DS.Space.row)
+        .frame(height: stripHeight)
+        .environment(\.tabStripHeight, stripHeight)
+        .background { if !inTitleBar { Rectangle().fill(DS.Palette.base) } }
+        .overlay(alignment: .bottom) { if !inTitleBar { Hairline(style: DS.Palette.separator) } }
         // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("tab-bar")
     }
+
+    private var stripHeight: CGFloat { inTitleBar ? DS.Size.tab : DS.Size.tabStrip }
 
     /// Brings the selected chip whole into view by the least travel, once a chip just added has
     /// been laid out.
@@ -214,6 +220,11 @@ struct TabChipWidth: Layout {
     }
 }
 
+extension EnvironmentValues {
+    /// The strip's height, which each chip fills: its own band, or the title bar's row.
+    @Entry var tabStripHeight = DS.Size.tabStrip
+}
+
 #if DEBUG
 extension EnvironmentValues {
     /// Tests: each strip chip's frame in the window, whenever its layout changes.
@@ -248,6 +259,7 @@ private struct TabChip: View {
     /// The window holds tabs from more than one host: name the host under the title.
     let showsHost: Bool
     @Environment(WindowModel.self) private var model
+    @Environment(\.tabStripHeight) private var stripHeight
     @State private var isHovered = false
 
     var body: some View {
@@ -293,7 +305,7 @@ private struct TabChip: View {
         // Room for the close button and the ⌘ hint, which sit over the edges.
         .padding(.horizontal, DS.Space.xxxl)
         .frame(maxWidth: .infinity)
-        .frame(height: DS.Size.tabStrip)
+        .frame(height: stripHeight)
         .background {
             if isActive {
                 Color.clear
