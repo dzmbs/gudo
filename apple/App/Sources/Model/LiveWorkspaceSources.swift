@@ -1035,6 +1035,8 @@ final class LiveDiffSource: DiffSource {
     let app: AppModel
     /// The repository root found by the last `repository()`.
     private var root: String?
+    /// Files git does not track yet, by path in the repository: Changes marks them U, as Files does.
+    private var untracked: Set<String> = []
 
     init(app: AppModel) {
         self.app = app
@@ -1066,6 +1068,7 @@ final class LiveDiffSource: DiffSource {
             throw ToolProblem(error, path: folder)
         }
         root = status.root
+        untracked = Self.untrackedPaths(status)
         return DiffRepository(
             root: status.root, branch: status.branch, ahead: Int(status.ahead), behind: Int(status.behind),
             changedFiles: status.files.count)
@@ -1078,12 +1081,26 @@ final class LiveDiffSource: DiffSource {
         switch scope {
         case .workingTree:
             diff = try await api.gitDiff(request: GitDiffRequest(path: path, base: .head, files: [], context: 3, hunks: true))
+            return Self.markingUntracked(await DiffFile.converted(diff.files), untracked: untracked)
         case .staged:
             diff = try await api.gitDiff(request: GitDiffRequest(path: path, base: .staged, files: [], context: 3, hunks: true))
         case .turn(let pane, let turn):
             diff = try await api.turnDiff(paneId: pane, turn: turn, context: 3, hunks: true)
         }
         return await DiffFile.converted(diff.files)
+    }
+
+    nonisolated static func untrackedPaths(_ status: GitStatus) -> Set<String> {
+        Set(status.files.filter { $0.unstaged == .untracked }.map(\.path))
+    }
+
+    /// The working tree's new files that git does not track show as untracked, not added.
+    nonisolated static func markingUntracked(_ files: [DiffFile], untracked: Set<String>) -> [DiffFile] {
+        files.map { file in
+            var file = file
+            if file.status == .added, untracked.contains(file.path) { file.status = .untracked }
+            return file
+        }
     }
 
     private func repositoryRoot() async throws -> String {
