@@ -1303,7 +1303,7 @@ private struct RenameTabPrompt: ViewModifier {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Leave empty to use the terminal's title.")
+            Text("Leave empty to name it automatically.")
         }
         .onChange(of: workspace.renamingTab) { _, id in
             draft = workspace.session.tabs.first { $0.id == id }?.title ?? ""
