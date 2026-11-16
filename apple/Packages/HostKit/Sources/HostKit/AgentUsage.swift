@@ -108,6 +108,7 @@ public enum UsageText {
         switch agent {
         case .claude: "Claude"
         case .codex: "Codex"
+        case .pi: "pi"
         }
     }
 
@@ -150,6 +151,7 @@ public enum UsageText {
         case (.cli, .codex): from = "From codex app-server on the host"
         case (.api, .claude): from = "From your Claude sign-in (unofficial)"
         case (.api, .codex): from = "From your ChatGPT sign-in (unofficial)"
+        case (.cli, .pi), (.api, .pi): return nil
         }
         guard let asOf = usage.asOfMs.map(date) else { return from }
         if now.timeIntervalSince(asOf) < 60 { return "\(from) · just now" }

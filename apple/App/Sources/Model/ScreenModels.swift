@@ -102,12 +102,13 @@ extension HostDirectory {
 // MARK: - Agents
 
 nonisolated enum AgentKind: String, CaseIterable, Sendable {
-    case claude, codex, other
+    case claude, codex, pi, other
 
     var title: String {
         switch self {
         case .claude: "Claude Code"
         case .codex: "Codex"
+        case .pi: "pi"
         case .other: "Agent"
         }
     }
@@ -116,6 +117,7 @@ nonisolated enum AgentKind: String, CaseIterable, Sendable {
         switch self {
         case .claude: "sparkle"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        case .pi: "terminal"
         case .other: "terminal"
         }
     }

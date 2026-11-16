@@ -339,6 +339,9 @@ extension DaemonWorkspace {
     /// Whether the connected helper keeps agent timelines; older helpers only offer Terminal.
     public var offersAgentTimeline: Bool { (try? timelineClient())?.offersAgentTimeline() ?? false }
 
+    /// Whether the connected helper serves Chat for pi panes; an older one never names them.
+    public var offersPiChat: Bool { ((try? client()) as? any PiAgentClient)?.startsPi() ?? false }
+
     public func timelineClient() throws -> any DaemonTimelineAPI {
         guard let client = try client() as? any DaemonTimelineAPI else { throw HostError.notConnected }
         return client

@@ -42,6 +42,13 @@ nonisolated public protocol SplitRatioClient: AnyObject, Sendable {
 
 extension DaemonClient: SplitRatioClient {}
 
+/// A client that knows whether its daemon runs pi as an agent (`MoreDaemonFeatures::PI_AGENT`).
+nonisolated public protocol PiAgentClient: AnyObject, Sendable {
+    func startsPi() -> Bool
+}
+
+extension DaemonClient: PiAgentClient {}
+
 /// Updating the daemon over its connection (`DaemonClient.upgradeDaemon`), separate from
 /// `DaemonClientAPI` so test fakes need not implement it.
 nonisolated public protocol DaemonUpgradeAPI: AnyObject, Sendable {

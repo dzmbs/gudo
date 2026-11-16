@@ -29,7 +29,7 @@ where Known.RawValue == String {
 }
 
 nonisolated public enum TimelineAgentTag: String, Hashable, Sendable, CaseIterable {
-    case claude = "Claude", codex = "Codex"
+    case claude = "Claude", codex = "Codex", pi = "Pi"
 }
 public typealias TimelineAgent = TimelineValue<TimelineAgentTag>
 

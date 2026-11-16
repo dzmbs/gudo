@@ -50,6 +50,7 @@ extension AgentKind {
         switch self {
         case .claude: ProgramCatalog.identity(process: "claude")
         case .codex: ProgramCatalog.identity(process: "codex")
+        case .pi: ProgramCatalog.identity(process: "pi")
         case .other: ProgramIdentity(id: "agent", displayName: title, kind: .agent)
         }
     }

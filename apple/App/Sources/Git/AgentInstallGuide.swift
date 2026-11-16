@@ -23,7 +23,7 @@ nonisolated struct AgentInstallGuide: Equatable, Sendable {
             }
             docs = URL(string: "https://github.com/openai/codex#installing-and-running-codex-cli")!
             pathHelp = docs
-        case .other:
+        case .pi, .other:
             return nil
         }
     }

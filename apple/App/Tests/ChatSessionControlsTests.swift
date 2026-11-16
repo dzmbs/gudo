@@ -49,7 +49,7 @@ final class ChatSessionControlsTests: XCTestCase {
         XCTAssertEqual(ChatEmptyState(isLoading: false, session: nil), .empty)
         let unknown = try session(native: "")
         let state = ChatEmptyState(isLoading: false, session: unknown)
-        XCTAssertEqual(state, .findingSession)
+        XCTAssertEqual(state, .findingSession(.known(.claude)))
         XCTAssertTrue(state.offersTerminal)
         XCTAssertNotEqual(state.title, "No messages yet")
         XCTAssertNotNil(state.detail)
@@ -86,6 +86,16 @@ final class ChatSessionControlsTests: XCTestCase {
         XCTAssertNil(ChatEmptyState.terminalWait(nil))
         XCTAssertEqual(ChatEmptyState(isLoading: false, session: nil, agent: .claude, terminalWait: ""),
                        .waitingInTerminal(agent: .claude, reason: nil))
+    }
+
+    func testAPiChatThatFoundNoSessionYetTalksAboutPi() throws {
+        var unknown = try session(native: "")
+        unknown.agent = .known(.pi)
+        let state = ChatEmptyState(isLoading: false, session: unknown)
+        XCTAssertEqual(state, .findingSession(.known(.pi)))
+        XCTAssertTrue(state.offersTerminal)
+        XCTAssertTrue(state.detail?.contains("pi") == true)
+        XCTAssertFalse(state.detail?.contains("Claude") == true)
     }
 
     func testTableColumnsFitTheirLongestCellUpToTheWrapLimit() {

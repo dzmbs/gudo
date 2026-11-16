@@ -12,6 +12,7 @@ extension Workspace {
             return
         }
         let offersChat = connection?.workspace.offersAgentTimeline == true
+            && (kind != .pi || connection?.workspace.offersPiChat == true)
         let state: PaneChatState
         if let existing = pane.chat {
             if existing.offersChat != offersChat { existing.offersChat = offersChat }

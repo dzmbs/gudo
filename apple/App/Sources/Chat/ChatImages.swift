@@ -14,7 +14,7 @@ nonisolated enum ChatImages {
     static func path(read tool: TimelineTool) -> String? {
         guard tool.kind == .known(.read), tool.status != .known(.failed), tool.input.utf8.count <= 16_384,
               let object = try? JSONSerialization.jsonObject(with: Data(tool.input.utf8)) as? [String: Any],
-              let path = object["file_path"] as? String else { return nil }
+              let path = (object["file_path"] ?? object["path"]) as? String else { return nil }
         return hostPath(path)
     }
 

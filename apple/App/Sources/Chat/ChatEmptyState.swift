@@ -1,13 +1,13 @@
 import GudoCore
 import HostKit
 
-/// What an empty Chat says. A Claude Code started by hand in a shell has no session at first:
-/// Chat finds it from the transcript Claude Code saves, and says so instead of "No messages yet".
+/// What an empty Chat says. A Claude Code started by hand in a shell, or a pi that saved nothing
+/// yet, has no session at first: Chat says it is looking instead of "No messages yet".
 /// An agent with no conversation at all, or one stopped on a screen only its terminal can answer
 /// (a sign-in, a first-run question), is waiting in Terminal.
 nonisolated enum ChatEmptyState: Equatable {
     case opening
-    case findingSession
+    case findingSession(TimelineAgent)
     case waitingInTerminal(agent: AgentKind, reason: String?)
     case empty
 
@@ -17,7 +17,7 @@ nonisolated enum ChatEmptyState: Equatable {
         if let agent, let terminalWait {
             self = .waitingInTerminal(agent: agent, reason: terminalWait.isEmpty ? nil : terminalWait)
         } else if isLoading { self = .opening }
-        else if let session { self = session.nativeSession.isEmpty ? .findingSession : .empty }
+        else if let session { self = session.nativeSession.isEmpty ? .findingSession(session.agent) : .empty }
         else if let agent { self = .waitingInTerminal(agent: agent, reason: nil) }
         else { self = .empty }
     }
@@ -39,6 +39,7 @@ nonisolated enum ChatEmptyState: Equatable {
 
     var detail: String? {
         switch self {
+        case .findingSession(.known(.pi)): "It shows here once pi saves its first message. Until then, use Terminal."
         case .findingSession: "It shows here after the agent's next message. Until then, use Terminal."
         case .waitingInTerminal(_, let reason?):
             "\(reason.hasSuffix(".") ? reason : reason + ".") Answer it in Terminal, then come back here."

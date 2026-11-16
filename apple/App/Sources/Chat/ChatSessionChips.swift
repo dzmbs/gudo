@@ -4,9 +4,10 @@ import HostKit
 import SwiftUI
 
 /// The model and permission mode under the composer, each a small menu. Choosing a model puts
-/// Claude Code's own `/model` command in the message for Send to apply. The mode only changes in
-/// Terminal: Claude Code cycles it with Shift-Tab, and a key that steps through modes could land
-/// on one the user did not choose, so the menu shows every mode and checks the current one.
+/// Claude Code's own `/model` command in the message for Send to apply; pi only shows its model.
+/// The mode only changes in Terminal: Claude Code cycles it with Shift-Tab, and a key that steps
+/// through modes could land on one the user did not choose, so the menu shows every mode and
+/// checks the current one.
 struct ChatSessionChips: View {
     let session: TimelineSession?
     let canChooseModel: Bool
@@ -18,7 +19,15 @@ struct ChatSessionChips: View {
         if model != nil || mode != nil {
             HStack(spacing: DS.Space.xxs) {
                 Spacer(minLength: 0)
-                if let model { modelMenu(model) }
+                if let model, session?.agent == .known(.pi) {
+                    Text(verbatim: model).lineLimit(1)
+                        .padding(.horizontal, DS.Space.s)
+                        .frame(minHeight: DS.Size.touchTarget)
+                        .accessibilityLabel("Model, \(model)")
+                        .accessibilityIdentifier("chat-model")
+                } else if let model {
+                    modelMenu(model)
+                }
                 if let mode { modeMenu(mode) }
             }
             .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)

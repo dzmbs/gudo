@@ -193,6 +193,7 @@ extension AgentKind {
         switch kind.lowercased() {
         case let name where name.contains("claude"): self = .claude
         case let name where name.contains("codex"): self = .codex
+        case "pi": self = .pi
         default: self = .other
         }
     }
