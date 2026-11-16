@@ -19,6 +19,7 @@ nonisolated public enum TerminalPreferences {
         public static let paneStyle = "pane-style"
         public static let paneActiveBorder = "pane-active-border"
         public static let paneInactiveFade = "pane-inactive-fade"
+        public static let paneContentCard = "pane-content-card"
         public static let sidebarTextSize = "sidebar-text-size"
     }
 
@@ -31,6 +32,8 @@ nonisolated public enum TerminalPreferences {
         /// No ring around the active pane, as in Ghostty.
         public static let paneActiveBorder = false
         public static let paneInactiveFade = InactivePaneFade.dim
+        /// Panes reach the window's edges and the sidebar, as in Ghostty.
+        public static let paneContentCard = false
         public static let sidebarTextSize = SidebarTextSize.system
     }
 

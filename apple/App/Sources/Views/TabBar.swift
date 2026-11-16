@@ -11,6 +11,8 @@ struct TabBar: View {
     /// is under it, with no rule of its own.
     var inTitleBar = false
     @Environment(WindowModel.self) private var model
+    @Environment(\.showsContentCard) private var showsContentCard
+    @Environment(\.chromeAccessibility) private var accessibility
     @State private var edges = StripEdges()
     @State private var spans = StripSpans()
 
@@ -55,7 +57,7 @@ struct TabBar: View {
         .padding(.horizontal, inTitleBar ? 0 : DS.Space.row)
         .frame(height: stripHeight)
         .environment(\.tabStripHeight, stripHeight)
-        .background { if !inTitleBar { Rectangle().fill(DS.Palette.base) } }
+        .background { if !inTitleBar { Rectangle().fill(showsContentCard ? DS.Palette.sidebar : DS.Palette.base) } }
         .overlay(alignment: .bottom) { if !inTitleBar { Hairline(style: DS.Palette.separator) } }
         // A 34 pt strip: titles grow with Dynamic Type only as far as it holds them.
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)

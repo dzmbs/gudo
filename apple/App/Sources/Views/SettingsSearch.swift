@@ -80,6 +80,7 @@ enum SettingsIndex {
             .init(id: "window-theme", title: "Window Matches Theme", key: "window-theme", section: .appearance, synonyms: ["window", "light", "dark", "mode", "appearance", "system", "sidebar", "chrome"]),
             .init(id: "theme-pair", title: "Follow Light and Dark Mode", key: "theme", section: .appearance, synonyms: ["light theme", "dark theme", "automatic", "system appearance", "pair"]),
             .init(id: "pane-style", title: "Panes", key: "pane-style", section: .appearance, synonyms: ["padding", "compact", "spacious", "comfortable", "density"]),
+            .init(id: "pane-content-card", title: "Inset Content Card", section: .appearance, synonyms: ["card", "inset", "rounded", "margin", "floating", "comfortable"]),
             .init(id: "pane-inactive-fade", title: "Inactive Panes", section: .appearance, synonyms: ["dim", "fade", "unfocused", "header"]),
             .init(id: "pane-active-border", title: "Ring Around the Active Pane", section: .appearance, synonyms: ["border", "outline", "focus", "highlight", "active pane"]),
             .init(id: "sidebar-text-size", title: "Sidebar Text Size", section: .appearance, synonyms: ["sidebar", "font", "small", "large", "bigger", "smaller"]),

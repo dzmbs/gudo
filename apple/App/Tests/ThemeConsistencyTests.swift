@@ -168,6 +168,40 @@ final class ThemeConsistencyTests: XCTestCase {
             }
         }
     }
+
+    /// Comfortable panes with the inset content card: the terminal is a rounded card inset from
+    /// the window's edges and the sidebar, the sidebar's colour all around it, up to the title bar.
+    func testTheContentCardSitsInsetOnTheSidebarColour() async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.paneStyle] = TerminalPreferences.PaneStyle.comfortable.rawValue
+        arguments[TerminalPreferences.Key.paneContentCard] = true
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        defer {
+            var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            arguments[TerminalPreferences.Key.paneStyle] = nil
+            arguments[TerminalPreferences.Key.paneContentCard] = nil
+            UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        }
+        let size = CGSize(width: 1180, height: 760)
+        for name in Self.themes {
+            let palette = use(name)
+            let model = WindowModel(app: .shared)
+            model.start()
+            defer { model.close() }
+            let picture = try await render("content-card", theme: name, size: size, sceneWindow: true) {
+                WindowContent(request: nil, model: model).environment(AppModel.shared)
+            } settle: {
+                for _ in 0..<50 where model.workspace?.focusedPane == nil { await self.pump(0.1) }
+                model.isSidebarShown = true
+                await self.pump(1.5)
+            }
+            try picture.expect(palette.sidebar, at: CGPoint(x: 760, y: 8), "\(name): the band over the card")
+            try picture.expect(palette.sidebar, at: CGPoint(x: size.width - 3, y: 400), "\(name): beside the card's trailing edge")
+            try picture.expect(palette.sidebar, at: CGPoint(x: 760, y: size.height - 3), "\(name): under the card")
+            try picture.expect(palette.sidebar, at: CGPoint(x: size.width - DS.Space.s - 1, y: size.height - DS.Space.s - 1), "\(name): the card's corner is round")
+            try picture.expect(palette.base, at: CGPoint(x: size.width - DS.Space.s - 24, y: size.height - DS.Space.s - 24), "\(name): the terminal inside the card")
+        }
+    }
     #else
     func testSettingsSheetIsThemedUpToTheNavigationBar() async throws {
         for name in Self.themes {

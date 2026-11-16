@@ -125,6 +125,7 @@ struct SplitTreeView: View {
     var zoomed: PaneId?
 
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @Environment(\.showsContentCard) private var showsContentCard
     @Environment(\.displayScale) private var displayScale
     @Environment(\.terminalTheme) private var theme
     @State private var lastShape = ShapeMemo()
@@ -322,15 +323,15 @@ struct SplitTreeView: View {
     }
 
     private func paneRadius(of leaf: CanvasLayout.Leaf) -> CGFloat {
-        paneStyle == .comfortable && (isSplit || leaf.window != nil) ? DS.Radius.pane : 0
+        paneStyle == .comfortable && (isSplit || showsContentCard || leaf.window != nil) ? DS.Radius.pane : 0
     }
 }
 
 extension SplitTreeView {
-    /// A comfortable pane in a split is a surface of its own; a compact one, a lone one and one in
-    /// a floating window (whose window is the surface) are tiles.
+    /// A comfortable pane in a split, or alone as the content card, is a surface of its own; a
+    /// compact one, a lone one and one in a floating window (whose window is the surface) are tiles.
     func paneSurface(of leaf: CanvasLayout.Leaf) -> Surface {
-        paneStyle == .comfortable && isSplit && leaf.window == nil ? .pane : .tile
+        paneStyle == .comfortable && (isSplit || showsContentCard) && leaf.window == nil ? .pane : .tile
     }
 }
 

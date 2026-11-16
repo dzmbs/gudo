@@ -47,6 +47,8 @@ struct WorkspaceView: View {
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     @AppStorage(ToastPosition.key) private var toastPosition = ToastPosition.standard
+    @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @AppStorage(TerminalPreferences.Key.paneContentCard) private var paneContentCard = TerminalPreferences.Default.paneContentCard
     #if os(macOS)
     @Environment(\.dismiss) private var dismiss
     #endif
@@ -167,6 +169,7 @@ struct WorkspaceView: View {
         let deck = layout.deckTop(from: frame.minY)
             .flatMap { $0 >= FoldLayout.minimumDeck && frame.height - $0 - layout.gutter >= FoldLayout.minimumDeck ? $0 : nil }
         let shown = model.isSidebarShown && !model.isEditorFullScreen && deck == nil
+        let card = ContentCard.isShown(style: paneStyle, isOn: paneContentCard, compact: false) && !model.isEditorFullScreen
         let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
         let gutter = shown && page != nil ? layout.gutter : 0
         return VStack(spacing: 0) {
@@ -196,7 +199,8 @@ struct WorkspaceView: View {
                         .background { Rectangle().fill(DS.Palette.sidebar).ignoresSafeArea(edges: .top) }
                         .overlay(alignment: .trailing) {
                             // A page ends at the fold: no divider to drag there.
-                            if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
+                            // On one colour with the card's surround, the divider drags without a line.
+                            if page == nil { SidebarDivider(width: $sidebarWidth, showsLine: !card).opacity(shown ? 1 : 0) }
                         }
                         .modifier(SlideOffset(x: SidebarSlide.sidebarOffset(sidebar: width, shown: shown)))
                         .allowsHitTesting(shown)
@@ -245,7 +249,8 @@ struct WorkspaceView: View {
         }
         .animation(DS.Motion.structural, value: model.isSidebarShown)
         .animation(DS.Motion.standard, value: model.isEditorFullScreen)
-        .chromeBackground(DS.Palette.base)
+        .environment(\.showsContentCard, card)
+        .chromeBackground(card ? DS.Palette.sidebar : DS.Palette.base)
         #if os(macOS)
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
         #endif
@@ -459,12 +464,14 @@ struct NewTabButton: View {
 /// restores the default width.
 private struct SidebarDivider: View {
     @Binding var width: Double
+    var showsLine = true
     @Environment(\.displayScale) private var displayScale
     @State private var start: Double?
 
     var body: some View {
         Rectangle()
             .fill(DS.Palette.separator)
+            .opacity(showsLine ? 1 : 0)
             .frame(width: DS.Size.hairline(scale: displayScale))
             .ignoresSafeArea()
             .overlay {
@@ -530,6 +537,7 @@ private struct DetailColumn: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.showsContentCard) private var showsContentCard
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
     @State private var titleBarMetrics = TitleBarMetrics()
@@ -549,7 +557,10 @@ private struct DetailColumn: View {
             case .terminal:
                 TerminalArea(workspace: workspace)
                     // Behind the key bar and keyboard, which float over the terminal.
-                    .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
+                    .background {
+                        Rectangle().fill(showsContentCard ? AnyShapeStyle(DS.Palette.sidebar) : AnyShapeStyle(theme.background))
+                            .ignoresSafeArea(.all, edges: .bottom)
+                    }
                     // The ink goes on each destination, never above a toolbar.
                     .chromeContent()
                     .modifier(StripRoom(stripShown: showsStrip))
@@ -569,7 +580,7 @@ private struct DetailColumn: View {
         .navigationTitle(title)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
-        .chromeBarBackground(.base)
+        .chromeBarBackground(showsContentCard ? .sidebar : .base)
         #endif
         #if os(iOS)
         .navigationSubtitle(model.destination == .terminal ? subtitle : "")
@@ -595,7 +606,7 @@ private struct DetailColumn: View {
         .onChange(of: model.git.hub?.repos != nil, initial: true) { _, hasRepos in
             if hasRepos { model.git.syncAutoDelete() }
         }
-        .chromeBackground(DS.Palette.base)
+        .chromeBackground(showsContentCard ? DS.Palette.sidebar : DS.Palette.base)
     }
 
     private var showsStrip: Bool {
@@ -1129,8 +1140,11 @@ struct ActiveTabView: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
+    @Environment(\.showsContentCard) private var showsContentCard
 
     private var handoff: TabHandoff { workspace.tabHandoff }
+
+    private var isCard: Bool { showsContentCard && !compact }
 
     var body: some View {
         Group {
@@ -1160,7 +1174,7 @@ struct ActiveTabView: View {
         .overlay(alignment: .top) {
             if workspace.host != nil { HostNotices(workspace: workspace) }
         }
-        .background(theme.background, ignoresSafeAreaEdges: [])
+        .background(isCard ? AnyShapeStyle(DS.Palette.sidebar) : AnyShapeStyle(theme.background), ignoresSafeAreaEdges: [])
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
             // An external display showing this window's tab scales to this area.
             if !model.isPresentation, model.terminalArea != size { model.terminalArea = size }
@@ -1185,8 +1199,19 @@ struct ActiveTabView: View {
             .overlay {
                 if compact { PictureInPicture(workspace: workspace, tab: tab) }
             }
-            .padding(paneStyle == .comfortable && isSplit ? DS.Space.row : 0)
-            .background(paneStyle == .comfortable && isSplit ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(theme.background), ignoresSafeAreaEdges: [])
+            .padding(paneInset(isSplit: isSplit))
+            .background(paneSurround(isSplit: isSplit), ignoresSafeAreaEdges: [])
+            .environment(\.showsContentCard, isCard)
+    }
+
+    private func paneInset(isSplit: Bool) -> CGFloat {
+        if isCard { return ContentCard.inset }
+        return paneStyle == .comfortable && isSplit ? DS.Space.row : 0
+    }
+
+    private func paneSurround(isSplit: Bool) -> AnyShapeStyle {
+        if isCard { return AnyShapeStyle(DS.Palette.sidebar) }
+        return paneStyle == .comfortable && isSplit ? AnyShapeStyle(DS.Palette.base) : AnyShapeStyle(theme.background)
     }
 }
 

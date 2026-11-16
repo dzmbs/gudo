@@ -4,6 +4,7 @@ import Testing
 @Suite struct InteractionDefaultsTests {
     @Test func paneEmphasisIsOffByDefault() {
         #expect(TerminalPreferences.Default.paneActiveBorder == false)
+        #expect(TerminalPreferences.Default.paneContentCard == false)
         #expect(TerminalPreferences.Default.paneInactiveFade == .dim)
         #expect(TerminalPreferences.InactivePaneFade.dim.dimsContent && TerminalPreferences.InactivePaneFade.dim.dimsHeader)
         #expect(!TerminalPreferences.InactivePaneFade.header.dimsContent && TerminalPreferences.InactivePaneFade.header.dimsHeader)
@@ -13,6 +14,7 @@ import Testing
     @Test func storedValuesKeepTheirNames() {
         #expect(TerminalPreferences.Key.paneActiveBorder == "pane-active-border")
         #expect(TerminalPreferences.Key.paneInactiveFade == "pane-inactive-fade")
+        #expect(TerminalPreferences.Key.paneContentCard == "pane-content-card")
         #expect(TerminalPreferences.Key.sidebarTextSize == "sidebar-text-size")
         #expect(ToastPosition.key == "toast-position")
         #expect(TerminalPreferences.InactivePaneFade.allCases.map(\.rawValue) == ["dim", "header", "none"])

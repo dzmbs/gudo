@@ -593,6 +593,14 @@ tabs to reorder.
 - Comfortable pane style (Settings → Panes): inset rounded panes on the window's own base surface (no field of its own whose square edges meet the chrome),
   each a `Surface.pane` (opaque, its edges and top light, no shadow). Compact panes are tiles:
   the split's one-pixel line is their only boundary.
+- Inset content card (`pane-content-card`, Settings › Appearance › Panes, off by default, Comfortable
+  only, regular width): the terminal sits `Space.s` in from the window's edges and the sidebar on
+  the sidebar's colour, which also fills the band under the title bar (or the iPad's bar and tab
+  strip); the sidebar's divider keeps its drag but draws no line. Each pane is the card, a lone one
+  too: a `Surface.pane` with radius `pane`, the gaps between panes the same colour, so every
+  corner is the pane's own and no square corner meets a junction. Switching it changes the layout
+  once, without animation, and each terminal's grid once (`ContentCard`,
+  `ThemeConsistencyTests.testTheContentCardSitsInsetOnTheSidebarColour`).
 
 ### Floating panes, rearranging, zoom
 
@@ -1027,7 +1035,8 @@ swatches (red, green, blue, yellow), the selected card ringed in the accent; the
 shows an "Aa" tile in the theme's colours and four dots), Window (`window-theme`), Sidebar Text
 Size, Toasts (where they appear), Program Marks (Original, Monochrome, Accent). Panes: each choice a small card drawn in SwiftUI in the user's
 own theme (two panes, the left one active, prompt lines in its ANSI colours), live as the other
-settings change: Compact / Comfortable, then Dim / Dim Header Only / None for inactive panes,
+settings change: Compact / Comfortable, the Inset Content Card toggle (Comfortable only), then
+Dim / Dim Header Only / None for inactive panes,
 then the Ring Around the Active Pane toggle; the chosen card ringed in the accent with a ✓ by its
 name (`Views/PanesSettings.swift`).
 Follow Light and Dark Mode (Ghostty's `theme = light:X,dark:Y`): a light and a dark

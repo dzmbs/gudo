@@ -7,6 +7,7 @@ struct PanesSettingsSection: View {
     @AppStorage(TerminalPreferences.Key.paneStyle) private var paneStyle = TerminalPreferences.PaneStyle.compact
     @AppStorage(TerminalPreferences.Key.paneActiveBorder) private var activeBorder = TerminalPreferences.Default.paneActiveBorder
     @AppStorage(TerminalPreferences.Key.paneInactiveFade) private var inactiveFade = TerminalPreferences.Default.paneInactiveFade
+    @AppStorage(TerminalPreferences.Key.paneContentCard) private var contentCard = TerminalPreferences.Default.paneContentCard
 
     var body: some View {
         Section {
@@ -16,6 +17,17 @@ struct PanesSettingsSection: View {
             .accessibilityLabel("Pane Style")
             .accessibilityIdentifier("settings-pane-style")
             .settingAnchor("pane-style")
+            Toggle(isOn: $contentCard) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Inset Content Card")
+                    Text("Comfortable panes as rounded cards on the sidebar's colour")
+                        .font(.caption)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            .disabled(paneStyle != .comfortable)
+            .accessibilityIdentifier("settings-pane-content-card")
+            .settingAnchor("pane-content-card")
             PreviewChoices(selection: $inactiveFade, choices: TerminalPreferences.InactivePaneFade.allCases, title: \.title) { fade in
                 PanePairPreview(style: paneStyle, fade: fade, activeBorder: activeBorder)
             }
