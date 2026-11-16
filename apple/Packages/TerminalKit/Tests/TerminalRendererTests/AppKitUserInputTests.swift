@@ -47,6 +47,7 @@ import Testing
 
     private enum Key: UInt16 {
         case a = 0, s = 1, l = 37, c = 8, u = 32, returnKey = 36, delete = 51, escape = 53
+        case home = 115, pageUp = 116, end = 119, pageDown = 121
         case left = 123, right = 124, down = 125, up = 126
     }
 
@@ -56,6 +57,10 @@ import Testing
         case .down: NSDownArrowFunctionKey
         case .left: NSLeftArrowFunctionKey
         case .right: NSRightArrowFunctionKey
+        case .home: NSHomeFunctionKey
+        case .end: NSEndFunctionKey
+        case .pageUp: NSPageUpFunctionKey
+        case .pageDown: NSPageDownFunctionKey
         default: nil
         }
         return scalar.flatMap(UnicodeScalar.init).map { String(Character($0)) }
@@ -148,6 +153,41 @@ import Testing
         fixture.view.surface.scroll(rows: -10)
         #expect(!fixture.terminal.viewportAtBottom)
         try type("a", in: fixture)
+        #expect(fixture.terminal.viewportAtBottom)
+    }
+
+    // MARK: Scrollback keys
+
+    private func rowsAboveViewport(_ terminal: Terminal) -> Int { terminal.scrollbar.offset }
+
+    /// ⌘Page Up/Down page through the scrollback and ⌘Home/End go to its top and bottom, as in
+    /// Ghostty on the Mac; none of them reaches the program.
+    @Test func commandPageKeysScrollTheScrollback() throws {
+        let fixture = try makeTerminal()
+        fixture.terminal.write(Array((0..<60).map { "line \($0)\r\n" }.joined().utf8))
+        let bottom = rowsAboveViewport(fixture.terminal)
+        let page = fixture.terminal.scrollbar.visible
+        #expect(bottom > page * 2)
+
+        try press(.pageUp, modifiers: .command, in: fixture)
+        #expect(rowsAboveViewport(fixture.terminal) == bottom - page)
+        try press(.pageUp, modifiers: .command, in: fixture)
+        #expect(rowsAboveViewport(fixture.terminal) == bottom - 2 * page)
+        try press(.pageDown, modifiers: .command, in: fixture)
+        #expect(rowsAboveViewport(fixture.terminal) == bottom - page)
+        try press(.home, modifiers: .command, in: fixture)
+        #expect(rowsAboveViewport(fixture.terminal) == 0)
+        try press(.end, modifiers: .command, in: fixture)
+        #expect(fixture.terminal.viewportAtBottom)
+        #expect(fixture.written.bytes.withLock { $0 }.isEmpty)
+    }
+
+    /// Without ⌘ the page keys are the program's (a pager, an editor), as in Ghostty on the Mac.
+    @Test func pageKeysWithoutCommandReachTheProgram() throws {
+        let fixture = try makeTerminal()
+        fixture.terminal.write(Array((0..<60).map { "line \($0)\r\n" }.joined().utf8))
+        try press(.pageUp, in: fixture)
+        #expect(fixture.written.text == "\u{1b}[5~")
         #expect(fixture.terminal.viewportAtBottom)
     }
 
@@ -286,9 +326,9 @@ import Testing
     @Test func theWheelScrollsTheScrollbackThreeRowsALine() throws {
         let fixture = try makeTerminal()
         fixture.terminal.write(Array((0..<60).map { "line \($0)\r\n" }.joined().utf8))
-        let bottom = fixture.terminal.scrollbar.offset
+        let bottom = rowsAboveViewport(fixture.terminal)
         try wheel(lines: 1, in: fixture)
-        #expect(fixture.terminal.scrollbar.offset == bottom - 3)
+        #expect(rowsAboveViewport(fixture.terminal) == bottom - 3)
         try wheel(lines: -1, in: fixture)
         #expect(fixture.terminal.viewportAtBottom)
         #expect(fixture.written.bytes.withLock { $0 }.isEmpty)

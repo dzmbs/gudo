@@ -773,6 +773,10 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             emit(bytes)
             return
         }
+        if !hasMarkedText(), let move = keyEvent(event, action: action).scrollbackMove {
+            surface.scroll(move)
+            return
+        }
         if event.modifierFlags.contains(.command) {
             // A ⌘ chord no menu item took (Copy without a selection) is the program's, as in
             // Ghostty: the legacy encoding drops it and the kitty protocol reports it.

@@ -1054,6 +1054,10 @@ public final class TerminalView: UIView {
             }
             return true
         }
+        if markedText == nil, let move = KeyEvent(key: key, action: action, mods: mods, text: "", unshiftedCodepoint: 0).scrollbackMove {
+            surface.scroll(move)
+            return true
+        }
         guard !uiKey.modifierFlags.contains(.command), markedText == nil, !inputSourceComposes else { return false }
 
         let unshifted = uiKey.charactersIgnoringModifiers.unicodeScalars.first?.value ?? 0

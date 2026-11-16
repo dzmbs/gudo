@@ -743,6 +743,18 @@ public final class TerminalSurface {
         onScroll?(rows)
     }
 
+    /// Moves through the scrollback by a page, or to its top or bottom.
+    public func scroll(_ move: ScrollbackMove) {
+        let scrollbar = terminal.scrollbar
+        let rows = switch move {
+        case .pageUp: -Int(terminal.size.rows)
+        case .pageDown: Int(terminal.size.rows)
+        case .top: -scrollbar.offset
+        case .bottom: scrollbar.total - scrollbar.visible - scrollbar.offset
+        }
+        scroll(rows: rows)
+    }
+
     /// Encodes a key press for the PTY and snaps the viewport back to the bottom, as Ghostty does.
     /// The input also goes through the echo predictor and restarts the cursor blink.
     public func encode(_ key: KeyEvent) -> [UInt8] {
