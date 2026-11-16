@@ -154,7 +154,10 @@ final class MacSnapshotTests: XCTestCase {
             context.clip(to: pixels(rect))
             context.setFillColor(NSColor(theme.background).cgColor)
             context.fill(pixels(rect))
-            context.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - CGFloat(still.height), width: CGFloat(still.width), height: CGFloat(still.height)))
+            // The window server's picture need not share the terminal's backing scale.
+            let stillScale = scale / surface.layer.contentsScale
+            let stillSize = CGSize(width: CGFloat(still.width) * stillScale, height: CGFloat(still.height) * stillScale)
+            context.draw(still, in: CGRect(x: pixels(rect).minX, y: pixels(rect).maxY - stillSize.height, width: stillSize.width, height: stillSize.height))
             context.restoreGState()
         }
         let focused = workspace.focusedPane
