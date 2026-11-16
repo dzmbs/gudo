@@ -18,6 +18,9 @@ struct PaneHeader: View {
     #else
     static let restingOpacity = DS.Opacity.mutedGlyph
     #endif
+    /// A status at the trailing edge sits as far in as the title does at the leading one (the
+    /// band's own trailing inset is the buttons', which carry their own room).
+    static let statusInset = DS.Space.s - DS.Space.xxs
     /// Headers come and go with a split by fading in the structural spring, over a grid
     /// already laid out below them.
     static let arrival = MotionTransition(role: .structural)
@@ -72,20 +75,23 @@ struct PaneHeader: View {
                 }
             }
             Spacer(minLength: 0)
-            if let hint = accounts?.limitHint(forPane: id.rawValue) {
-                LimitHintMenu(hint: hint) {
-                    model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
-                }
-            }
             #if os(iOS)
             if let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil {
                 PaneChatToggle(pane: pane, state: chat)
             }
             #endif
-            PanePresence(workspace: workspace, pane: id)
+            // Before the status: hidden at rest on the Mac, they would leave it floating where
+            // they stand.
             PaneHeaderButtons(id: id, workspace: workspace, window: window, focus: focus)
                 .opacity(isHovered ? 1 : Self.restingOpacity)
                 .animation(DS.Motion.micro, value: isHovered)
+            if let hint = accounts?.limitHint(forPane: id.rawValue) {
+                LimitHintMenu(hint: hint) {
+                    model.startAgent(onGroup: workspace.groupId, agent: hint.alternative.agent, account: hint.alternative.id, from: id)
+                }
+                .padding(.trailing, Self.statusInset)
+            }
+            PanePresence(workspace: workspace, pane: id)
         }
         .paneHeaderBand(isFocused: isFocused)
         .onChange(of: PaneArrangement.HeaderStill(headline: headline, isFocused: isFocused), initial: true) { _, still in

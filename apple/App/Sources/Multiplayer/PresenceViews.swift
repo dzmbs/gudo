@@ -111,6 +111,7 @@ struct PanePresence: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(label(session, people, driver))
                 .accessibilityIdentifier("pane-presence-\(pane.rawValue)")
+                .padding(.trailing, PaneHeader.statusInset)
             }
         }
     }

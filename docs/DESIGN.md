@@ -615,9 +615,10 @@ minimizing only move and resize views in one `structural` spring, and no termina
   window's Dock (lit) and Minimize take the splits' place. Then ⋯ with the pane menu (browser,
   float, move, find, share). The same set on every pane at the same resting opacity (hidden until
   hover on the Mac, 0.6 on touch), so nothing changes when focus moves; a narrow pane keeps only
-  ⋯. Each has its shortcut in the tooltip. Double-click
-  the header zooms. Right-click: Reset Terminal, splits, Float/Dock, Minimize, Pin Across Tabs,
-  Zoom, Pop Out to Window, Copy Pane ID, Close.
+  ⋯. They stand before the pane's status (At Limit, who is here), which keeps the trailing edge,
+  inset as far as the title. Each has its shortcut in the tooltip. Double-click the header
+  zooms. Right-click: Reset Terminal, splits, Float/Dock, Minimize, Pin Across Tabs, Zoom, Pop
+  Out to Window, Copy Pane ID, Close.
 - **Drag to rearrange.** The header is the handle (6 pt to start). The pane dims to 45 %, a
   glass chip with its mark, name and directory follows the hand, and the canvas shows the drop
   before it happens: the other panes make room in the `standard` spring (as pictures of their
