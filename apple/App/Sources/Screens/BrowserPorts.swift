@@ -177,6 +177,8 @@ struct PortsList: View {
 /// covers a page's address bar.
 struct PortOfferBanner: ViewModifier {
     let model: WindowModel
+    /// Clear of a sidebar at the window's leading edge.
+    var leadingInset: CGFloat = 0
     /// Exposed so other banners can sit above it.
     static let height: CGFloat = 52
 
@@ -196,7 +198,7 @@ struct PortOfferBanner: ViewModifier {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(verbatim: "localhost:\(port.port) is up")
                             .font(DS.Font.literal.weight(.medium))
-                        Text(port.pane.map { "\(port.process) · \($0)" } ?? port.process)
+                        Text(port.pane.map { "\(port.process) · \(Self.command($0))" } ?? port.process)
                             .font(DS.Font.rowSubtitle)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -217,6 +219,7 @@ struct PortOfferBanner: ViewModifier {
                 .floatingCapsule()
                 .frame(maxWidth: 520, alignment: .leading)
                 .padding(.horizontal, DS.Space.l)
+                .padding(.leading, leadingInset)
                 .padding(.bottom, Self.bottomInset(model))
                 .motionTransition(.toast(from: .bottom))
                 .task(id: port.port) {
@@ -229,11 +232,20 @@ struct PortOfferBanner: ViewModifier {
         }
         .animation(DS.Motion.standard, value: model.ports.offer)
     }
+
+    /// The command that started the server, without a leading `clear` (`clear; npm run dev`).
+    static func command(_ text: String) -> String {
+        var rest = Substring(text.trimmingCharacters(in: .whitespaces))
+        while let match = rest.prefixMatch(of: /clear\s*(;|&&)\s*/) {
+            rest = rest[match.range.upperBound...]
+        }
+        return String(rest)
+    }
 }
 
 extension View {
-    func portOffers(_ model: WindowModel) -> some View {
-        modifier(PortOfferBanner(model: model))
+    func portOffers(_ model: WindowModel, leadingInset: CGFloat = 0) -> some View {
+        modifier(PortOfferBanner(model: model, leadingInset: leadingInset))
     }
 }
 
@@ -288,6 +300,10 @@ extension WindowModel {
     /// Where tools are leaves, a page leaf beside `tool`, else a browser tab, reusing a leaf already
     /// showing the URL (in the current tab first); otherwise the browser sheet.
     func openPage(_ url: URL, hostId: String?, besideTool tool: UUID? = nil) {
+        // The offer for this server is answered once its page opens, whichever way it did.
+        if let offer = ports.offer, url.port == Int(offer.port) {
+            ports.dismissOffer()
+        }
         guard opensToolsAsLeaves else {
             browserURL = url
             browserHost = hostId

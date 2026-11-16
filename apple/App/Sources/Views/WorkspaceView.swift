@@ -53,6 +53,11 @@ struct WorkspaceView: View {
 
     private var theme: TerminalTheme { ThemeCatalog.theme(named: themeName) }
 
+    /// The sidebar's width while it is shown beside the panes.
+    private var sidebarInset: CGFloat {
+        model.isSidebarShown && model.widthBucket != .compact ? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) : 0
+    }
+
     var body: some View {
         @Bindable var model = model
         content
@@ -83,11 +88,12 @@ struct WorkspaceView: View {
             }
             .overlay(alignment: toastPosition.alignment) { AgentToastStack(position: toastPosition) }
             // At the top, clear of the pane headers' buttons.
+            // Clear of the sidebar's footer (New Project, Settings) at the bottom left.
             .toastHost(model.toasts, bottomInset: PortOfferBanner.bottomInset(model)
                 + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0),
-                topInset: PaneHeader.height + DS.Space.l)
+                topInset: PaneHeader.height + DS.Space.l, leadingInset: sidebarInset)
             .dictationIndicator()
-            .portOffers(model)
+            .portOffers(model, leadingInset: sidebarInset)
             .sheet(item: $model.sheet) { route in
                 SheetContent(route: route, workspace: workspace)
                     .environment(model)

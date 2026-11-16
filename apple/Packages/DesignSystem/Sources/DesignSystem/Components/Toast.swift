@@ -318,6 +318,7 @@ private struct ToastHost: ViewModifier {
     let center: ToastCenter
     let bottomInset: CGFloat
     let topInset: CGFloat
+    let leadingInset: CGFloat
 
     @State private var host = CGRect.zero
     @State private var size = CGSize.zero
@@ -333,6 +334,7 @@ private struct ToastHost: ViewModifier {
                     Banner(toast, edge: position.edge, alignment: position.horizontalAlignment) { center.dismiss() }
                         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
                         .padding(.horizontal, DS.Space.l)
+                        .padding(.leading, position == .bottomLeading ? leadingInset : 0)
                         .padding(position.edge == .top ? .top : .bottom, position.edge == .top ? topInset : bottomInset)
                         .offset(y: obstacleOffset)
                         .animation(accessibility.travel(DS.Motion.standard), value: center.obstacles.count)
@@ -355,9 +357,12 @@ private struct ToastHost: ViewModifier {
 
 public extension View {
     /// Banners for `center` at the user's `ToastPosition`: `bottomInset` over the bottom safe
-    /// area (and the keyboard), `topInset` under the top one.
-    func toastHost(_ center: ToastCenter, bottomInset: CGFloat = DS.Space.l, topInset: CGFloat = DS.Space.l) -> some View {
-        modifier(ToastHost(center: center, bottomInset: bottomInset, topInset: topInset))
+    /// area (and the keyboard), `topInset` under the top one, and at the bottom left
+    /// `leadingInset` clear of a sidebar there.
+    func toastHost(
+        _ center: ToastCenter, bottomInset: CGFloat = DS.Space.l, topInset: CGFloat = DS.Space.l, leadingInset: CGFloat = 0
+    ) -> some View {
+        modifier(ToastHost(center: center, bottomInset: bottomInset, topInset: topInset, leadingInset: leadingInset))
     }
 
     /// Keeps the window's banners (`toastHost`) clear of this view: a card at the bottom of a
