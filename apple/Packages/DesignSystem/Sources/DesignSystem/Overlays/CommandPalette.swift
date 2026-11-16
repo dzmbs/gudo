@@ -116,6 +116,9 @@ public struct CommandPalette: View {
         .floatingPanel(cornerRadius: DS.Radius.panel, elevated: true)
         .padding(.horizontal, DS.Space.l)
         .task { await takeFocus() }
+        #if os(iOS)
+        .onEscapeKey(perform: close)
+        #endif
         #if os(macOS)
         .onModifierKeysChanged(mask: .command, initial: true) { _, keys in isCommandHeld = keys.contains(.command) }
         #endif
@@ -369,6 +372,9 @@ private struct SpotlightLayer<Panel: View>: View {
                     .padding(.top, min(max(geometry.size.height * 0.16, DS.Space.l), 180))
                     .padding(.bottom, DS.Space.l)
             }
+            // The window's own frame from the first pass: a reader places a child at its top
+            // leading corner, so a panel measured narrow at first showed left of centre.
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
         }
         .onAppear {
             withAnimation(DS.Motion.palette) { hasArrived = true }

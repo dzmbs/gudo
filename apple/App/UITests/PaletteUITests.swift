@@ -43,6 +43,23 @@ final class PaletteUITests: XCTestCase {
         waitForExpectations(timeout: 10)
     }
 
+    /// ⌘. (Esc on an iPad keyboard without one) closes the palette while its field has the
+    /// keyboard, as Esc does. The Simulator's synthesized Esc never reaches the app's key
+    /// commands, so only ⌘. is driven here.
+    func testEscapeClosesThePalette() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-restoreLastTarget", "NO", "-localEcho", "YES"]
+        app.launch()
+        let pane = app.descendants(matching: .any)["pane-1"].firstMatch
+        XCTAssertTrue(pane.waitForExistence(timeout: 10))
+        let field = app.textFields.matching(identifier: "command-palette").firstMatch
+        app.buttons["open-palette"].firstMatch.tap()
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "the palette opens")
+        field.typeText("split")
+        app.typeKey(".", modifierFlags: .command)
+        XCTAssertTrue(field.waitForNonExistence(timeout: 5), "⌘. closes the palette")
+    }
+
     /// The ⌘ button while the terminal holds the keyboard: the search field takes it at once, so
     /// typing narrows the list with no tap on the field.
     func testPaletteFieldHasTheKeyboardAsItOpens() throws {
