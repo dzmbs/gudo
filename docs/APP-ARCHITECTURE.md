@@ -464,7 +464,7 @@ pair again on their own.
 and until this launch first reaches it, This Mac reads "Starting…" (`ConnectionState.starting`,
 `AppModel.isStartingHelper`): in the header's subtitle and, after 2 s, the notice; no "last
 contact", a light wash over panes that are not saved screens after 1 s, never the lost-connection
-card. A link to a running helper that drops reads as reconnecting, and its card says the helper
+card (past 40 s a card says the helper hasn't answered yet, with Retry Now). A link to a running helper that drops reads as reconnecting, and its card says the helper
 isn't answering, never that sessions keep running. Each step of a start is logged with how long it
 took (info, category `helper`, "helper start: …"); a login item that runs nothing is unregistered
 without waiting for it, and the helper from before the rename is only looked for while its folder

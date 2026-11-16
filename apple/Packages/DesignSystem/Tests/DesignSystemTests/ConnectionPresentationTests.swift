@@ -20,7 +20,10 @@ import Testing
         let shown = presentation(state, thisDevice: true, downFor: 10)
         #expect(shown.notice?.text == "Starting…")
         #expect(shown.card == nil)
-        #expect(presentation(state, thisDevice: true, downFor: 120).card == nil, "starting never turns into a lost-connection card")
+        let stuck = presentation(state, thisDevice: true, downFor: 120).card
+        #expect(stuck?.title.contains("Lost") == false, "a start that takes long is not a lost connection")
+        #expect(stuck?.detail.contains("keep running") == false)
+        #expect(stuck?.action == "Retry Now")
     }
 
     @Test func nothingShowsForAQuickStart() {

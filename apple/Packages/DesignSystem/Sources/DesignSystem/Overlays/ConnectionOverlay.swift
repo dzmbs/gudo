@@ -242,7 +242,14 @@ struct ConnectionPresentation: Equatable {
             fade = 0
         case .starting:
             fade = !showsSavedState && downFor >= Self.noticeAfter ? ChromePalette.waitingLevel : 0
-            if downFor >= Self.dimAfter { notice = NoticeCopy(before: "Starting…") }
+            if downFor >= Self.cardAfter {
+                card = CardCopy(
+                    title: "The helper on \(hostName) hasn't answered",
+                    detail: "It is still starting. Retrying automatically.",
+                    action: "Retry Now")
+            } else if downFor >= Self.dimAfter {
+                notice = NoticeCopy(before: "Starting…")
+            }
         case .connecting where showsSavedState:
             if downFor >= Self.dimAfter { notice = NoticeCopy(before: "Connecting to ", host: hostName, after: "…") }
         case .connecting(let phase):
