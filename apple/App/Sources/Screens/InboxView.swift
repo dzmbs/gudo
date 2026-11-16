@@ -523,16 +523,38 @@ private struct InboxFilterBar: View {
     @Binding var selection: InboxFilter
     let counts: [InboxFilter: Int]
     @Namespace private var pill
+    /// Which ends of the scrolling track have more filters past them.
+    @State private var hiddenEnds = HiddenEnds(leading: false, trailing: true)
+
+    struct HiddenEnds: Equatable {
+        var leading: Bool
+        var trailing: Bool
+    }
 
     var body: some View {
         // In a narrow window or at large text sizes the track scrolls instead of cutting
-        // "Needs You" to "Ne…".
+        // "Needs You" to "Ne…", and fades where more filters wait.
         ViewThatFits(in: .horizontal) {
             track
             ScrollView(.horizontal) {
                 track
             }
             .scrollIndicators(.never)
+            .onScrollGeometryChange(for: HiddenEnds.self) { geometry in
+                HiddenEnds(leading: geometry.contentOffset.x > 0.5,
+                           trailing: geometry.contentOffset.x + geometry.containerSize.width < geometry.contentSize.width - 0.5)
+            } action: { _, ends in hiddenEnds = ends }
+            .mask {
+                HStack(spacing: 0) {
+                    // style-exempt: a mask, only its alpha counts
+                    LinearGradient(colors: [hiddenEnds.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: DS.Size.stripFade)
+                    Rectangle()
+                    // style-exempt: a mask, only its alpha counts
+                    LinearGradient(colors: [.black, hiddenEnds.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: DS.Size.stripFade)
+                }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox-filters")
@@ -659,6 +681,7 @@ private struct InboxRow: View {
     @State private var edited = ""
     @FocusState private var isComposerFocused: Bool
     @FocusState private var isEditFocused: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     /// A 16 pt glyph slot, then the text column (where separators start).
     static let glyphSlot: CGFloat = InboxType.glyph + 4
@@ -716,11 +739,13 @@ private struct InboxRow: View {
     }
 
     /// What the agent is on (its prompt or state, a command line), unread in the heavier weight.
+    /// At the largest text sizes it wraps rather than cutting the state to "Waitin…".
     private var title: some View {
         Text(verbatim: item.prompt)
             .font(item.isCommand ? InboxType.command : InboxType.title.weight(item.unseen || item.state.needsYou ? .semibold : .regular))
             .foregroundStyle(DS.Palette.text)
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
+            .layoutPriority(1)
             .truncationMode(item.isCommand ? .middle : .tail)
             .shimmering(item.state == .working, text: item.prompt)
     }

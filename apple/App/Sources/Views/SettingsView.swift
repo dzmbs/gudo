@@ -130,7 +130,7 @@ struct SettingsView: View {
                 .chromeGrouped()
                 .environment(\.settingsHighlight, highlight)
             }
-            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Settings or Ghostty Keys")
+            .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Settings")
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: SettingsPage.self) { SettingsPageView(page: $0) }
@@ -456,7 +456,9 @@ private struct AppearanceSection: View {
             if !themePair {
                 NavigationLink(value: SettingsPage.theme) {
                     HStack {
+                        // The word stays whole at the largest text sizes; the theme's name gives way.
                         ConfigLabel("Theme", key: "theme")
+                            .layoutPriority(1)
                         Spacer()
                         ThemeSwatch(theme: ThemeCatalog.theme(named: theme))
                         Text(theme).foregroundStyle(DS.Palette.textSecondary).lineLimit(1)
@@ -466,11 +468,13 @@ private struct AppearanceSection: View {
                 .settingAnchor("theme")
             }
             ThemePairRows()
-            Picker("Sidebar Text Size", selection: $sidebarTextSize) {
-                ForEach(TerminalPreferences.SidebarTextSize.allCases) { Text($0.title).tag($0) }
+            if !Self.isPhone {
+                Picker("Sidebar Text Size", selection: $sidebarTextSize) {
+                    ForEach(TerminalPreferences.SidebarTextSize.allCases) { Text($0.title).tag($0) }
+                }
+                .accessibilityIdentifier("settings-sidebar-text-size")
+                .settingAnchor("sidebar-text-size")
             }
-            .accessibilityIdentifier("settings-sidebar-text-size")
-            .settingAnchor("sidebar-text-size")
             Picker("Toasts", selection: $toastPosition) {
                 ForEach(ToastPosition.allCases) { Text($0.title).tag($0) }
             }
@@ -486,19 +490,23 @@ private struct AppearanceSection: View {
             }
             .accessibilityIdentifier("settings-title-from-shell")
             .settingAnchor("title-from-shell")
-            #if os(macOS)
-            Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
-                .settingAnchor("tab-bar")
-            #else
-            if UIDevice.current.userInterfaceIdiom != .phone {
+            if !Self.isPhone {
                 Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
                     .settingAnchor("tab-bar")
             }
-            #endif
             windowRows
         } header: {
             PaneSectionTitle("Appearance")
         }
+    }
+
+    /// The sidebar and the tab strip are the Mac's and the iPad's.
+    private static var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
     }
 
     /// The window takes the theme's colours unless the user keeps it light, dark or with the
@@ -512,7 +520,7 @@ private struct AppearanceSection: View {
         Toggle(isOn: matches.animation(DS.Motion.micro)) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Window Matches Theme")
-                Text("Sidebar, toolbar and key bar in the theme's colours")
+                Text(Self.isPhone ? "Bars and key bar in the theme's colours" : "Sidebar, toolbar and key bar in the theme's colours")
                     .font(.caption)
                     .foregroundStyle(DS.Palette.textTertiary)
             }

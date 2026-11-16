@@ -71,7 +71,9 @@ private struct PreviewChoices<Choice: Hashable & Identifiable, Preview: View>: V
                             Text(choice[keyPath: title])
                                 .font(DS.Font.caption)
                                 .foregroundStyle(isSelected ? DS.Palette.text : DS.Palette.textSecondary)
-                                .lineLimit(1)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .frame(maxWidth: .infinity)
