@@ -66,6 +66,34 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertEqual(editor.text, "かな")
     }
 
+    func testTheLastRowClearsTheComposerAndRowsPassUnderItsFadingEdge() async throws {
+        let frame = preparedFrame(40)
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settle()
+        let view = try XCTUnwrap(controller.view)
+        let composer = try XCTUnwrap(controller.footer.view)
+        func assertLastRowClears(file: StaticString = #filePath, line: UInt = #line) throws {
+            let path = IndexPath(item: frame.rows.count - 1, section: 0)
+            let last = try XCTUnwrap(controller.collection.layoutAttributesForItem(at: path)).frame
+            let bottom = controller.collection.convert(last, to: view).maxY
+            XCTAssertLessThanOrEqual(bottom, composer.frame.minY - controller.bottomFade.fadeHeight + 0.5,
+                                     "the last row sits above the composer and its fade", file: file, line: line)
+        }
+        XCTAssertEqual(controller.collection.frame.maxY, view.bounds.maxY, "rows pass under the composer")
+        XCTAssertEqual(controller.bottomFade.frame.maxY, view.bounds.maxY)
+        XCTAssertEqual(controller.bottomFade.frame.minY, composer.frame.minY - controller.bottomFade.fadeHeight, accuracy: 0.5)
+        XCTAssertEqual(controller.topFade.frame.minY, view.safeAreaInsets.top, accuracy: 0.5)
+        try assertLastRowClears()
+
+        controller.update(frame: frame, expanded: [], environment: EnvironmentValues(), actions: ChatRowActions(),
+                          composer: AnyView(Text("A taller draft\nover\nfour\nlines").font(.body).padding(20)))
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        try await settle()
+        try assertLastRowClears()
+    }
+
     func testOversizedMessageHasABoundedNativeTerminalFallback() async throws {
         let row = ChatRow(id: ChatRowID(item: "omitted", part: 0), revision: 1, turn: "turn", content: .omitted)
         let frame = TimelineFrame(rows: [row], rowIDs: [row.id], revision: 1)

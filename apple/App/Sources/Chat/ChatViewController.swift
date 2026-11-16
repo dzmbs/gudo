@@ -90,6 +90,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     /// The working dots float over the transcript just above the composer, so the agent starting
     /// or stopping never moves a row.
     private(set) var working = UIHostingController(rootView: AnyView(EmptyView()))
+    /// Rows pass under the bar above and the composer below through a fade into the background.
+    let topFade = ChatEdgeFade(edge: .top, height: DS.Space.xxxl)
+    let bottomFade = ChatEdgeFade(edge: .bottom, height: DS.Space.xxl)
     private(set) var configuredCells = 0
     private(set) var measuredCells = 0
     private(set) var unfittedDisplays = 0
@@ -132,13 +135,17 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.contentInsetAdjustmentBehavior = .never
         collection.contentInset.top = Self.topClearance
         collection.verticalScrollIndicatorInsets.top = Self.topClearance
-        collection.contentInset.bottom = DS.Space.l
         collection.delegate = self
         collection.prefetchDataSource = self
         collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: "chat-block")
         collection.accessibilityIdentifier = "chat-timeline"
         view.addSubview(collection)
         collection.translatesAutoresizingMaskIntoConstraints = false
+        for fade in [topFade, bottomFade] {
+            view.addSubview(fade)
+            fade.translatesAutoresizingMaskIntoConstraints = false
+            fade.color = view.backgroundColor
+        }
         install(footer)
         install(latest)
         install(working)
@@ -150,7 +157,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             collection.topAnchor.constraint(equalTo: view.topAnchor),
             collection.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collection.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            collection.bottomAnchor.constraint(equalTo: footer.view.topAnchor),
+            collection.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            topFade.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            topFade.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            topFade.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            topFade.heightAnchor.constraint(equalToConstant: topFade.fadeHeight),
+            bottomFade.topAnchor.constraint(equalTo: footer.view.topAnchor, constant: -bottomFade.fadeHeight),
+            bottomFade.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomFade.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bottomFade.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             footer.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             footer.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             // SwiftUI already lifts this view above the keyboard; a keyboard guide here counted it
@@ -192,6 +207,13 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         if collection.contentInset.top != topInset {
             collection.contentInset.top = topInset
             collection.verticalScrollIndicatorInsets.top = topInset
+        }
+        let composerHeight = max(0, view.bounds.maxY - footer.view.frame.minY)
+        let bottomInset = composerHeight + bottomFade.fadeHeight
+        if collection.contentInset.bottom != bottomInset {
+            collection.contentInset.bottom = bottomInset
+            collection.verticalScrollIndicatorInsets.bottom = composerHeight
+            if model.followsBottom, !holdsPosition { scrollToBottom() }
         }
         let widthChanged = lastWidth != collection.bounds.width
         if widthChanged {
@@ -256,6 +278,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         working.rootView = AnyView(ChatWorkingIndicator().environment(\.self, environment))
         guard isViewLoaded else { pending = frame; return }
         view.backgroundColor = UIColor(environment.chrome.background.color)
+        topFade.color = view.backgroundColor
+        bottomFade.color = view.backgroundColor
         if frame.generation != current.generation { needsRestyle = true }
         if frame.revision != current.revision || frame.cursor != current.cursor || frame.rows.isEmpty != current.rows.isEmpty || previousExpanded != expanded || needsRestyle {
             pending = frame
@@ -647,6 +671,41 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         paragraphMetrics.clear()
         sizingHost.rootView = AnyView(EmptyView())
         model.releaseRenderCaches()
+    }
+}
+
+/// The background over the rows at an edge: clear where rows show, solid from the edge out.
+final class ChatEdgeFade: UIView {
+    enum Edge { case top, bottom }
+
+    let edge: Edge
+    let fadeHeight: CGFloat
+    var color: UIColor? { didSet { updateColors() } }
+
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    private var gradient: CAGradientLayer? { layer as? CAGradientLayer }
+
+    init(edge: Edge, height: CGFloat) {
+        self.edge = edge
+        fadeHeight = height
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        accessibilityElementsHidden = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let fade = bounds.height > 0 ? min(1, fadeHeight / bounds.height) : 1
+        gradient?.locations = edge == .top ? [0, NSNumber(value: fade)] : [0, NSNumber(value: fade), 1]
+    }
+
+    private func updateColors() {
+        let solid = color ?? .clear
+        let clear = solid.withAlphaComponent(0)
+        gradient?.colors = (edge == .top ? [solid, clear] : [clear, solid, solid]).map(\.cgColor)
     }
 }
 

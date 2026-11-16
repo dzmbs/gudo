@@ -59,9 +59,9 @@ final class ChatApprovalTests: XCTestCase {
         try await wait { state.controller != nil && state.model?.frame.rows.count == 12 }
         let controller = try XCTUnwrap(state.controller)
         try await Task.sleep(for: .milliseconds(100))
-        let available = controller.collection.bounds.height
+        let composerRoom = controller.collection.adjustedContentInset.bottom
         client.send(.paneMeta(meta: metadata(summary: "Run the private fixture tests", request: 99)))
-        try await wait { controller.collection.bounds.height < available - 60 }
+        try await wait { controller.collection.adjustedContentInset.bottom > composerRoom + 60 }
         XCTAssertTrue(connection.multiplayer.others.isEmpty)
         XCTAssertEqual(state.draft, "Retained phone draft")
         try capture(window, name: "chat-approval-owner")
@@ -78,19 +78,19 @@ final class ChatApprovalTests: XCTestCase {
         XCTAssertEqual(client.calls.filter { $0.hasPrefix("decide ") }, ["decide 99 0"])
         connection.multiplayer.apply(.decided(decided: Decided(paneId: 7, requestId: 99, optionId: 0,
                                       decidedBy: actor, atMs: UInt64(Date.now.timeIntervalSince1970 * 1_000))))
-        try await wait { abs(controller.collection.bounds.height - available) < 1 }
+        try await wait { abs(controller.collection.adjustedContentInset.bottom - composerRoom) < 1 }
         approval.answer(request: 99, option: allow)
         XCTAssertEqual(client.calls.filter { $0.hasPrefix("decide ") }, ["decide 99 0"])
         client.send(.paneMeta(meta: metadata(summary: "", request: 100)))
-        try await wait { abs(controller.collection.bounds.height - available) < 1 }
+        try await wait { abs(controller.collection.adjustedContentInset.bottom - composerRoom) < 1 }
         XCTAssertTrue(approval.hasBlockedRequest, "An unstructured question still blocks native prompt input")
         client.send(.paneMeta(meta: metadata(summary: "Another pane's request", request: 888, pane: 8)))
         try await wait { connection.meta[PaneId(8)] != nil }
-        XCTAssertEqual(controller.collection.bounds.height, available, accuracy: 1)
+        XCTAssertEqual(controller.collection.adjustedContentInset.bottom, composerRoom, accuracy: 1)
         connection.multiplayer.apply(.joined(info: JoinInfo(actor: actor, name: "Viewer", roles: [.viewer],
                                                             scope: .daemon, grantId: "fixture", expiresMs: nil)))
         client.send(.paneMeta(meta: metadata(summary: "Run the private fixture tests", request: 101)))
-        try await wait { controller.collection.bounds.height < available - 60 }
+        try await wait { controller.collection.adjustedContentInset.bottom > composerRoom + 60 }
         XCTAssertNotNil(connection.multiplayer.approvalBlock(requestId: 101, risk: .any))
         try capture(window, name: "chat-approval-viewer")
         approval.answer(request: 101, option: allow)

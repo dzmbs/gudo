@@ -311,7 +311,9 @@ vetoes. An unavailable pin opens Terminal without scrolling and shows an explici
 presentation selection or agent change clears that notice. Navigation does not launch an agent or write input.
 
 `ChatViewController` owns one normal-orientation reusable collection and a composer host pinned
-to the keyboard layout guide. A display-link coalesces pending frames; stopped views release
+to the keyboard layout guide. Rows pass under the bar and the composer through a fade into the
+theme's background (`ChatEdgeFade`); the list's bottom inset clears the composer and that fade, so
+the last row rests whole above it. A display-link coalesces pending frames; stopped views release
 that clock. Inactive presentation parks it and retains only the latest pending frame. Changed-row values and order revisions keep content-only updates independent of
 window length. Parent revisions detect a skipped render frame and force full reconciliation.
 A render generation also invalidates cached values when two connections reuse IDs and cursors.
