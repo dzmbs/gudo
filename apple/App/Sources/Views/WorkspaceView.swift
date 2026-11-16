@@ -1048,7 +1048,9 @@ struct LazyMenuButton<Items: View>: View {
     }
 
     private func open() {
-        guard let view = anchor.view ?? Self.clickedToolbarItem() else { return }
+        // NSMenu raises for a view in no window, and the raise unwinds through SwiftUI's own
+        // handling of the click.
+        guard let view = [anchor.view, toolbarItemView].compactMap({ $0 }).first(where: { $0.window != nil }) else { return }
         let menu = Self.menu(of: items(), in: environment)
         let below = view.isFlipped ? view.bounds.maxY + DS.Space.xs : view.bounds.minY - DS.Space.xs
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
@@ -1058,12 +1060,11 @@ struct LazyMenuButton<Items: View>: View {
         NSHostingMenu(rootView: items.environment(\.self, environment))
     }
 
-    /// A toolbar draws its buttons itself, without the label's views: the item clicked.
-    private static func clickedToolbarItem() -> NSView? {
-        guard let event = NSApp.currentEvent, let window = event.window else { return nil }
-        return window.toolbar?.items.lazy.compactMap(\.view).first { view in
-            view.window === window && view.bounds.contains(view.convert(event.locationInWindow, from: nil))
-        }
+    /// A toolbar draws a menu button as a control of its own and renders the label's views
+    /// elsewhere, out of any window: the bar's item of this name.
+    private var toolbarItemView: NSView? {
+        let window = NSApp.currentEvent?.window ?? NSApp.keyWindow
+        return window?.toolbar?.items.first { $0.label == title }?.view
     }
 }
 
