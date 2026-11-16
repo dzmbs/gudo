@@ -487,15 +487,15 @@ public final class TerminalSurface {
         return Grid(cols: UInt16(cols), rows: UInt16(rows), cellWidth: UInt32(metrics.cellWidth), cellHeight: UInt32(metrics.cellHeight))
     }
 
-    /// `window-padding-balance`: split the space left over after whole cells evenly, so the grid
-    /// sits centered instead of hugging the top-left edge.
+    /// `window-padding-balance`: split the width left over after whole cells evenly, so the grid
+    /// never hugs the leading edge. The leftover height stays below the last row: panes stacked
+    /// beside a taller one keep their first row the same distance under their headers.
     private func updateInset(for grid: Grid, in pixels: CGSize? = nil) {
         let pixels = pixels ?? pixelSize
         let pad = Int((appearance.padding * layer.contentsScale).rounded())
         guard appearance.paddingBalance else { return gridInset = SIMD2(pad, pad) }
         let extraX = Int(pixels.width) - 2 * pad - Int(grid.cols) * Int(grid.cellWidth)
-        let extraY = Int(pixels.height) - 2 * pad - Int(grid.rows) * Int(grid.cellHeight)
-        gridInset = SIMD2(pad + max(0, extraX) / 2, pad + max(0, extraY) / 2)
+        gridInset = SIMD2(pad + max(0, extraX) / 2, pad)
     }
 
     // MARK: Layout motion

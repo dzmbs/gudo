@@ -33,7 +33,8 @@ public struct TerminalAppearance: Sendable, Equatable {
     public var faintOpacity: Double = 0.5
     /// `window-padding-x/y` in points.
     public var padding: CGFloat = 2
-    /// `window-padding-balance`: center the grid in the leftover space (Ghostty's default: false).
+    /// `window-padding-balance`: center the grid across the leftover width, the top staying at
+    /// the padding (Ghostty's default: false).
     public var paddingBalance = false
     /// `unfocused-split-opacity`: how much of an unfocused split shows through the dimming. The
     /// host applies it; the renderer only carries the value.
