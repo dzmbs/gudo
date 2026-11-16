@@ -609,7 +609,17 @@ struct TabLeadingMark: View {
     /// The row's spoken label: name, then the agent's state or the program, then the host.
     static func label(title: String, program: ProgramIdentity, state: AgentState?, host: String?) -> String {
         let shown = state.flatMap { $0 == .idle || $0 == .unknown ? nil : "\(program.displayName), \($0.title)" } ?? program.displayName
-        return [title, shown, host].compactMap(\.self).joined(separator: ", ")
+        return [spoken(title), shown, host].compactMap(\.self).joined(separator: ", ")
+    }
+
+    /// A title as VoiceOver should say it: a path names its folder ("gudo folder", "Home
+    /// folder") rather than spelling out "tilde slash".
+    static func spoken(_ title: String) -> String {
+        guard title.hasPrefix("~") || title.hasPrefix("/") else { return title }
+        let trimmed = title.hasSuffix("/") && title.count > 1 ? String(title.dropLast()) : title
+        if trimmed == "~" { return "Home folder" }
+        if trimmed == "/" { return "Root folder" }
+        return "\(trimmed.split(separator: "/").last.map(String.init) ?? trimmed) folder"
     }
 }
 

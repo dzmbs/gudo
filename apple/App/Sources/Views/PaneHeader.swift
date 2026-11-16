@@ -179,8 +179,11 @@ struct PaneTitle<Detail: View>: View {
                     .foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1)
                     .truncationMode(.head)
+                    .accessibilityLabel(TabLeadingMark.spoken(directory))
             }
         }
+        // One element for VoiceOver: "zsh, Home folder", not a tilde of its own.
+        .accessibilityElement(children: .combine)
         .animation(DS.Motion.micro, value: isFocused)
     }
 }
