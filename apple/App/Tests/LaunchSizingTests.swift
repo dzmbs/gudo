@@ -102,12 +102,12 @@ final class LaunchSizingTests: XCTestCase {
 
 /// A `gudo-hostd` of the workspace's debug build (`GUDO_HOSTD_BIN` names another) on a
 /// temporary state directory, relays off, on this machine's loopback.
-private final class TestDaemon {
+final class TestDaemon {
     let binary: URL
     let stateDirectory: URL
     private let process = Process()
 
-    init() throws {
+    init(shell: String = "/bin/sh", environment: [String: String] = [:]) throws {
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         binary = ProcessInfo.processInfo.environment["GUDO_HOSTD_BIN"].map(URL.init(fileURLWithPath:))
@@ -116,7 +116,8 @@ private final class TestDaemon {
         stateDirectory = FileManager.default.temporaryDirectory.appending(path: "launch-sizing-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         process.executableURL = binary
-        process.arguments = ["--state-dir", stateDirectory.path, "run", "--no-relay", "--bind", "127.0.0.1:0", "--shell", "/bin/sh"]
+        process.arguments = ["--state-dir", stateDirectory.path, "run", "--no-relay", "--bind", "127.0.0.1:0", "--shell", shell]
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
