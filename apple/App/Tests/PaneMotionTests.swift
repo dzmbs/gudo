@@ -620,6 +620,40 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertTrue(Self.close(back, [255, 0, 0]), "the live pane alone as the still goes: \(back)")
     }
 
+    /// A zooming pane is drawn over its neighbours, whose terminals stay live under it: the
+    /// platform view of a neighbour's terminal keeps to its place in the canvas's order, so
+    /// the zooming pane's still covers it rather than showing through.
+    func testAZoomingPanesStillCoversTheLiveTerminalUnderIt() throws {
+        let size = CGSize(width: 200, height: 100)
+        let window = NSWindow(
+            contentRect: NSRect(x: -30000, y: -30000, width: size.width, height: size.height),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let still = Self.solid(0, 1, 0, size: CGSize(width: 100, height: 100))
+        let shown = CGRect(x: 40, y: 0, width: 160, height: 100)
+        window.contentView = NSHostingView(rootView: ZStack(alignment: .topLeading) {
+            LiveLayerProbe()
+                .frame(width: 100, height: 100)
+                .zIndex(0)
+            Color(red: 0, green: 0, blue: 1)
+                .frame(width: size.width, height: size.height)
+                .modifier(PaneTravel(shown: shown, frame: CGRect(origin: .zero, size: size), still: still, background: .black))
+                .zIndex(CanvasLayout.zoomZ)
+        }
+        .environment(\.displayScale, 1)
+        .frame(width: size.width, height: size.height, alignment: .topLeading))
+        window.orderFrontRegardless()
+        defer { window.close() }
+        window.contentView?.layoutSubtreeIfNeeded()
+        CATransaction.flush()
+        let image = try XCTUnwrap(Self.windowImage(window.windowNumber))
+        let scale = CGFloat(image.width) / size.width
+        let over = Self.pixel(image, at: CGPoint(x: 70 * scale, y: 50 * scale))
+        XCTAssertTrue(Self.close(over, [0, 255, 0]), "the still over the live terminal: \(over)")
+        let beside = Self.pixel(image, at: CGPoint(x: 20 * scale, y: 50 * scale))
+        XCTAssertTrue(Self.close(beside, [255, 0, 0]), "the live terminal beside it: \(beside)")
+    }
+
     /// The window server's picture of one of our own windows.
     private static func windowImage(_ number: Int) -> CGImage? {
         typealias Create = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
@@ -652,6 +686,18 @@ final class PaneMotionTests: XCTestCase {
 @Observable
 private final class StillProbe {
     var still: CGImage?
+}
+
+/// A platform view drawing in its own layer, as a live terminal does.
+private struct LiveLayerProbe: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
 }
 
 /// A pane as the canvas draws it, under a still the test puts on and takes off.

@@ -161,7 +161,12 @@ final class MacSnapshotTests: XCTestCase {
         let dim = NSColor(theme.background).withAlphaComponent(1 - TerminalPreferences.Default.unfocusedSplitOpacity).cgColor
         let tiled = layout.leaves.filter { $0.window == nil && $0.visible }.sorted { $0.z < $1.z }
         for leaf in tiled {
-            guard let rect = onScreen(leaf.pane) else { continue }
+            // A pane over its still (moving, arriving, zooming) is drawn as captured, over any
+            // terminal under it, as the window orders them.
+            guard let rect = onScreen(leaf.pane) else {
+                if model.arrangement.hidesTerminal(of: leaf.pane) { restore(window(leaf.shownFrame)) }
+                continue
+            }
             drawTerminal(leaf.pane)
             if leaf.pane != focused, tiled.count + layout.cards.count > 1 {
                 context.setFillColor(dim)
@@ -173,17 +178,14 @@ final class MacSnapshotTests: XCTestCase {
                 context.fill(pixels(rect))
             }
         }
-        // A pane drawn over the others (zooming) keeps its header over their terminals.
-        for leaf in tiled where leaf.z > 0 {
-            restore(window(CGRect(x: leaf.frame.minX, y: leaf.frame.minY, width: leaf.frame.width, height: PaneHeader.height)))
-        }
         // Windows back to front, from where their panes are now: as captured (header, rim,
         // backdrop) with the panel shadow, then their terminals.
         let windows = Dictionary(grouping: layout.leaves.filter { $0.window != nil && $0.opacity > 0.01 }, by: { $0.window! })
         for (id, leaves) in windows.sorted(by: { ($0.value.first?.z ?? 0) < ($1.value.first?.z ?? 0) }) {
-            // Where the window is drawn: its panes' frames, shrunk as the tray shrinks them.
+            // Where the window is drawn: where its panes are on their way, shrunk as the tray
+            // shrinks them.
             let drawn = leaves.map { leaf -> CGRect in
-                let frame = leaf.frame
+                let frame = leaf.shownFrame
                 let pivot = CGPoint(x: frame.minX + leaf.hiddenAnchor.x * frame.width, y: frame.minY + leaf.hiddenAnchor.y * frame.height)
                 let shrink = leaf.scale
                 return CGRect(
