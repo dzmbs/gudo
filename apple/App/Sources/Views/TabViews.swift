@@ -65,6 +65,7 @@ struct WorkspaceSidebar: View {
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
             .animation(DS.Motion.standard, value: model.groups.collapsed)
+            .animation(DS.Motion.standard, value: model.groups.collapsedProjects)
         }
         .listStyle(.plain)
         .contentMargins(.all, 0, for: .scrollContent)

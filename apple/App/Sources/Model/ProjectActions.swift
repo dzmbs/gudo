@@ -156,19 +156,25 @@ extension WindowModel {
     /// terminal does.
     func join(_ ref: TabRef, projectOf origin: TabRef?) {
         guard let origin, let project = groups.project(of: origin), let index = project.tabs.firstIndex(of: origin) else { return }
-        withAnimation(DS.Motion.standard) { groups.apply(groups.planner().move(ref, into: project.id, at: index + 1)) }
-        groups.collapsedProjects.remove(project.id)
+        // The project opens in the rows' own motion, not in a jump.
+        withAnimation(DS.Motion.standard) {
+            groups.apply(groups.planner().move(ref, into: project.id, at: index + 1))
+            groups.collapsedProjects.remove(project.id)
+        }
         flashJoined(ref)
     }
 
     /// Joins tabs that arrived for a project's + or ⌘T, and keeps watching while any is due
     /// (a daemon makes its tab a round trip later).
     private func claimJoinedTabs() {
-        let joined = withAnimation(DS.Motion.standard) { groups.claimNewTabs() }
-        for ref in joined {
-            if let project = groups.project(of: ref) { groups.collapsedProjects.remove(project.id) }
-            flashJoined(ref)
+        let joined = withAnimation(DS.Motion.standard) {
+            let joined = groups.claimNewTabs()
+            for ref in joined {
+                if let project = groups.project(of: ref) { groups.collapsedProjects.remove(project.id) }
+            }
+            return joined
         }
+        for ref in joined { flashJoined(ref) }
         guard !groups.pendingJoins.isEmpty, !followsJoins else { return }
         followsJoins = true
         withObservationTracking {
