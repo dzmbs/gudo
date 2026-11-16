@@ -83,6 +83,31 @@ fn detach_position(input: &[u8]) -> Option<usize> {
         .min()
 }
 
+/// What a refusal (`ClientEvent::Refused`, named as `RefuseReason` prints) means for the
+/// person, and what to do about it.
+fn refusal(reason: &str) -> String {
+    let pair = format!(
+        "run `{} pair` on the host and pair again",
+        brand::DAEMON_BIN
+    );
+    match reason {
+        "InvalidGrant" => format!(
+            "The host did not let this device in: its pairing link was already used or has expired, or the device is not paired. To fix it, {pair}. A guest needs a new invite from the host's owner."
+        ),
+        "Revoked" => format!(
+            "This device was removed from the host. To use it again, {pair}. A guest needs a new invite from the host's owner."
+        ),
+        "DeviceMismatch" => format!(
+            "The host could not confirm this device's key. Try again; if it keeps happening, {pair}."
+        ),
+        other if other.starts_with("WireVersion") || other.starts_with("SnapshotFormat") => {
+            "The host runs a version that cannot talk to this one. Update both to the same version."
+                .to_owned()
+        }
+        other => format!("The host refused the connection ({other})."),
+    }
+}
+
 #[derive(Parser)]
 #[command(name = brand::CLI_BIN, version, about = "Developer client for the host daemon")]
 struct Cli {
@@ -528,7 +553,7 @@ impl Conn {
                     self.cwds.insert(meta.pane_id, cwd.clone());
                 }
             }
-            ClientEvent::Refused { reason } => bail!("daemon refused the connection: {reason}"),
+            ClientEvent::Refused { reason } => bail!("{}", refusal(reason)),
             _ => {}
         }
         Ok(())
@@ -1353,7 +1378,7 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
                     incompatible = Some(reason);
                     return Ok(info.flatten());
                 }
-                ClientEvent::Refused { reason } => bail!("daemon refused the connection: {reason}"),
+                ClientEvent::Refused { reason } => bail!("{}", refusal(&reason)),
                 _ => {}
             }
         }
@@ -1428,7 +1453,18 @@ async fn daemon_cmd(cli: &Cli, action: &DaemonCmd) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::detach_position;
+    use super::{detach_position, refusal};
+
+    #[test]
+    fn refusals_say_what_happened_and_what_to_do() {
+        let used = refusal("InvalidGrant");
+        assert!(used.contains("already used or has expired"), "{used}");
+        assert!(used.contains("pair"), "{used}");
+        let removed = refusal("Revoked");
+        assert!(removed.contains("removed from the host"), "{removed}");
+        assert!(!removed.contains("Revoked"), "{removed}");
+        assert!(refusal("Unheard").contains("Unheard"));
+    }
 
     #[test]
     fn detach_is_found_in_every_ctrl_bracket_encoding() {
