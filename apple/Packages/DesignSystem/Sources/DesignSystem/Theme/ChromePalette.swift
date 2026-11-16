@@ -56,6 +56,12 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     /// How strongly a program's symbol draws in the style it inherits: `markStrength`, raised
     /// where the mark in secondary text (an unfocused pane header) would fall below 3:1.
     public let markOpacity: Double
+    /// How a chip of a tab not selected dims (`DS.Opacity.inactive`), raised where its title
+    /// would fall below 4.5:1 on the strip.
+    public let inactiveOpacity: Double
+    /// How the rows and chips of a host that is away dim (`DS.Opacity.away`), raised where their
+    /// titles would fall below 4.5:1.
+    public let awayOpacity: Double
 
     // MARK: Strengths
 
@@ -197,6 +203,15 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         tertiaryLevel = Self.level(Self.textLevels.tertiary, cap: Self.levelCaps.tertiary, of: foreground, on: textSurfaces, minimum: Self.minimumGlyphContrast)
         let markLevel = Self.level(Self.markStrength * secondaryLevel, cap: secondaryLevel, of: foreground, on: [background, sidebar], minimum: Self.minimumGlyphContrast)
         markOpacity = markLevel / secondaryLevel
+        let primary = Self.textLevels.primary
+        let hovered = background.blended(with: foreground, Self.fillLevels.hover)
+        let rowSurfaces = [background, sidebar] + [background, sidebar].map { $0.blended(with: foreground, Self.fillLevels.selected) }
+        inactiveOpacity = Self.level(
+            primary * DS.Opacity.inactive, cap: Self.levelCaps.secondary, of: foreground, on: [background, hovered],
+            minimum: Self.minimumTextContrast) / primary
+        awayOpacity = Self.level(
+            primary * DS.Opacity.away, cap: Self.levelCaps.secondary, of: foreground, on: rowSurfaces,
+            minimum: Self.minimumTextContrast) / primary
 
         let stateSurfaces = [background, sidebar, raised, overlay]
         func state(_ signal: StateSignal) -> ThemeColor {

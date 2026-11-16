@@ -36,6 +36,8 @@ public extension DS {
         /// Dimmed by opacity rather than a grey, so their colours survive.
         public static let inactive: Double = 0.7
         public static let inactiveHover: Double = 0.85
+        /// The tabs of a host that is away.
+        public static let away: Double = 0.6
         /// An unfocused pane in a window that is not active shows at its own opacity times this.
         public static let recededPane: Double = 0.85
     }

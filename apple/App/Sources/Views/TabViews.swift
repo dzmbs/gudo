@@ -889,6 +889,7 @@ struct TabRow: View {
     @Environment(WindowModel.self) private var model
 
     @Environment(\.sidebarListStyle) private var listStyle
+    @Environment(\.chrome) private var chrome
     /// The command that has run long enough to name; a quick one never changes the row's height.
     @State private var longRunning: UInt64?
     @State private var hovered = false
@@ -955,7 +956,7 @@ struct TabRow: View {
                 Spacer(minLength: DS.Space.xs)
                 accessory(trailing, worktree: worktree, workspace: workspace, isActive: isActive)
             }
-            .opacity(group.showsAsLive ? 1 : 0.6)
+            .opacity(group.showsAsLive ? 1 : chrome.awayOpacity)
             // A step in from its project's or host's header.
             .padding(.leading, DS.Space.xs)
             // In Select mode only the checks say what is selected.

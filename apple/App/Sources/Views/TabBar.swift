@@ -263,7 +263,15 @@ private struct TabChip: View {
     let showsHost: Bool
     @Environment(WindowModel.self) private var model
     @Environment(\.tabStripHeight) private var stripHeight
+    @Environment(\.chrome) private var chrome
     @State private var isHovered = false
+
+    /// Inactive and away tabs dim by opacity rather than colour, so glyph colours survive; as far
+    /// as the theme lets their titles still read at 4.5:1.
+    private var opacity: Double {
+        let inactive = isActive ? 1 : isHovered ? max(chrome.inactiveOpacity, DS.Opacity.inactiveHover) : chrome.inactiveOpacity
+        return group.showsAsLive ? inactive : min(inactive, chrome.awayOpacity)
+    }
 
     var body: some View {
         #if DEBUG
@@ -301,10 +309,9 @@ private struct TabChip: View {
             }
             TabPresence(workspace: workspace, panes: tab.root.panes)
         }
-        // Inactive tabs dim by opacity rather than colour, so glyph colours survive.
         .font(DS.Font.tabTitle)
         .foregroundStyle(.primary)
-        .opacity((isActive ? 1 : isHovered ? DS.Opacity.inactiveHover : DS.Opacity.inactive) * (group.showsAsLive ? 1 : 0.6))
+        .opacity(opacity)
         // Room for the close button and the ⌘ hint, which sit over the edges.
         .padding(.horizontal, DS.Space.xxxl)
         .frame(maxWidth: .infinity)

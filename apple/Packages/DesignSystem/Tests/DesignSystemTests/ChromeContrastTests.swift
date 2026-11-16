@@ -107,6 +107,36 @@ struct ChromeContrastTests {
         #expect(failures.isEmpty, "\(Self.summary(failures))")
     }
 
+    /// Chips of tabs not selected, and the rows and chips of a host that is away, dim by
+    /// opacity so their marks keep their colours; their titles still read at 4.5:1 on the bands
+    /// they sit on, at rest and under the pointer.
+    @Test(arguments: schemes)
+    func dimmedTabTitlesReadAt4_5(scheme: ColorScheme?) {
+        let failures = Self.failures(scheme: scheme, minimum: ChromePalette.minimumTextContrast) { chrome in
+            let primary = ChromePalette.textLevels.primary
+            let hovered = chrome.base.blended(with: chrome.foreground, ChromePalette.fillLevels.hover)
+            let selectedOnSidebar = chrome.sidebar.blended(with: chrome.foreground, ChromePalette.fillLevels.selected)
+            let inactive = primary * chrome.inactiveOpacity
+            let inactiveHovered = primary * max(chrome.inactiveOpacity, DS.Opacity.inactiveHover)
+            let away = primary * chrome.awayOpacity
+            let inactiveAway = primary * min(chrome.inactiveOpacity, chrome.awayOpacity)
+            return [
+                ("inactive chip on base", chrome.base.blended(with: chrome.foreground, inactive), chrome.base),
+                ("hovered chip", hovered.blended(with: chrome.foreground, inactiveHovered), hovered),
+                ("away row on sidebar", chrome.sidebar.blended(with: chrome.foreground, away), chrome.sidebar),
+                ("away row selected", selectedOnSidebar.blended(with: chrome.foreground, away), selectedOnSidebar),
+                ("away chip on base", chrome.base.blended(with: chrome.foreground, away), chrome.base),
+                ("inactive away chip on base", chrome.base.blended(with: chrome.foreground, inactiveAway), chrome.base),
+            ]
+        }
+        #expect(failures.isEmpty, "\(Self.summary(failures))")
+        let undimmed = Self.themes.filter { theme in
+            let chrome = ChromePalette(theme: theme, scheme: scheme)
+            return chrome.inactiveOpacity >= 1 || chrome.awayOpacity >= 1
+        }
+        #expect(undimmed.isEmpty, "a dimmed tab still reads as dimmed: \(undimmed.map(\.name))")
+    }
+
     /// A program's symbol dims the style it inherits; the dimmed glyph still reads as a graphic
     /// (WCAG 1.4.11): in main text on every surface (the palette, menus), in secondary text on
     /// the bands that carry an unfocused or inactive one (pane headers, tab strips, the sidebar).

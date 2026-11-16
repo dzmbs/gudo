@@ -548,7 +548,9 @@ Tabs as wide as their titles (120 to 240 pt); the title led by the same slot as 
 what needs you); ⌘N right-aligned only while ⌘ is held;
 close button on hover at the leading edge; one-pixel separators between unselected tabs (none
 beside the selected one); one title weight (callout on the Mac, subheadline on touch), inactive
-tabs the same ink at 0.7 opacity (0.85 hovered); the selected tab a pill, `Surface.selection`
+tabs the same ink at 0.7 opacity (0.85 hovered), raised where a theme needs it so the title still
+reads at 4.5:1 (`ChromePalette.inactiveOpacity`; a host that is away dims its rows and chips the same
+way, `awayOpacity`); the selected tab a pill, `Surface.selection`
 (the ink at 12 %, its edge and top light, radius `field`; the ink at 4 % in an inactive window), moved with `matchedGeometryEffect` (easeInOut 0.15); + at the end.
 ⌘ hints appear after ⌘ is held 750 ms; a title truncates at its tail, a path title keeps its end; the tooltip is the
 title, host · directory, and the context line. The strip stays with a single tab (it carries + and the drop target).

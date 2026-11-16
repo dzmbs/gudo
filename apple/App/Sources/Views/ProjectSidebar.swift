@@ -302,6 +302,7 @@ private struct SidebarItemView: View {
     let item: SidebarItem
     let numbers: [TabRef: Int]
     @Environment(WindowModel.self) private var model
+    @Environment(\.chrome) private var chrome
 
     var body: some View {
         switch item {
@@ -334,14 +335,14 @@ private struct SidebarItemView: View {
                     withAnimation(DS.Motion.standard) { folds.toggle(repo: repoID, host: host) }
                 }
                 .padding(.top, DS.Space.xs)
-                .opacity(group.showsAsLive ? 1 : 0.6)
+                .opacity(group.showsAsLive ? 1 : chrome.awayOpacity)
             }
         case .worktree(let host, let repoID, let path):
             if let group = model.groups.group(host),
                let repo = model.groups.repoSidebar(for: group)?.repos.first(where: { $0.id == repoID }),
                let worktree = repo.worktrees.first(where: { $0.id == path }) {
                 WorktreeRow(worktree: worktree.state, host: host)
-                    .opacity(group.showsAsLive ? 1 : 0.6)
+                    .opacity(group.showsAsLive ? 1 : chrome.awayOpacity)
             }
         case .hostPlaceholder(let id):
             if let group = model.groups.group(id) { GroupPlaceholder(group: group) }
