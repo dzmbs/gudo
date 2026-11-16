@@ -198,6 +198,25 @@ async fn a_removed_device_cannot_reconnect_on_its_old_pairing() {
     daemon.shutdown().await;
 }
 
+/// Revoking a device that never paired or joined revokes nothing, and says so.
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_an_unknown_device_says_nothing_was_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let stranger = DeviceKey::from_seed(&ClientConfig::generate_key())
+        .unwrap()
+        .device_id();
+    let revoked = owner.client.revoke(RevokeTarget::Device(stranger)).await;
+    assert!(
+        matches!(revoked, Err(client_core::proto::MpError::NotFound(_))),
+        "{revoked:?}"
+    );
+    drop(owner);
+    daemon.shutdown().await;
+}
+
 /// A removed device starting afresh with its old, used ticket hears it was revoked, not that
 /// the ticket is invalid.
 #[tokio::test(flavor = "multi_thread")]

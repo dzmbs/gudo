@@ -1440,7 +1440,23 @@ impl Mp {
         let mut devices_hit = Vec::new();
         match target {
             RevokeTarget::Grant(grant) => grants_hit.push(grant),
-            RevokeTarget::Device(device) => devices_hit.push(device),
+            RevokeTarget::Device(device) => {
+                let device_hex = hex(&device.0);
+                let known = core.identity.is_owner_device(device)
+                    || lock(&self.store)
+                        .guests
+                        .iter()
+                        .any(|guest| guest.device == device_hex)
+                    || lock(&self.live)
+                        .values()
+                        .any(|connection| connection.authz.actor.device == device);
+                if !known {
+                    return Err(MpError::NotFound(
+                        "no device with that key has paired or joined; nothing was revoked".into(),
+                    ));
+                }
+                devices_hit.push(device);
+            }
             RevokeTarget::Principal(principal) => {
                 devices_hit.extend(
                     core.identity
