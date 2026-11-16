@@ -458,7 +458,17 @@ gives way to it (plain shells still open stay until closed). When the helper ref
 `Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
 has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
 shows as connecting meanwhile, and the refusal (in words) only if that fails. Remote hosts never
-pair again on their own. When the helper ends on its own (killed, crashed, stopped from a
+pair again on their own.
+
+**Starting.** While the helper starts (the app's launch, or after it ended and is started again)
+and until this launch first reaches it, This Mac reads "Starting…" (`ConnectionState.starting`,
+`AppModel.isStartingHelper`): in the header's subtitle and, after 2 s, the notice; no "last
+contact", a light wash over panes that are not saved screens after 1 s, never the lost-connection
+card. A link to a running helper that drops reads as reconnecting, and its card says the helper
+isn't answering, never that sessions keep running. Each step of a start is logged with how long it
+took (info, category `helper`, "helper start: …"); a login item that runs nothing is unregistered
+without waiting for it, and the helper from before the rename is only looked for while its folder
+can still matter. When the helper ends on its own (killed, crashed, stopped from a
 terminal), the app sees its process exit, redials This Mac at once ("Connecting", the last
 frame stays) and starts the helper again after 0.5 s, further apart with jitter while it keeps
 ending right after starting, and leaves it stopped after five of those in a row
@@ -1498,10 +1508,11 @@ send them to yet), `meta` the saved titles, and `cachedScreen(for:)` each pane's
 daemon sends its own. `HostConnection.showsCachedLayout` lets `HostGroups` list the saved tabs
 (`HostGroup.isCached`; `isReady` stays false, so New Terminal waits for the host). `Workspace`
 makes its panes at once; `Pane` restores the saved screen into its terminal before the stream
-starts, so the renderer draws it in the first frame. The panes are quietly marked: a wash of the
-terminal background and half saturation (`SavedScreenOverlay`), "Connecting…" at the end of the
-header's subtitle, the host's spinner after its 1 s grace; the connection overlay adds its notice
-only after 2 s and never dims saved screens while connecting. Reconnecting, unreachable and
+starts, so the renderer draws it in the first frame. The panes are quietly marked: after a 1 s
+grace a light wash of the terminal background (`SavedScreenOverlay`, `ChromePalette.waitingLevel`,
+so they read at nearly full contrast), "Connecting…" at the end of the header's subtitle, the
+host's spinner after its 1 s grace; the connection overlay adds its notice only after 2 s and
+never dims saved screens further, whatever the link's state. Reconnecting, unreachable and
 failure states are the existing ones (notice, dim, card at 40 s): a host that cannot be reached
 keeps showing its saved workspace under them. A restored focused tab is selected synchronously
 when the saved layout has it.
@@ -1518,9 +1529,19 @@ follows its layout, so they never blink out.
 (`DaemonPaneBackend.holdInputUntilLive`), never queued in the core. When the daemon's screen for
 that pane is on the terminal, the held input is sent as if typed then only if the screen reads
 the same as the saved one the user typed at (visible text); otherwise, or after 30 s, or past
-4 KiB, it is dropped and a toast says so ("What you typed while connecting wasn't sent: the
+4 KiB, it is dropped and a toast says why ("What you typed while connecting wasn't sent: the
 screen had changed."). A pane holding input shows "Sends when connected". So an approval prompt
 that changed while connecting never receives the "y" meant for another.
+
+The same goes for input typed while the host is down: before the first connection, while This
+Mac's helper starts or starts again, while a link reconnects (`DaemonPaneBackend.followHeldInput`,
+which every daemon pane sets up). It is held per pane from the first key, never queued in the
+core, and sent in order once that pane is back: on the same daemon run as soon as its stream
+resumes; on another run (a helper started again) only once its screen arrives and reads the same,
+or the pane was blank when typed into (typing ahead). Otherwise, 30 s after the first held key, or
+past 4 KiB, it is dropped with a toast saying why (`WindowModel.heldInputDropMessage`). Held input
+reaches the core only when it is sent, so the core's resend of unacknowledged input after a
+reconnect (`InputAck`, `INPUT_RESUME`) never sends it twice.
 
 **This Mac.** The helper usually already runs as a login item: `AppModel.connectEarly` dials it
 in `AppModel.init`, before any window, when its `endpoint.json` names a live process with the
