@@ -23,9 +23,9 @@ nonisolated enum ChatEmptyState: Equatable {
 
     var detail: String? {
         switch self {
-        case .findingSession:
-            "Claude Code was started in the shell, so Chat finds it from the transcript Claude Code saves. It shows here after the next message. Until then it is in Terminal."
-        case .opening, .empty: nil
+        case .findingSession: "It shows here after the agent's next message. Until then, use Terminal."
+        case .empty: "Messages show here as you and the agent write them."
+        case .opening: nil
         }
     }
 

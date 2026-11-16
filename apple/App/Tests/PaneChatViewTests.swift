@@ -276,6 +276,62 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
     }
 
+    func testWorkingDotsSitAboveTheComposerWithoutCoveringIt() async throws {
+        let suite = "chat-working-dots-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller?.working.view.isHidden == false && fixture.state.model?.frame.rows.count == 60 }
+        let controller = try XCTUnwrap(fixture.state.controller)
+        controller.view.layoutIfNeeded()
+        let dots = controller.working.view.frame
+        let composer = controller.footer.view.frame
+        XCTAssertGreaterThan(dots.height, 0)
+        XCTAssertLessThanOrEqual(dots.maxY, composer.minY - DS.Space.s + 0.5)
+        XCTAssertEqual(dots.midX, controller.view.bounds.midX, accuracy: 1)
+        let editor = try XCTUnwrap(draftEditor(in: controller.footer.view))
+        XCTAssertGreaterThan(editor.convert(editor.bounds, to: controller.view).minY, dots.maxY + DS.Space.s)
+    }
+
+    func testAnEmptyComposerIsOneRowAndGrowsUpwardWithTheDraft() async throws {
+        let suite = "chat-composer-row-test-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+            preferences.removePersistentDomain(forName: suite)
+        }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
+        let controller = try XCTUnwrap(fixture.state.controller)
+        try await Task.sleep(for: .milliseconds(100))
+        controller.view.layoutIfNeeded()
+        let row = DS.Size.touchTarget + 2 * DS.Space.xs
+        let chips = DS.Size.touchTarget
+        let empty = controller.footer.view.frame
+        XCTAssertLessThanOrEqual(empty.height, DS.Space.xs + row + DS.Space.s + chips + DS.Space.s + 0.5)
+        let editor = try XCTUnwrap(draftEditor(in: controller.footer.view))
+        let field = editor.convert(editor.bounds, to: controller.footer.view)
+        XCTAssertLessThan(field.midY, DS.Space.xs + row, "the field shares the row with + and Send")
+        fixture.state.draft = "First line\nSecond line\nThird line"
+        try await wait {
+            controller.view.layoutIfNeeded()
+            return controller.footer.view.frame.height > empty.height + DS.Space.xxl
+        }
+        XCTAssertEqual(controller.footer.view.frame.maxY, empty.maxY, accuracy: 0.5)
+    }
+
+    private func draftEditor(in view: UIView) -> UITextView? {
+        if let text = view as? UITextView, text.isEditable { return text }
+        return view.subviews.lazy.compactMap { self.draftEditor(in: $0) }.first
+    }
+
     func testSendingKeepsTheKeyboardUp() async throws {
         let suite = "chat-send-keyboard-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))

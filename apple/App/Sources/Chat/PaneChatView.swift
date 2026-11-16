@@ -24,6 +24,7 @@ struct PaneChatView<Terminal: View>: View {
     @State private var confirmationPresented = false
     @FocusState private var draftFocused: Bool
     @State private var selectedPhoto: PhotosPickerItem?
+    @State private var dismissedNote: String?
 
     private var nativePresentations: some View {
         ZStack {
@@ -33,7 +34,8 @@ struct PaneChatView<Terminal: View>: View {
                 .accessibilityHidden(state.presentation != .terminal)
             if let model = state.model {
                 NativeChatView(model: model, frame: model.frame, expanded: model.expanded, actions: actions,
-                               isActive: state.presentation == .chat, onControllerReady: { state.controller = $0 }) {
+                               isActive: state.presentation == .chat, isWorking: working,
+                               onControllerReady: { state.controller = $0 }) {
                     composer
                 }
                 .opacity(state.presentation == .chat ? 1 : 0)
@@ -46,19 +48,22 @@ struct PaneChatView<Terminal: View>: View {
         }
     }
 
-    private func emptyState(_ empty: ChatEmptyState) -> some View {
-        VStack(spacing: DS.Space.s) {
-            Text(empty.title).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+    @ViewBuilder private func emptyState(_ empty: ChatEmptyState) -> some View {
+        Group {
             if let detail = empty.detail {
-                Text(detail).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            }
-            if empty.offersTerminal {
-                Button("Open Terminal") { state.show(.terminal, terminal: pane) }
-                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                EmptyState(empty.title, systemImage: "text.bubble", message: detail) {
+                    if empty.offersTerminal {
+                        Button("Open Terminal") { state.show(.terminal, terminal: pane) }
+                            .buttonStyle(.quiet)
+                            .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.border)
+                            .frame(minHeight: DS.Size.touchTarget)
+                    }
+                }
+            } else {
+                Text(empty.title).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
+                    .modifier(ChatDelayedAppearance())
             }
         }
-        .padding(.horizontal, DS.Space.xxl)
         .frame(maxWidth: ChatReadingColumn.maximumWidth)
         .allowsHitTesting(empty.offersTerminal)
         .accessibilityElement(children: .contain)
@@ -67,7 +72,7 @@ struct PaneChatView<Terminal: View>: View {
 
     var body: some View {
         nativePresentations
-        .overlay(alignment: .top) { fallbackNote }
+        .overlay(alignment: .top) { fallbackNote.animation(DS.Motion.standard, value: noteMessage) }
         .onAppear {
             state.images.read = { [hub] path in try await ChatImageReader.read(path, from: hub) }
             state.activate(in: hub)
@@ -144,10 +149,19 @@ struct PaneChatView<Terminal: View>: View {
         }
     }
 
+    private var noteMessage: String? {
+        state.error ?? state.terminalNotice?.message ?? state.model?.error ?? state.model?.historyError
+    }
+
+    /// Why Chat cannot do something, on a card at the top with the one way forward.
     @ViewBuilder private var fallbackNote: some View {
-        if let message = state.error ?? state.terminalNotice?.message ?? state.model?.error ?? state.model?.historyError {
-            Text(verbatim: message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                .padding(DS.Space.s).frame(maxWidth: .infinity).background(DS.Palette.raised)
+        if let message = noteMessage, message != dismissedNote {
+            let offersTerminal = state.presentation == .chat
+            Banner(Toast(message, systemImage: "exclamationmark.circle", style: .failure,
+                         action: offersTerminal ? Toast.Action("Terminal") { [state, pane] in _ = state.show(.terminal, terminal: pane) } : nil),
+                   edge: .top, alignment: .center) { dismissedNote = message }
+                .padding(.horizontal, DS.Space.l).padding(.top, DS.Space.s)
+                .motionTransition(.toast(from: .top))
                 .accessibilityIdentifier("chat-unavailable-note")
         }
     }
@@ -157,23 +171,25 @@ struct PaneChatView<Terminal: View>: View {
             if state.capabilities.contains(.approvals), let approval { approval.frame(maxWidth: .infinity) }
             if state.capabilities.contains(.send) {
                 VStack(alignment: .leading, spacing: 0) {
-                    TextField("Message", text: $state.draft, axis: .vertical)
-                        .font(DS.Font.prose).lineLimit(1...6)
-                        .focused($draftFocused)
-                        .disabled(state.dictation.isActive)
-                        .padding(.horizontal, DS.Space.l).padding(.top, DS.Space.m).padding(.bottom, DS.Space.xs)
-                        .accessibilityIdentifier("chat-draft")
-                    if state.draft.hasPrefix("/"), ChatCommands.query(state.draft) != nil {
-                        Button("Choose command…", systemImage: "slash.circle", action: openCommands)
-                            .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                            .padding(.horizontal, DS.Space.l)
-                            .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
+                    composerNotes
+                    HStack(alignment: .bottom, spacing: 0) {
+                        leadingControl
+                        TextField("Message", text: $state.draft, axis: .vertical)
+                            .font(DS.Font.prose).lineLimit(1...6)
+                            .focused($draftFocused)
+                            .disabled(state.dictation.isActive)
+                            .padding(.vertical, DS.Space.gap10)
+                            .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
+                            .accessibilityIdentifier("chat-draft")
+                        trailingButton
                     }
-                    composerBar.padding(.horizontal, DS.Space.xs).padding(.bottom, DS.Space.xs)
+                    .padding(DS.Space.xs)
                 }
                 .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
                 .contentShape(.rect)
                 .onTapGesture { if !state.dictation.isActive { draftFocused = true } }
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("chat-composer")
                 sessionControls
             } else {
                 if state.capabilities.contains(.read) {
@@ -181,27 +197,75 @@ struct PaneChatView<Terminal: View>: View {
                         .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                         .accessibilityIdentifier("chat-read-only")
                 }
-                if trailingAction != nil { composerBar }
+                if trailingAction != nil {
+                    HStack(spacing: 0) {
+                        composerStatusLine
+                        Spacer(minLength: 0)
+                        trailingButton
+                    }
+                }
             }
         }
         .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
-        .overlay(alignment: .topLeading) {
-            if working {
-                ChatWorkingIndicator()
-                    .alignmentGuide(.top) { $0[.bottom] }
-                    .padding(.leading, DS.Space.xl)
-                    .motionTransition(.fade)
-            }
-        }
-        .animation(DS.Motion.standard, value: working)
         .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
         .foregroundStyle(DS.Palette.text)
     }
 
+    /// What the composer is doing, or the command hint, on a line above the field, so the
+    /// row with the buttons never moves.
+    @ViewBuilder private var composerNotes: some View {
+        let offersCommands = state.draft.hasPrefix("/") && ChatCommands.query(state.draft) != nil
+        if composerStatus != nil || offersCommands {
+            HStack(spacing: DS.Space.s) {
+                composerStatusLine
+                if offersCommands, composerStatus == nil {
+                    Button("Choose command…", systemImage: "slash.circle", action: openCommands)
+                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                        .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, DS.Space.l)
+            .motionTransition(.fade)
+        }
+    }
+
+    @ViewBuilder private var leadingControl: some View {
+        if state.dictation.isActive {
+            Button { state.dictation.cancel() } label: {
+                Label("Cancel dictation", systemImage: "xmark").labelStyle(.iconOnly)
+            }
+            .buttonStyle(ChatComposerButtonStyle(.glyph)).keyboardShortcut(.escape, modifiers: [])
+            .accessibilityIdentifier("chat-cancel-dictation")
+        } else {
+            Menu {
+                Button("Commands", systemImage: "slash.circle", action: openCommands)
+                    .keyboardShortcut("/", modifiers: .command)
+                    .disabled(ChatCommands.query(state.draft) == nil)
+                Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
+            } label: {
+                Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
+            }
+            .menuStyle(.button)
+            .buttonStyle(ChatComposerButtonStyle(.glyph))
+            .disabled(!permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy)
+            .accessibilityIdentifier("chat-add")
+        }
+    }
+
     private var sessionControls: some View {
-        ChatSessionChips(session: state.model?.frame.session,
-                         canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
-                         chooseModel: chooseModel)
+        HStack(spacing: DS.Space.xs) {
+            if draftFocused {
+                Button { draftFocused = false } label: {
+                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
+                }
+                .buttonStyle(ChatComposerButtonStyle(.glyph))
+                .accessibilityIdentifier("chat-hide-keyboard")
+            }
+            ChatSessionChips(session: state.model?.frame.session,
+                             canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
+                             chooseModel: chooseModel)
+        }
     }
 
     private func chooseModel(_ command: String) {
@@ -215,44 +279,6 @@ struct PaneChatView<Terminal: View>: View {
               canEditDraft(state.actionContext) else { return }
         state.draft = text
         send()
-    }
-
-    private var composerBar: some View {
-        HStack(spacing: DS.Space.xs) {
-            if state.dictation.isActive {
-                Button { state.dictation.cancel() } label: {
-                    Label("Cancel dictation", systemImage: "xmark").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                }
-                .buttonStyle(.quiet).keyboardShortcut(.escape, modifiers: [])
-                .accessibilityIdentifier("chat-cancel-dictation")
-            } else if state.capabilities.contains(.send) {
-                Menu {
-                    Button("Commands", systemImage: "slash.circle", action: openCommands)
-                        .keyboardShortcut("/", modifiers: .command)
-                        .disabled(ChatCommands.query(state.draft) == nil)
-                    Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
-                } label: {
-                    Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                }
-                .buttonStyle(.quiet)
-                .disabled(!permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy)
-                .accessibilityIdentifier("chat-add")
-            }
-            composerStatusLine
-            Spacer(minLength: 0)
-            if draftFocused {
-                Button { draftFocused = false } label: {
-                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                }
-                .buttonStyle(.quiet)
-                .accessibilityIdentifier("chat-hide-keyboard")
-            }
-            trailingButton
-        }
-        .frame(height: DS.Size.touchTarget)
     }
 
     @ViewBuilder private var composerStatusLine: some View {
@@ -286,9 +312,8 @@ struct PaneChatView<Terminal: View>: View {
             Button { perform(action) } label: {
                 Label(trailingTitle(action), systemImage: trailingSymbol(action)).labelStyle(.iconOnly)
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
             }
-            .buttonStyle(QuietButtonStyle(prominent: action == .send))
+            .buttonStyle(ChatComposerButtonStyle(action: action))
             .keyboardShortcut(trailingShortcut(action))
             .disabled(isDisabled(action))
             .animation(DS.Motion.micro, value: action)
@@ -536,6 +561,19 @@ struct PaneChatView<Terminal: View>: View {
 
     private func openTerminalFromDetail(commandMark: UInt64?) {
         if state.showTerminal(commandMark: commandMark, terminal: pane) { selectedDetail = nil }
+    }
+}
+
+/// Nothing under the feedback delay, then the words.
+private struct ChatDelayedAppearance: ViewModifier {
+    @State private var isShown = false
+
+    func body(content: Content) -> some View {
+        content.opacity(isShown ? 1 : 0)
+            .task {
+                try? await Task.sleep(for: DS.Motion.feedbackDelay)
+                withAnimation(DS.Motion.standard) { isShown = true }
+            }
     }
 }
 

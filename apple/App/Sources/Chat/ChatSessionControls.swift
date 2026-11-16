@@ -7,6 +7,12 @@ nonisolated enum ChatSessionControls {
         let command: String
     }
 
+    struct ModeOption: Equatable, Sendable {
+        let mode: TimelinePermissionModeTag
+        let title: String
+        let detail: String
+    }
+
     /// Claude Code's own aliases: `/model <alias>` picks the newest of each family.
     static let models = [
         ModelOption(title: "Default", command: "/model default"),
@@ -14,6 +20,25 @@ nonisolated enum ChatSessionControls {
         ModelOption(title: "Sonnet", command: "/model sonnet"),
         ModelOption(title: "Haiku", command: "/model haiku"),
     ]
+
+    /// Every mode Claude Code records, in the order Shift-Tab steps through the common ones.
+    static let modes = [
+        ModeOption(mode: .default, title: "Ask", detail: "Asks before edits and commands"),
+        ModeOption(mode: .acceptEdits, title: "Accept edits", detail: "Edits files without asking"),
+        ModeOption(mode: .plan, title: "Plan", detail: "Plans first and changes nothing"),
+        ModeOption(mode: .auto, title: "Auto", detail: "Asks only when it matters"),
+        ModeOption(mode: .dontAsk, title: "Don't ask", detail: "Declines anything not allowed"),
+        ModeOption(mode: .bypassPermissions, title: "Bypass", detail: "Runs everything without asking"),
+    ]
+
+    /// The aliases with the session's own family first, so the menu opens on what is running.
+    static func modelChoices(current identifier: String?) -> [ModelOption] {
+        let family = identifier.map(modelName)?.split(separator: " ").first.map(String.init)
+        guard let family, let index = models.firstIndex(where: { $0.title == family }) else { return models }
+        var ordered = models
+        ordered.insert(ordered.remove(at: index), at: 0)
+        return ordered
+    }
 
     /// "claude-opus-4-5-20251101" reads "Opus 4.5", "claude-3-5-sonnet-20241022" "Sonnet 3.5".
     static func modelName(_ identifier: String) -> String {
@@ -28,12 +53,7 @@ nonisolated enum ChatSessionControls {
 
     static func modeName(_ mode: TimelinePermissionMode) -> String {
         switch mode {
-        case .known(.default): "Ask"
-        case .known(.acceptEdits): "Accept edits"
-        case .known(.plan): "Plan"
-        case .known(.dontAsk): "Don't ask"
-        case .known(.bypassPermissions): "Bypass"
-        case .known(.auto): "Auto"
+        case .known(let tag): modes.first { $0.mode == tag }?.title ?? tag.rawValue
         case .unknown(let value): value
         }
     }

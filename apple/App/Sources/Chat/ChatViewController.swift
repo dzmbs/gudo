@@ -10,6 +10,7 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
     let expanded: Set<ChatRowID>
     var actions = ChatRowActions()
     var isActive = true
+    var isWorking = false
     var onControllerReady: ((ChatViewController) -> Void)?
     @ViewBuilder var composer: () -> Composer
     @Environment(\.self) private var environment
@@ -24,6 +25,7 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ChatViewController, context: Context) {
         controller.update(frame: frame, expanded: expanded, environment: environment, actions: actions,
                           composer: AnyView(composer().environment(\.self, environment).tint(environment.chrome.accentColor)), codeFontSize: fontSize, isActive: isActive)
+        controller.showsWorking(isWorking)
     }
 }
 
@@ -73,6 +75,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var measured: Set<ChatRowID> = []
     private var clock: CADisplayLink?
     private var isActive = true
+    private var isWorking = false
     private var isApplying = false
     private var isUserDragging = false
     private var isMeasuring = false
@@ -82,8 +85,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var lastWidth: CGFloat = 0
     private var lastHeight: CGFloat = 0
     private var sizingHost = UIHostingController(rootView: AnyView(EmptyView()))
-    private var footer = UIHostingController(rootView: AnyView(EmptyView()))
+    private(set) var footer = UIHostingController(rootView: AnyView(EmptyView()))
     private var latest = UIHostingController(rootView: AnyView(EmptyView()))
+    /// The working dots float over the transcript just above the composer, so the agent starting
+    /// or stopping never moves a row.
+    private(set) var working = UIHostingController(rootView: AnyView(EmptyView()))
     private(set) var configuredCells = 0
     private(set) var measuredCells = 0
     private(set) var unfittedDisplays = 0
@@ -135,6 +141,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.translatesAutoresizingMaskIntoConstraints = false
         install(footer)
         install(latest)
+        install(working)
+        working.view.isUserInteractionEnabled = false
+        working.view.isHidden = !isWorking
+        working.view.alpha = isWorking ? 1 : 0
         latest.view.accessibilityIdentifier = "chat-jump-latest"
         NSLayoutConstraint.activate([
             collection.topAnchor.constraint(equalTo: view.topAnchor),
@@ -146,8 +156,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             // SwiftUI already lifts this view above the keyboard; a keyboard guide here counted it
             // twice, and kept a dismissed sheet's keyboard, leaving the composer at the top.
             footer.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            latest.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            latest.view.bottomAnchor.constraint(equalTo: footer.view.topAnchor, constant: -12),
+            latest.view.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -DS.Space.l),
+            latest.view.bottomAnchor.constraint(equalTo: footer.view.topAnchor, constant: -DS.Space.m),
+            working.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            working.view.bottomAnchor.constraint(equalTo: footer.view.topAnchor, constant: -DS.Space.s),
         ])
         source = UICollectionViewDiffableDataSource<Int, ChatRowID>(collectionView: collection) { [weak self] collection, path, identifier in
             let cell = collection.dequeueReusableCell(withReuseIdentifier: "chat-block", for: path)
@@ -233,11 +245,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         }
         if visibilityChanged, isViewLoaded { view.setNeedsLayout() }
         footer.rootView = composer
+        // The hosting view does not always report a taller draft on its own; the composer
+        // grows upward as the field wraps.
+        footer.view.invalidateIntrinsicContentSize()
         latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
-            Label("New", systemImage: "arrow.down").font(.callout.weight(.medium)).padding(.horizontal, 14)
+            Label("New", systemImage: "arrow.down").font(DS.Font.button).padding(.horizontal, DS.Space.l)
                 .frame(minHeight: DS.Size.touchTarget)
         }.buttonStyle(.plain).floatingCapsule(interactive: true).environment(\.self, environment))
         latest.view.isHidden = !(model.hasNewItems || frame.hasNewerGap)
+        working.rootView = AnyView(ChatWorkingIndicator().environment(\.self, environment))
         guard isViewLoaded else { pending = frame; return }
         view.backgroundColor = UIColor(environment.chrome.background.color)
         if frame.generation != current.generation { needsRestyle = true }
@@ -245,6 +261,24 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             pending = frame
             ensureClock()
             clock?.isPaused = false
+        }
+    }
+
+    func showsWorking(_ isWorking: Bool) {
+        guard isWorking != self.isWorking else { return }
+        self.isWorking = isWorking
+        guard isViewLoaded else { return }
+        working.view.isHidden = false
+        guard !environment.accessibilityReduceMotion, view.window != nil else {
+            working.view.alpha = isWorking ? 1 : 0
+            working.view.isHidden = !isWorking
+            return
+        }
+        UIView.animate(DS.Motion.standard) { [weak self] in
+            self?.working.view.alpha = isWorking ? 1 : 0
+        } completion: { [weak self] in
+            guard let self, !self.isWorking else { return }
+            working.view.isHidden = true
         }
     }
 
@@ -311,6 +345,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private func rowContent(_ row: ChatRow) -> some View {
         ChatRowView(row: row, isExpanded: expanded.contains(row.id), toggle: { [weak self] in self?.model.toggle(row.id) },
                     actions: actions, topSpacing: topSpacings[row.id] ?? 0)
+            .environment(\.chatRowWidth, collection.bounds.width)
             .environment(\.self, environment)
             .dynamicTypeSize(environment.dynamicTypeSize)
             .tint(environment.chrome.accentColor)

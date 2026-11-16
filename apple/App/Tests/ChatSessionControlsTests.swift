@@ -1,3 +1,4 @@
+import DesignSystem
 import Foundation
 import HostKit
 import XCTest
@@ -23,6 +24,23 @@ final class ChatSessionControlsTests: XCTestCase {
     func testModelChoicesAreClaudeCodeSlashCommands() {
         XCTAssertTrue(ChatSessionControls.models.allSatisfy { $0.command.hasPrefix("/model ") })
         XCTAssertEqual(ChatSessionControls.models.map(\.title), ["Default", "Opus", "Sonnet", "Haiku"])
+    }
+
+    func testTheModeMenuListsEveryModeWithAOneLineDescription() {
+        XCTAssertEqual(Set(ChatSessionControls.modes.map(\.mode)), Set(TimelinePermissionModeTag.allCases))
+        XCTAssertEqual(ChatSessionControls.modes.first?.mode, .default)
+        for option in ChatSessionControls.modes {
+            XCTAssertFalse(option.detail.isEmpty)
+            XCTAssertFalse(option.detail.contains("\n") || option.detail.contains("—") || option.detail.contains("–"))
+            XCTAssertEqual(ChatSessionControls.modeName(.known(option.mode)), option.title)
+        }
+    }
+
+    func testTheModelMenuOpensOnTheRunningFamily() {
+        XCTAssertEqual(ChatSessionControls.modelChoices(current: "claude-sonnet-4-6").map(\.title),
+                       ["Sonnet", "Default", "Opus", "Haiku"])
+        XCTAssertEqual(ChatSessionControls.modelChoices(current: "custom-model[1m]"), ChatSessionControls.models)
+        XCTAssertEqual(ChatSessionControls.modelChoices(current: nil), ChatSessionControls.models)
     }
 
     func testAnEmptyChatSaysWhyWhenTheSessionIsNotKnownYet() throws {
@@ -51,6 +69,28 @@ final class ChatSessionControlsTests: XCTestCase {
         XCTAssertEqual(widths[1], 240)
         let larger = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth * 2)
         XCTAssertEqual(larger[1], 480)
+    }
+
+    func testTableColumnsShrinkTheWidestToFitThePhoneBeforeScrolling() {
+        let rows: [[AttributedString]] = [
+            [AttributedString("Reading"), AttributedString("Now"), AttributedString("Card maximum")],
+            [AttributedString("Memory"), AttributedString(String(repeating: "y", count: 40)),
+             AttributedString(String(repeating: "z", count: 30))],
+        ]
+        let spacing = DS.Space.l
+        let natural = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth)
+        XCTAssertGreaterThan(ChatTableColumns.width(of: natural, spacing: spacing), 353)
+        let fitted = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353)
+        XCTAssertEqual(ChatTableColumns.width(of: fitted, spacing: spacing), 353, accuracy: 0.5)
+        XCTAssertEqual(fitted[0], natural[0], "a column narrower than the others keeps its width")
+        XCTAssertLessThan(fitted[1], natural[1])
+        XCTAssertTrue(fitted.allSatisfy { $0 >= DS.Size.proseTableColumn })
+        let wide = Array(repeating: AttributedString(String(repeating: "w", count: 60)), count: 6)
+        let crowded = ChatTableColumns.widths([wide], characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353)
+        XCTAssertEqual(crowded, Array(repeating: DS.Size.proseTableColumn, count: 6), "past the narrowest columns it scrolls")
+        let small = [[AttributedString("a"), AttributedString("b")]]
+        XCTAssertEqual(ChatTableColumns.widths(small, characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353),
+                       ChatTableColumns.widths(small, characterWidth: ChatTableColumns.characterWidth))
     }
 
     func testImagesComeOnlyFromHostPathsOfImageFiles() throws {
