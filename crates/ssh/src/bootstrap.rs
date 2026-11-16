@@ -228,6 +228,24 @@ struct Probe {
     linger: Option<bool>,
 }
 
+impl Probe {
+    fn platform(&self) -> Result<HostPlatform, SshError> {
+        if self.os.is_empty() {
+            // The probe's commands never ran: something in the login shell's startup took
+            // over, as `exec zsh` in ~/.bashrc does.
+            return Err(SshError::Bootstrap(
+                "the host ran none of the setup commands. Something in its shell startup \
+                 (~/.bashrc, ~/.profile) may start another shell, such as `exec zsh`; \
+                 run that only in interactive shells"
+                    .into(),
+            ));
+        }
+        HostPlatform::from_uname(&self.os, &self.arch).ok_or_else(|| {
+            SshError::Bootstrap(format!("unsupported platform {} {}", self.os, self.arch))
+        })
+    }
+}
+
 #[derive(Deserialize)]
 struct PairJson {
     ticket: String,
@@ -254,9 +272,7 @@ pub async fn bootstrap(
     };
     step(BootstrapStep::Probing);
     let probe = probe(connection).await?;
-    let platform = HostPlatform::from_uname(&probe.os, &probe.arch).ok_or_else(|| {
-        SshError::Bootstrap(format!("unsupported platform {} {}", probe.os, probe.arch))
-    })?;
+    let platform = probe.platform()?;
     let source = binaries.get(platform).ok_or_else(|| {
         SshError::Bootstrap(format!(
             "no {} build supplied ({})",
@@ -489,10 +505,7 @@ fn build_info(text: &str) -> Option<proto::DaemonInfo> {
 /// Detects the platform with `uname -sm` (separately, so odd `uname` output stays
 /// parseable).
 pub async fn detect_platform(connection: &Connection) -> Result<HostPlatform, SshError> {
-    let probe = probe(connection).await?;
-    HostPlatform::from_uname(&probe.os, &probe.arch).ok_or_else(|| {
-        SshError::Bootstrap(format!("unsupported platform {} {}", probe.os, probe.arch))
-    })
+    probe(connection).await?.platform()
 }
 
 async fn probe(connection: &Connection) -> Result<Probe, SshError> {
@@ -592,6 +605,19 @@ mod tests {
         let info = probe.installed.expect("installed build");
         assert_eq!((info.build.as_str(), info.built_unix), ("abc=1", 5));
         assert!(parse_probe("info=not json\n").installed.is_none());
+    }
+
+    #[test]
+    fn a_probe_that_never_ran_says_why() {
+        let error = parse_probe("").platform().unwrap_err();
+        assert!(error.to_string().contains("exec zsh"), "{error}");
+        let error = parse_probe("os=FreeBSD\narch=amd64\n")
+            .platform()
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported platform FreeBSD"),
+            "{error}"
+        );
     }
 
     #[test]
