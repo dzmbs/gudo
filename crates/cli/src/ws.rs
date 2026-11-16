@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use client_core::proto::{
     AgentKind, AttentionKind, AttentionSeen, Axis, DeleteMode, DiffBase, EditorChoice, EditorKind,
-    EditorLaunch, FileKind, GitDiff, GitDiffRequest, LineKind, PaneId, ReviewNote, ReviewRequest,
-    WorktreeCreate, WriteTarget,
+    EditorLaunch, FileKind, FileStat, GitDiff, GitDiffRequest, LineKind, PaneId, ReviewNote,
+    ReviewRequest, WorktreeCreate, WriteTarget,
 };
 use client_core::{WorkspaceEvent, WorkspaceEventQueue};
 
@@ -337,6 +337,82 @@ fn print_diff(diff: &GitDiff, stat: bool) {
     if diff.truncated {
         println!("(some hunks were left out; ask for single files)");
     }
+}
+
+/// `fs stat` for people: one labelled line each.
+fn stat_lines(stat: &FileStat) -> Vec<String> {
+    let kind = match (stat.kind, &stat.link_target) {
+        (FileKind::Symlink, Some(target)) => {
+            let target_kind = stat.target_kind.map_or("missing", kind_name);
+            format!("symbolic link to {target} ({target_kind})")
+        }
+        (kind, _) => kind_name(kind).to_owned(),
+    };
+    let size = match stat.size {
+        1 => "1 byte".to_owned(),
+        size => format!("{size} bytes"),
+    };
+    vec![
+        format!("Path:     {}", stat.path),
+        format!("Kind:     {kind}"),
+        format!("Size:     {size}"),
+        format!(
+            "Mode:     {:03o} ({})",
+            stat.mode & 0o7777,
+            permissions(stat.mode)
+        ),
+        format!("Modified: {}", utc_time(stat.modified.0)),
+        format!("Version:  {}", stat.version),
+    ]
+}
+
+fn kind_name(kind: FileKind) -> &'static str {
+    match kind {
+        FileKind::File => "file",
+        FileKind::Dir => "directory",
+        FileKind::Symlink => "symbolic link",
+        FileKind::Other => "special file",
+    }
+}
+
+/// `rwxr-xr-x`.
+fn permissions(mode: u32) -> String {
+    (0..9)
+        .map(|bit| {
+            if mode & (0o400 >> bit) == 0 {
+                '-'
+            } else {
+                ['r', 'w', 'x'][bit % 3]
+            }
+        })
+        .collect()
+}
+
+/// `2026-11-16 10:40:17 UTC`.
+fn utc_time(unix_ms: u64) -> String {
+    let seconds = unix_ms / 1000;
+    let (days, time_of_day) = (seconds / 86_400, seconds % 86_400);
+    // Days to a civil date in the proleptic Gregorian calendar (Howard Hinnant's algorithm).
+    let shifted = days + 719_468;
+    let era = shifted / 146_097;
+    let day_of_era = shifted % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
+        time_of_day / 3600,
+        time_of_day / 60 % 60,
+        time_of_day % 60
+    )
 }
 
 /// `path[:line[:col]]`.
@@ -805,7 +881,11 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
                 println!("(truncated)");
             }
         }
-        FsCmd::Stat { path } => println!("{:#?}", client.fs_stat(path).await?),
+        FsCmd::Stat { path } => {
+            for line in stat_lines(&client.fs_stat(path).await?) {
+                println!("{line}");
+            }
+        }
         FsCmd::Cat { path, offset, len } => {
             use std::io::Write;
             let chunk = client.fs_read(path, offset, len).await?;
@@ -896,7 +976,38 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use client_core::proto::UnixMillis;
+
     use super::*;
+
+    #[test]
+    fn stat_is_labelled_lines() {
+        let stat = FileStat {
+            path: "/home/u/link".into(),
+            name: "link".into(),
+            kind: FileKind::Symlink,
+            size: 1234,
+            modified: UnixMillis(1_763_289_617_000),
+            mode: 0o100_644,
+            hidden: false,
+            link_target: Some("notes.md".into()),
+            target_kind: Some(FileKind::File),
+            version: "v1".into(),
+        };
+        assert_eq!(
+            stat_lines(&stat),
+            [
+                "Path:     /home/u/link",
+                "Kind:     symbolic link to notes.md (file)",
+                "Size:     1234 bytes",
+                "Mode:     644 (rw-r--r--)",
+                "Modified: 2025-11-16 10:40:17 UTC",
+                "Version:  v1",
+            ]
+        );
+        assert_eq!(utc_time(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(utc_time(951_782_400_000), "2000-02-29 00:00:00 UTC");
+    }
 
     #[test]
     fn parses_targets_and_notes() {
