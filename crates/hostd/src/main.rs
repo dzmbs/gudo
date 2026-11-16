@@ -38,6 +38,16 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use daemon::{Config, Daemon, RelayMode};
 
+/// A line in the running daemon's log (stderr). Unlike `eprintln!`, a log that cannot be
+/// written (a full disk under the log file, a closed pipe) loses the line instead of
+/// panicking and taking the panes down.
+macro_rules! log_line {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 #[derive(Parser)]
 #[command(name = brand::DAEMON_BIN, version = brand::VERSION, about = "Terminal and coding-agent host daemon")]
 struct Cli {
@@ -273,6 +283,7 @@ fn run(
                 .unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .init();
     adopt_legacy_install(&state_dir)?;
     std::fs::create_dir_all(&state_dir)
@@ -317,7 +328,7 @@ fn run(
     let served = runtime.block_on(async move {
         let mut daemon = Daemon::start_inheriting(config, inherited).await?;
         let task_ended = daemon.task_ended();
-        eprintln!(
+        log_line!(
             "{} {} serving as {}",
             brand::DAEMON_BIN,
             brand::VERSION,
@@ -328,13 +339,13 @@ fn run(
             // a service's log file or journal, which others may read.
             if std::io::stderr().is_terminal() {
                 daemon.wait_online(Duration::from_secs(5)).await;
-                eprintln!(
+                log_line!(
                     "No devices paired yet. Scan this with the app, or run `{} pair` later:",
                     brand::DAEMON_BIN
                 );
                 print_ticket(&daemon.pairing_link(daemon::PAIRING_TTL)?);
             } else {
-                eprintln!(
+                log_line!(
                     "No devices paired yet: run `{} pair` to pair one.",
                     brand::DAEMON_BIN
                 );
@@ -354,7 +365,7 @@ fn run(
                 return Err(anyhow::Error::new(ended));
             }
         };
-        eprintln!(
+        log_line!(
             "{}",
             if restart.is_some() {
                 "restarting into the new build"
@@ -393,7 +404,7 @@ fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
     // Before the move: the executable may live inside the old state directory.
     let exe = upgradable_exe();
     if daemon::migrate::adopt_legacy_state(state_dir, Duration::from_secs(10))? {
-        eprintln!("moved the earlier state into {}", state_dir.display());
+        log_line!("moved the earlier state into {}", state_dir.display());
     }
     let Some(mut exe) = exe else { return Ok(()) };
     if let Ok(rest) = exe.strip_prefix(daemon::migrate::legacy_state_dir()) {
@@ -411,7 +422,7 @@ fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
     }
     let new = exe.with_file_name(brand::DAEMON_BIN);
     std::fs::copy(&exe, &new).with_context(|| format!("installing {}", new.display()))?;
-    eprintln!("handing over to the {} service", brand::DAEMON_BIN);
+    log_line!("handing over to the {} service", brand::DAEMON_BIN);
     service::hand_over(&new, state_dir)?;
     std::process::exit(0)
 }
@@ -450,18 +461,18 @@ fn restart_into(exe: &Path, hand_off: Option<daemon::HandOff>) -> ! {
     let hand_off = hand_off.and_then(|hand_off| match hand_off.prepare_exec() {
         Ok(()) => Some(hand_off),
         Err(error) => {
-            eprintln!("could not pass the running panes on: {error}");
+            log_line!("could not pass the running panes on: {error}");
             hand_off.abandon();
             None
         }
     });
     let handed_env = hand_off.as_ref().map(daemon::HandOff::env);
     let error = exec(exe, &args, handed_env.as_ref());
-    eprintln!("could not start the new build {}: {error}", exe.display());
+    log_line!("could not start the new build {}: {error}", exe.display());
     let previous = daemon::upgrade_prev_path(exe);
     if std::fs::rename(&previous, exe).is_ok() {
         let error = exec(exe, &args, handed_env.as_ref());
-        eprintln!("could not start the previous build either: {error}");
+        log_line!("could not start the previous build either: {error}");
     }
     if let Some(hand_off) = hand_off {
         hand_off.abandon();
