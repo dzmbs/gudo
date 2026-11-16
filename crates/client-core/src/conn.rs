@@ -646,11 +646,14 @@ async fn dial(inner: &Arc<Inner>, endpoint: &Endpoint) -> Result<Live, ConnError
                 return Ok(live);
             }
             // A removed device is refused as revoked, and may still pair again with a new
-            // ticket's secret.
+            // ticket's secret. A used one is refused as invalid, but the revocation is what
+            // the person needs to hear.
             Err(ConnError::Refused(
                 reason @ (proto::RefuseReason::InvalidGrant | proto::RefuseReason::Revoked),
             )) => {
-                last_error = ConnError::Refused(reason);
+                if !matches!(last_error, ConnError::Refused(proto::RefuseReason::Revoked)) {
+                    last_error = ConnError::Refused(reason);
+                }
             }
             Err(err) => return Err(err),
         }

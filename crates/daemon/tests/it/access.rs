@@ -198,6 +198,35 @@ async fn a_removed_device_cannot_reconnect_on_its_old_pairing() {
     daemon.shutdown().await;
 }
 
+/// A removed device starting afresh with its old, used ticket hears it was revoked, not that
+/// the ticket is invalid.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removed_device_starting_afresh_is_told_it_was_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let phone_ticket = ticket(&daemon);
+    let phone_key = ClientConfig::generate_key();
+    let mut phone = TestClient::connect(&phone_ticket, phone_key.clone());
+    phone.attach_and_follow().await;
+    let mut ipad = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    ipad.attach_and_follow().await;
+    let device = phone.client.me().unwrap().actor.device;
+    ipad.client
+        .revoke(RevokeTarget::Device(device))
+        .await
+        .expect("remove");
+    phone.until("signed out", is_revoked).await;
+    drop(phone);
+
+    let mut again = TestClient::connect(&phone_ticket, phone_key);
+    again
+        .until("refused", |client| !client.refused.is_empty())
+        .await;
+    assert!(again.refused[0].contains("Revoked"), "{:?}", again.refused);
+    drop((again, ipad));
+    daemon.shutdown().await;
+}
+
 /// A revoked guest cannot use any invite from before the revocation, but a new invite the
 /// owner makes afterwards lets them back (as re-inviting someone removed from a share).
 #[tokio::test(flavor = "multi_thread")]
