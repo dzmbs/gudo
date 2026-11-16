@@ -568,14 +568,35 @@ fn lock_instance(state_dir: &Path) -> Result<OwnedFd> {
         .write(true)
         .open(state_dir.join("hostd.lock"))?;
     let fd = OwnedFd::from(file);
-    if rustix::fs::flock(&fd, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_err() {
-        bail!(
-            "another {} is already running with state dir {}",
-            brand::DAEMON_BIN,
-            state_dir.display()
-        );
+    // `status` and `pair` hold a shared lock for an instant to see whether a daemon runs, so
+    // a daemon starting at that moment tries again before giving up.
+    for _ in 0..LOCK_ATTEMPTS {
+        if rustix::fs::flock(&fd, rustix::fs::FlockOperation::NonBlockingLockExclusive).is_ok() {
+            return Ok(fd);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
-    Ok(fd)
+    bail!(
+        "another {} is already running with state dir {}",
+        brand::DAEMON_BIN,
+        state_dir.display()
+    );
+}
+
+const LOCK_ATTEMPTS: u32 = 10;
+
+/// Whether the daemon that recorded `info` still runs. Its process id alone is not enough:
+/// after a reboot it may belong to another process, but only a daemon holds the state
+/// directory's instance lock.
+fn daemon_running(state_dir: &Path, info: &daemon::EndpointInfo) -> bool {
+    pid_alive(info.pid) && instance_locked(state_dir)
+}
+
+fn instance_locked(state_dir: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(state_dir.join("hostd.lock")) else {
+        return false;
+    };
+    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockShared).is_err()
 }
 
 /// The user's login shell from the passwd database, for service managers that set no $SHELL.
@@ -636,7 +657,7 @@ fn pair(
             "addrs": ticket.addrs,
             "relay_url": ticket.relay_url,
             "relays": relays_label(&extras.relays),
-            "running": info.is_some_and(|info| pid_alive(info.pid)),
+            "running": info.is_some_and(|info| daemon_running(state_dir, &info)),
             "version": brand::VERSION,
             "uses": uses,
             "ticket_id": reusable_id,
@@ -644,7 +665,7 @@ fn pair(
         println!("{out}");
         return Ok(());
     }
-    if daemon::endpoint_info(state_dir)?.is_some_and(|info| !pid_alive(info.pid)) {
+    if daemon::endpoint_info(state_dir)?.is_some_and(|info| !daemon_running(state_dir, &info)) {
         eprintln!(
             "warning: the daemon is not running; start it with `{} run`",
             brand::DAEMON_BIN
@@ -757,7 +778,7 @@ fn wait_for_endpoint(state_dir: &Path, wait: Duration) -> Result<()> {
     let mut live_since = None;
     loop {
         let info = daemon::endpoint_info(state_dir).ok().flatten();
-        if let Some(info) = info.filter(|info| pid_alive(info.pid)) {
+        if let Some(info) = info.filter(|info| daemon_running(state_dir, info)) {
             let since = *live_since.get_or_insert_with(std::time::Instant::now);
             if info.relay_url.is_some() || since.elapsed() >= RELAY_GRACE {
                 return Ok(());
@@ -811,7 +832,7 @@ fn status(state_dir: &Path) -> Result<()> {
         );
         return Ok(());
     };
-    let running = pid_alive(info.pid);
+    let running = daemon_running(state_dir, &info);
     println!(
         "{} (pid {}, state dir {})",
         if running { "running" } else { "not running" },
@@ -838,7 +859,7 @@ fn restart(state_dir: &Path) -> Result<()> {
     const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
     const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
     let before = daemon::endpoint_info(state_dir)?
-        .filter(|info| pid_alive(info.pid))
+        .filter(|info| daemon_running(state_dir, info))
         .with_context(|| {
             format!(
                 "no daemon is running with state dir {}",
