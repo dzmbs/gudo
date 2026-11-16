@@ -458,7 +458,13 @@ gives way to it (plain shells still open stay until closed). When the helper ref
 `Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
 has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
 shows as connecting meanwhile, and the refusal (in words) only if that fails. Remote hosts never
-pair again on their own. Stop Helper ends it and brings back a plain shell. Test
+pair again on their own. When the helper ends on its own (killed, crashed, stopped from a
+terminal), the app sees its process exit, redials This Mac at once ("Connecting", the last
+frame stays) and starts the helper again after 0.5 s, further apart with jitter while it keeps
+ending right after starting, and leaves it stopped after five of those in a row
+(`HelperRespawn`); launchd's own restart of a crashed login item is found and used, and a
+daemon the user runs on the folder is only redialled. Stop Helper ends it and brings back a
+plain shell. Test
 launches (`AppData`) never start it unless `-localHelper YES`, and then only as a child in the test
 folder (`apple/Dogfood/this-mac.json`). iPhone and iPad have no helper.
 

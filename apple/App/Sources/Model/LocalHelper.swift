@@ -39,6 +39,12 @@ final class LocalHelper {
     @ObservationIgnored private var pairsAgainAfterTask = false
     @ObservationIgnored private var isPairingAgain = false
     @ObservationIgnored private var pairingAgainFailed: ContinuousClock.Instant?
+    @ObservationIgnored private var exitWatch: DispatchSourceProcess?
+    @ObservationIgnored private var watchedSince: ContinuousClock.Instant?
+    @ObservationIgnored private var respawn = HelperRespawn()
+    @ObservationIgnored private var respawnTask: Task<Void, Never>?
+    /// A daemon the user runs on the folder serves This Mac: they (or launchd) start it again.
+    @ObservationIgnored private var servesForeign = false
     /// The host became ready (each window opens it).
     @ObservationIgnored var onReady: ((String) -> Void)?
     /// The helper stopped or failed to start.
@@ -103,6 +109,7 @@ final class LocalHelper {
             do {
                 let id = try await run()
                 state = .running
+                watchExit()
                 onReady?(id)
             } catch {
                 if Task.isCancelled { return }
@@ -138,6 +145,7 @@ final class LocalHelper {
                 let id = try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
                 pairingAgainFailed = nil
                 state = .running
+                watchExit()
                 onReady?(id)
             } catch {
                 Self.log.error("helper: pairing again failed: \(String(describing: error), privacy: .public)")
@@ -169,6 +177,7 @@ final class LocalHelper {
     func stop() {
         defaults.set(false, forKey: Self.enabledKey)
         task?.cancel()
+        stopWatchingExit()
         if let id = hosts.thisDeviceId { hosts.disconnect(id) }
         if !isIsolated { try? agent.unregister() }
         child?.terminate()
@@ -188,6 +197,7 @@ final class LocalHelper {
         guard isEnabled else { return }
         task?.cancel()
         task = nil
+        stopWatchingExit()
         if !keep { try? agent.unregister() }
         child?.terminate()
         child = nil
@@ -204,13 +214,69 @@ final class LocalHelper {
 
     /// The app is quitting: a child helper goes with it (a login item stays).
     func appWillTerminate() {
+        stopWatchingExit()
         child?.terminate()
+    }
+
+    // MARK: When the helper ends on its own
+
+    /// Notices the helper ending while it serves This Mac (killed, crashed, or stopped from a
+    /// terminal), whoever started it: the app, launchd or the user.
+    private func watchExit() {
+        stopWatchingExit()
+        guard let endpoint = Self.runningEndpoint(in: stateDirectory) else { return }
+        let pid = endpoint.pid
+        let source = DispatchSource.makeProcessSource(identifier: pid_t(pid), eventMask: .exit, queue: .main)
+        source.setEventHandler { [weak self] in
+            MainActor.assumeIsolated { self?.helperExited(pid: pid) }
+        }
+        source.resume()
+        exitWatch = source
+        watchedSince = .now
+        // A process that ended before the watch began never reports it.
+        if kill(pid, 0) != 0 { helperExited(pid: pid) }
+    }
+
+    private func stopWatchingExit() {
+        exitWatch?.cancel()
+        exitWatch = nil
+        respawnTask?.cancel()
+        respawnTask = nil
+    }
+
+    /// Starts the helper once more after a pause, so This Mac reconnects to it by itself. Its
+    /// layout and saved screens bring the sessions back.
+    private func helperExited(pid: Int32) {
+        exitWatch?.cancel()
+        exitWatch = nil
+        guard isEnabled, state == .running, task == nil, respawnTask == nil else { return }
+        // Its link looks up until the idle timeout; dialling now shows "Connecting" at once
+        // and reaches the helper as soon as one listens again.
+        if let id = hosts.thisDeviceId { hosts.connection(id)?.retry() }
+        guard !servesForeign else { return }
+        if child?.processIdentifier == pid { child = nil }
+        let ranFor = watchedSince.map { ContinuousClock.now - $0 } ?? .zero
+        guard let delay = respawn.delay(afterRunning: ranFor, jitter: .random(in: 0..<1)) else {
+            Self.log.error("helper: pid \(pid) ended right after starting again; leaving it stopped")
+            state = .failed(HelperError.keepsStopping.errorDescription ?? "")
+            onUnavailable?()
+            return
+        }
+        Self.log.info("helper: pid \(pid) ended; starting it again in \(delay, privacy: .public)")
+        state = .starting
+        respawnTask = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            respawnTask = nil
+            start()
+        }
     }
 
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
         if !isIsolated && !Brand.isDev { await retireLegacyHelper() }
         var launched = true
+        servesForeign = false
         let running = Self.runningEndpoint(in: stateDirectory)
         let loginItemEnabled = !isIsolated && agent.status == .enabled
         let plan = Self.plan(
@@ -219,6 +285,7 @@ final class LocalHelper {
         switch plan {
         case .useForeign:
             launched = false
+            servesForeign = true
             // A daemon the user runs on this folder (`service install`, `run`) serves This Mac.
             // The app's login item could only fail to take the folder, again and again.
             if loginItemEnabled {
@@ -315,6 +382,10 @@ final class LocalHelper {
             return false
         }
         noteRegistered(binary)
+        // launchd starts it again after a crash, never after it stopped cleanly (`SIGTERM`).
+        if Self.runningEndpoint(in: stateDirectory) == nil {
+            _ = try? await Self.output(URL(fileURLWithPath: "/bin/launchctl"), ["kickstart", "gui/\(getuid())/\(Self.label)"])
+        }
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
             if Self.runningEndpoint(in: stateDirectory) != nil { return true }
@@ -459,11 +530,35 @@ final class LocalHelper {
     }
 }
 
+/// When a helper that ended on its own starts again: soon after a long run, then further
+/// apart (with jitter) while it keeps ending right after it starts, and not again after
+/// `maxQuickEnds` of those in a row.
+nonisolated struct HelperRespawn: Equatable {
+    /// launchd starts a crashed login item at once; waiting a little first lets the app find
+    /// that one rather than race it for the state folder.
+    static let firstDelay = Duration.milliseconds(500)
+    static let maxDelay = Duration.seconds(30)
+    static let stableAfter = Duration.seconds(30)
+    static let maxQuickEnds = 5
+    private(set) var endsInARow = 0
+
+    /// The pause before starting again, or nil to leave it stopped. `jitter` in 0..<1 adds up
+    /// to half the pause again.
+    mutating func delay(afterRunning ranFor: Duration, jitter: Double) -> Duration? {
+        if ranFor >= Self.stableAfter { endsInARow = 0 }
+        endsInARow += 1
+        guard endsInARow <= Self.maxQuickEnds else { return nil }
+        let base = min(Self.firstDelay * (1 << (endsInARow - 1)), Self.maxDelay)
+        return base + base * (min(max(jitter, 0), 1) / 2)
+    }
+}
+
 nonisolated enum HelperError: Error, Equatable, LocalizedError {
     case notBundled
     case didNotStart
     case exited(Int32)
     case noTicket
+    case keepsStopping
 
     var errorDescription: String? {
         switch self {
@@ -471,6 +566,7 @@ nonisolated enum HelperError: Error, Equatable, LocalizedError {
         case .didNotStart: "The helper didn't start."
         case .exited(let status): "The helper stopped (status \(status))."
         case .noTicket: "The helper didn't hand out a pairing ticket."
+        case .keepsStopping: "The helper keeps stopping right after it starts."
         }
     }
 }

@@ -64,5 +64,31 @@ final class LocalHelperTests: XCTestCase {
         let refused = await LocalHelper.restartInPlace(binary: try helper(exiting: 1), stateDirectory: state)
         XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted")
     }
+
+    func testAHelperThatEndsStartsAgainOnceAfterAPause() {
+        var respawn = HelperRespawn()
+        XCTAssertEqual(respawn.delay(afterRunning: .seconds(3600), jitter: 0), .milliseconds(500))
+        XCTAssertEqual(respawn.delay(afterRunning: .seconds(3600), jitter: 0), .milliseconds(500),
+                       "a helper that ran a while is started again soon, every time")
+    }
+
+    func testAHelperThatKeepsEndingIsStartedFurtherApartThenLeftStopped() {
+        var respawn = HelperRespawn()
+        var delays: [Duration] = []
+        while let delay = respawn.delay(afterRunning: .seconds(1), jitter: 0) { delays.append(delay) }
+        XCTAssertEqual(delays, [.milliseconds(500), .seconds(1), .seconds(2), .seconds(4), .seconds(8)])
+        XCTAssertNil(respawn.delay(afterRunning: .seconds(1), jitter: 0))
+        XCTAssertEqual(respawn.delay(afterRunning: .seconds(60), jitter: 0), .milliseconds(500),
+                       "a run that lasted counts as recovered")
+    }
+
+    func testJitterSpreadsTheRestartUpToHalfAgain() throws {
+        var low = HelperRespawn()
+        var high = HelperRespawn()
+        XCTAssertEqual(low.delay(afterRunning: .seconds(60), jitter: 0), .milliseconds(500))
+        let spread = try XCTUnwrap(high.delay(afterRunning: .seconds(60), jitter: 0.999))
+        XCTAssertGreaterThan(spread, .milliseconds(745))
+        XCTAssertLessThan(spread, .milliseconds(750))
+    }
 }
 #endif
