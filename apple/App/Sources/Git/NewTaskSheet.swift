@@ -396,6 +396,7 @@ private struct RunnerPicker: View {
                         .contentShape(.capsule)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(runner.title)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }

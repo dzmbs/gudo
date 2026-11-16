@@ -135,6 +135,7 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
     private func button(_ action: SheetAction) -> some View {
         Button(action.title, action: action.action)
             .disabled(!action.isEnabled)
+            .accessibilityLabel(action.title)
             .accessibilityIdentifier(action.identifier ?? "")
     }
 

@@ -95,6 +95,8 @@ struct ThemePicker: View {
                         ThemeTile(theme: theme, isSelected: theme.name == selection)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(theme.name)
+                    .accessibilityAddTraits(theme.name == selection ? .isSelected : [])
                     .accessibilityIdentifier("\(prefix)-\(theme.name)")
                 }
             }

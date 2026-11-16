@@ -57,6 +57,7 @@ struct DiffReviewView: View {
                     }
                 }
                 .help("Layout: automatic, unified or side by side")
+                .accessibilityLabel("Layout")
                 .menuIndicator(.hidden)
                 copyMenu
                 Button("Reload", systemImage: "arrow.clockwise") { Task { await load() } }

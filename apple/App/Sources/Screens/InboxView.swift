@@ -841,11 +841,13 @@ private struct InboxRow: View {
                 Button { isEditing = true } label: { verb("Edit", key: "E") }
                     .buttonStyle(.quiet)
                     .help("Edit the command, then approve (E)")
+                    .accessibilityLabel("Edit")
                     .accessibilityIdentifier("inbox-edit-\(item.id)")
             }
             Button(action: deny) { verb("Deny", key: "esc") }
                 .buttonStyle(.quiet)
                 .help("Deny (Esc)")
+                .accessibilityLabel("Deny")
                 .accessibilityIdentifier("inbox-deny-\(item.id)")
             HStack(spacing: 1) {
                 Button(action: approve) {
@@ -854,6 +856,7 @@ private struct InboxRow: View {
                     .buttonStyle(.primaryGlass)
                     .disabled(!mayApprove)
                     .help(item.drive ? "Allow this one action (↩)" : "Approve (↩)")
+                    .accessibilityLabel(approval?.approvedAlready == true ? "Approved" : item.drive ? "Allow Once" : "Approve")
                     .accessibilityIdentifier("inbox-approve-\(item.id)")
                 if item.drive, mayApprove {
                     Menu {

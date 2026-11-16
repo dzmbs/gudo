@@ -818,6 +818,7 @@ private struct PaneControls: View {
         .help("Split, zoom, float or close the pane")
         .menuIndicator(.hidden)
         .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
+        .accessibilityLabel("Split")
         .accessibilityIdentifier("pane-menu")
         Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
             .help("Command Palette (⌘K)")

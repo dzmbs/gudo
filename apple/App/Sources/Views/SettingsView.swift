@@ -758,6 +758,7 @@ private struct SettingsSidebar: View {
                         .frame(height: Self.rowHeight)
                     }
                     .buttonStyle(.sidebarRow(selected: isSelected))
+                    .accessibilityLabel(pane.title)
                     .accessibilityAddTraits(isSelected ? .isSelected : [])
                     .accessibilityIdentifier("settings-pane-\(pane.rawValue)")
                 }
