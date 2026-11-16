@@ -7,8 +7,8 @@ use anyhow::{Context, Result};
 use clap::{Subcommand, ValueEnum};
 use client_core::proto::{
     AgentKind, AttentionKind, AttentionSeen, Axis, DeleteMode, DiffBase, EditorChoice, EditorKind,
-    EditorLaunch, FileKind, FileStat, GitDiff, GitDiffRequest, LineKind, PaneId, ReviewNote,
-    ReviewRequest, WorktreeCreate, WriteTarget,
+    EditorLaunch, FileChange, FileKind, FileStat, GitDiff, GitDiffRequest, GitStatus, LineKind,
+    PaneId, ReviewNote, ReviewRequest, WorktreeCreate, WriteTarget,
 };
 use client_core::{WorkspaceEvent, WorkspaceEventQueue};
 
@@ -339,6 +339,50 @@ fn print_diff(diff: &GitDiff, stat: bool) {
     }
 }
 
+/// `git status --short --branch`.
+fn status_lines(status: &GitStatus) -> Vec<String> {
+    let mut branch = format!(
+        "## {}",
+        status.branch.as_deref().unwrap_or("HEAD (no branch)")
+    );
+    if let Some(upstream) = &status.upstream {
+        branch.push_str(&format!("...{upstream}"));
+        let counts = [("ahead", status.ahead), ("behind", status.behind)]
+            .into_iter()
+            .filter(|(_, count)| *count > 0)
+            .map(|(word, count)| format!("{word} {count}"))
+            .collect::<Vec<_>>();
+        if !counts.is_empty() {
+            branch.push_str(&format!(" [{}]", counts.join(", ")));
+        }
+    }
+    let files = status.files.iter().map(|file| {
+        let code = match (file.staged, file.unstaged) {
+            (FileChange::Untracked, _) | (_, FileChange::Untracked) => "??".to_owned(),
+            (staged, unstaged) => format!("{}{}", change_code(staged), change_code(unstaged)),
+        };
+        match &file.orig_path {
+            Some(orig_path) => format!("{code} {orig_path} -> {}", file.path),
+            None => format!("{code} {}", file.path),
+        }
+    });
+    std::iter::once(branch).chain(files).collect()
+}
+
+fn change_code(change: FileChange) -> char {
+    match change {
+        FileChange::Unmodified => ' ',
+        FileChange::Modified => 'M',
+        FileChange::Added => 'A',
+        FileChange::Deleted => 'D',
+        FileChange::Renamed => 'R',
+        FileChange::Copied => 'C',
+        FileChange::TypeChanged => 'T',
+        FileChange::Unmerged => 'U',
+        FileChange::Untracked => '?',
+    }
+}
+
 /// `fs stat` for people: one labelled line each.
 fn stat_lines(stat: &FileStat) -> Vec<String> {
     let kind = match (stat.kind, &stat.link_target) {
@@ -613,24 +657,8 @@ pub(crate) async fn run(conn: &mut Conn, command: WsCmd) -> Result<()> {
                 if conn.json {
                     return crate::json::print("git.status", &crate::json::Git::from(&status));
                 }
-                println!(
-                    "{} on {} (upstream {}, +{} -{})",
-                    status.root,
-                    status.branch.as_deref().unwrap_or("(detached)"),
-                    status.upstream.as_deref().unwrap_or("-"),
-                    status.ahead,
-                    status.behind
-                );
-                for file in &status.files {
-                    let orig = file
-                        .orig_path
-                        .as_ref()
-                        .map(|orig| format!(" (from {orig})"))
-                        .unwrap_or_default();
-                    println!(
-                        "  {:?}/{:?} {}{orig}",
-                        file.staged, file.unstaged, file.path
-                    );
+                for line in status_lines(&status) {
+                    println!("{line}");
                 }
             }
             GitCmd::Diff {
@@ -976,9 +1004,48 @@ async fn fs(conn: &mut Conn, action: FsCmd) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use client_core::proto::UnixMillis;
+    use client_core::proto::{GitFileStatus, UnixMillis};
 
     use super::*;
+
+    fn file(path: &str, staged: FileChange, unstaged: FileChange) -> GitFileStatus {
+        GitFileStatus {
+            path: path.into(),
+            orig_path: None,
+            staged,
+            unstaged,
+        }
+    }
+
+    #[test]
+    fn status_reads_like_git_status_short() {
+        let mut renamed = file("new.rs", FileChange::Renamed, FileChange::Unmodified);
+        renamed.orig_path = Some("old.rs".into());
+        let status = GitStatus {
+            root: "/repo".into(),
+            branch: Some("main".into()),
+            head: Some("abc123".into()),
+            upstream: Some("origin/main".into()),
+            ahead: 2,
+            behind: 0,
+            files: vec![
+                file("a.rs", FileChange::Unmodified, FileChange::Modified),
+                file("b.rs", FileChange::Added, FileChange::Modified),
+                file("notes.txt", FileChange::Untracked, FileChange::Untracked),
+                renamed,
+            ],
+        };
+        assert_eq!(
+            status_lines(&status),
+            [
+                "## main...origin/main [ahead 2]",
+                " M a.rs",
+                "AM b.rs",
+                "?? notes.txt",
+                "R  old.rs -> new.rs",
+            ]
+        );
+    }
 
     #[test]
     fn stat_is_labelled_lines() {
