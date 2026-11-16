@@ -141,7 +141,8 @@ enum SettingsIndex {
         entries.append(.init(id: "tab-bar", title: "Tab Bar When the Sidebar Is Hidden", section: .appearance, synonyms: ["tabs", "strip"]))
         entries += [
             .init(id: "menu-bar-agents", title: "Agents in the Menu Bar", section: .notifications, synonyms: ["menu bar", "status", "needs you", "icon"]),
-            .init(id: "this-mac-keep-running", title: "Keep Sessions Running in the Background", section: .thisMac, synonyms: ["helper", "daemon", "login item", "background", "quit"]),
+            .init(id: "this-mac-keep-running", title: "Keep Sessions Running After You Quit", section: .thisMac, synonyms: ["helper", "daemon", "background", "quit"]),
+            .init(id: "this-mac-start-at-login", title: "Start Helper at Login", section: .thisMac, synonyms: ["helper", "daemon", "login item", "startup", "boot"]),
             .init(id: "this-mac-helper", title: "Stop Helper", section: .thisMac, synonyms: ["helper", "daemon", "start", "local"]),
             .init(id: "this-mac-command-line-tool", title: "Command Line Tool", section: .thisMac, synonyms: ["cli", "terminal", "shell", "path", "pair", "devices"]),
         ]

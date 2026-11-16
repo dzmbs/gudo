@@ -1,13 +1,14 @@
 #if os(macOS)
 import DesignSystem
-import ServiceManagement
 import SwiftUI
 
 /// Settings ▸ This Mac: the helper that gives This Mac files, changes, ports, the editor and
-/// agents, whether its sessions keep running after the app quits, and stopping it.
+/// agents, whether its sessions keep running after the app quits and start at login, and
+/// stopping it.
 struct ThisMacSettingsSection: View {
     private let helper = AppModel.shared.localHelper
     @State private var keepsRunning = true
+    @State private var startsAtLogin = false
     @State private var commandLineTool = CommandLineTool.Status.notInstalled
 
     var body: some View {
@@ -17,19 +18,24 @@ struct ThisMacSettingsSection: View {
                     Text(status(helper)).foregroundStyle(DS.Palette.textSecondary)
                 }
                 .accessibilityIdentifier("settings-this-mac-status")
-                Toggle("Keep Sessions Running in the Background", isOn: $keepsRunning)
+                Toggle("Keep Sessions Running After You Quit", isOn: $keepsRunning)
                     .disabled(!helper.isEnabled || helper.isIsolated)
                     .onChange(of: keepsRunning) { _, keep in
                         if keep != helper.keepsRunning { helper.setKeepsRunning(keep) }
+                        if !keep { startsAtLogin = false }
                     }
                     .accessibilityIdentifier("settings-this-mac-keep-running")
                     .settingAnchor("this-mac-keep-running")
-                if helper.needsApproval {
-                    LabeledContent("Allow it in Login Items to keep sessions running after the app quits.") {
-                        Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
-                    }
-                    .font(DS.Font.rowDetail)
+                Toggle(isOn: $startsAtLogin) {
+                    Text("Start Helper at Login")
+                    Text("Terminals and agents come back when you log in, before you open the app.")
                 }
+                .disabled(!helper.isEnabled || helper.isIsolated || !keepsRunning)
+                .onChange(of: startsAtLogin) { _, starts in
+                    if starts != helper.startsAtLogin { helper.setStartsAtLogin(starts) }
+                }
+                .accessibilityIdentifier("settings-this-mac-start-at-login")
+                .settingAnchor("this-mac-start-at-login")
                 if CommandLineTool.helper != nil {
                     LabeledContent {
                         if commandLineTool == .installed {
@@ -62,7 +68,10 @@ struct ThisMacSettingsSection: View {
             } footer: {
                 Text(footer(helper))
             }
-            .onAppear { keepsRunning = helper.keepsRunning }
+            .onAppear {
+                keepsRunning = helper.keepsRunning
+                startsAtLogin = helper.startsAtLogin
+            }
         }
     }
 
@@ -79,9 +88,8 @@ struct ThisMacSettingsSection: View {
         if helper.state == .off {
             return "Without the helper, This Mac has plain terminal tabs only: no files, changes, ports, editor or agents."
         }
-        return keepsRunning
-            ? "Terminals and agents on This Mac keep running when you quit, and come back when you open the app. Stop the helper to end them."
-            : "Terminals and agents on This Mac end when you quit the app."
+        guard keepsRunning else { return "Terminals and agents on This Mac end when you quit the app." }
+        return "Terminals and agents on This Mac keep running when you quit, until you log out. Changing these settings restarts them where they were. Stop the helper to end them."
     }
 }
 #endif

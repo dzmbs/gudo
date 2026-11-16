@@ -2,45 +2,94 @@
 import XCTest
 @testable import App
 
-/// How the app starts This Mac's helper, above all after an update replaced the app while the
-/// helper kept running: it restarts into the new build and keeps its sessions.
+/// How the app starts This Mac's helper, above all after an update while the helper kept
+/// running (it restarts into the new build and keeps its sessions), and how it moves on from the
+/// login item earlier versions registered.
 @MainActor
 final class LocalHelperTests: XCTestCase {
-    private let running = LocalHelper.Endpoint(daemonId: "d", pid: 42)
-
-    func testNothingRunningStartsTheHelper() {
+    func testNothingRunningStartsTheInstalledHelper() {
+        XCTAssertEqual(LocalHelper.plan(running: nil, loginItem: .none, registeredIsCurrent: false), .launch(retiresLoginItem: false))
         XCTAssertEqual(
-            LocalHelper.plan(running: nil, isAppHelper: false, keepsRunning: true, loginItemEnabled: true, registeredIsCurrent: false),
-            .launch)
+            LocalHelper.plan(running: nil, loginItem: .enabled, registeredIsCurrent: true), .launch(retiresLoginItem: true),
+            "an earlier version's login item goes once nothing it runs would end")
+        XCTAssertEqual(LocalHelper.plan(running: nil, loginItem: .disabled, registeredIsCurrent: false), .launch(retiresLoginItem: true))
     }
 
     func testADaemonTheUserRunsServesThisMac() {
-        XCTAssertEqual(
-            LocalHelper.plan(running: running, isAppHelper: false, keepsRunning: true, loginItemEnabled: true, registeredIsCurrent: false),
-            .useForeign)
+        XCTAssertEqual(LocalHelper.plan(running: .foreign, loginItem: .none, registeredIsCurrent: false), .useForeign(retiresLoginItem: false))
+        XCTAssertEqual(LocalHelper.plan(running: .foreign, loginItem: .enabled, registeredIsCurrent: false), .useForeign(retiresLoginItem: true))
     }
 
-    func testAnUpdatedAppRestartsItsHelperInPlace() {
+    func testTheInstalledHelperRestartsIntoTheNewBuildInPlace() {
         XCTAssertEqual(
-            LocalHelper.plan(running: running, isAppHelper: true, keepsRunning: true, loginItemEnabled: true, registeredIsCurrent: false),
-            .restartInPlace(replaceIfRefused: true),
+            LocalHelper.plan(running: .installed, loginItem: .none, registeredIsCurrent: false), .restartInPlace(retiresLoginItem: false))
+        XCTAssertEqual(
+            LocalHelper.plan(running: .installed, loginItem: .enabled, registeredIsCurrent: false), .restartInPlace(retiresLoginItem: true),
+            "a login item left over runs nothing while the installed build holds the folder")
+    }
+
+    func testAnEarlierLoginItemsHelperKeepsItsSessions() {
+        XCTAssertEqual(
+            LocalHelper.plan(running: .bundled, loginItem: .enabled, registeredIsCurrent: true),
+            .keepBundled(stopsLoginStart: true, replaceIfRefused: false),
+            "kept, and kept from starting at the next login")
+        XCTAssertEqual(
+            LocalHelper.plan(running: .bundled, loginItem: .enabled, registeredIsCurrent: false),
+            .keepBundled(stopsLoginStart: true, replaceIfRefused: true),
             "a helper from before hand-offs is replaced; its agents resume")
+        for loginItem in [LocalHelper.LoginItem.disabled, .none] {
+            XCTAssertEqual(
+                LocalHelper.plan(running: .bundled, loginItem: loginItem, registeredIsCurrent: false),
+                .keepBundled(stopsLoginStart: false, replaceIfRefused: false),
+                "switched off already, or an earlier version's child: never replaced from here")
+        }
     }
 
-    func testTheHelperIsAskedEvenWhenTheLoginItemLooksCurrent() {
-        // The login item can read as off or current after the app was replaced; the helper
-        // itself knows whether the file it runs from changed.
-        for (loginItemEnabled, registeredIsCurrent) in [(true, true), (false, false), (false, true)] {
-            XCTAssertEqual(
-                LocalHelper.plan(
-                    running: running, isAppHelper: true, keepsRunning: true,
-                    loginItemEnabled: loginItemEnabled, registeredIsCurrent: registeredIsCurrent),
-                .restartInPlace(replaceIfRefused: false))
-        }
+    func testWhatRunsIsToldByWhereItRunsFrom() {
+        let versions = URL(fileURLWithPath: "/Users/u/Library/Application Support/Gudo/Helper/Versions", isDirectory: true)
+        XCTAssertEqual(LocalHelper.runningHelper(executable: versions.path + "/Current/gudo-hostd", versions: versions), .installed)
+        XCTAssertEqual(LocalHelper.runningHelper(executable: "/Applications/Gudo.app/Contents/MacOS/gudo-hostd", versions: versions), .bundled)
+        XCTAssertEqual(LocalHelper.runningHelper(executable: "/Users/u/.local/bin/gudo-hostd", versions: versions), .foreign)
         XCTAssertEqual(
-            LocalHelper.plan(running: running, isAppHelper: true, keepsRunning: false, loginItemEnabled: true, registeredIsCurrent: false),
-            .restartInPlace(replaceIfRefused: false),
-            "a helper running as the app's child is never replaced from here")
+            LocalHelper.runningHelper(executable: versions.path + "-old/Current/gudo-hostd", versions: versions), .foreign,
+            "a folder next to it is not it")
+    }
+
+    func testStartingTheJobReadsWhetherItStartedOneAndTellsARefusal() async throws {
+        let folder = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let state = folder.appending(path: "state", directoryHint: .isDirectory)
+        let started = try await LocalHelper.startJob(
+            executable: try Self.script(in: folder, #"echo '{"label":"x","started":true,"pid":7}'"#), stateDirectory: state)
+        XCTAssertTrue(started)
+        let found = try await LocalHelper.startJob(
+            executable: try Self.script(in: folder, #"echo '{"label":"x","started":false,"pid":7}'"#), stateDirectory: state)
+        XCTAssertFalse(found)
+        do {
+            _ = try await LocalHelper.startJob(executable: try Self.script(in: folder, "exit 3"), stateDirectory: state)
+            XCTFail("a refusal throws")
+        } catch {
+            XCTAssertEqual(error as? HelperError, .launchdRefused, "the app then runs the helper as its child")
+        }
+        do {
+            _ = try await LocalHelper.startJob(executable: try Self.script(in: folder, "exit 1"), stateDirectory: state)
+            XCTFail("a failure throws")
+        } catch {
+            XCTAssertEqual(error as? HelperError, .exited(1))
+        }
+    }
+
+    private static func folder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    private static func script(in folder: URL, _ body: String) throws -> URL {
+        let script = folder.appending(path: "helper-\(UUID().uuidString.prefix(8))")
+        try "#!/bin/sh\n\(body)\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
     }
 
     func testRestartInPlaceRunsTheHelpersRestartCommand() async throws {
@@ -63,23 +112,6 @@ final class LocalHelperTests: XCTestCase {
 
         let refused = await LocalHelper.restartInPlace(binary: try helper(exiting: 1), stateDirectory: state)
         XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted")
-    }
-
-    func testALoginItemLaunchdHasNoJobForGivesUpAtOnce() async {
-        let started = ContinuousClock.now
-        let loaded = await LocalHelper.kickstartWhenLoaded(within: .seconds(1)) { false }
-        XCTAssertFalse(loaded, "nothing would start it: the app runs the helper as a child")
-        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
-    }
-
-    func testALoginItemThatLoadsAMomentLaterIsStarted() async {
-        var attempts = 0
-        let loaded = await LocalHelper.kickstartWhenLoaded(within: .seconds(2)) {
-            attempts += 1
-            return attempts >= 3
-        }
-        XCTAssertTrue(loaded)
-        XCTAssertEqual(attempts, 3)
     }
 
     func testAHelperThatEndsStartsAgainOnceAfterAPause() {
