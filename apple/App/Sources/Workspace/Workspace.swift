@@ -617,6 +617,15 @@ final class Workspace {
     /// drops typing (or the ⌘ shortcuts that need a responder) on iPhone and iPad.
     @ObservationIgnored var inheritsKeyboardFocus = false
 
+    /// An overlay over the window has the keyboard (`WindowModel.overlayHoldsKeyboard`): every
+    /// terminal here refuses it until the overlay closes.
+    @ObservationIgnored var refusesKeyboard = false {
+        didSet {
+            guard refusesKeyboard != oldValue else { return }
+            for pane in made.values { pane.view.refusesKeyboard = refusesKeyboard }
+        }
+    }
+
     /// Whether the focused pane should take first responder when it appears or gains focus. On iOS
     /// only while typing already goes to a terminal or a hardware keyboard is attached, so that
     /// focusing a pane never pops up the software keyboard unasked.
@@ -784,6 +793,7 @@ final class Workspace {
             if self?.cellSize != size { self?.cellSize = size }
         }
         applyKeyboardSettings(to: pane)
+        pane.view.refusesKeyboard = refusesKeyboard
         PaneDrawing.attach(to: pane, workspace: self)
         PaneCommandMarks.attach(to: pane, workspace: self)
         PaneLinks.attach(to: pane, workspace: self)

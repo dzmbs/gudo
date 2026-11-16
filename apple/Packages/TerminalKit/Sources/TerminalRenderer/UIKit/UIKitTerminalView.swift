@@ -416,7 +416,15 @@ public final class TerminalView: UIView {
 
     // MARK: Focus
 
-    override public var canBecomeFirstResponder: Bool { true }
+    override public var canBecomeFirstResponder: Bool { !refusesKeyboard }
+
+    /// An overlay over the window has the keyboard: the view gives it up and refuses it until
+    /// the overlay closes, so no keystroke meant for the overlay reaches the shell.
+    public var refusesKeyboard = false {
+        didSet {
+            if refusesKeyboard, isFirstResponder { resignFirstResponder() }
+        }
+    }
 
     /// Long enough to reach the keyboard's will-change (seen up to 0.4 s later), which holds
     /// through its slide.

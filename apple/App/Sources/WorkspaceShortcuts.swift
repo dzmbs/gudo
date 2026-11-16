@@ -40,8 +40,10 @@ enum WorkspaceShortcuts {
             action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
             return true
         }
+        // An overlay holding the keyboard keeps its keys, even while it has not focused its field.
         guard window.firstResponder is TerminalView || window.firstResponder === window,
-              let workspace = ActiveWindow.workspace(in: window), let action = action(for: event)
+              let workspace = ActiveWindow.workspace(in: window), let action = action(for: event),
+              ActiveWindow.model(for: workspace)?.overlayHoldsKeyboard != true
         else { return false }
         action.perform(on: workspace, window: ActiveWindow.model(for: workspace))
         return true
@@ -53,7 +55,7 @@ enum WorkspaceShortcuts {
         guard let window = NSApp.keyWindow, window.attachedSheet == nil,
               window.firstResponder is TerminalView || window.firstResponder === window,
               let workspace = ActiveWindow.workspace(in: window), let model = ActiveWindow.model(for: workspace),
-              model.tabSelection.isMultiple || model.isSelectingTabs
+              !model.overlayHoldsKeyboard, model.tabSelection.isMultiple || model.isSelectingTabs
         else { return false }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if event.keyCode == 53, flags.isEmpty {

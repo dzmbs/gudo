@@ -87,9 +87,19 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     override public func makeBackingLayer() -> CALayer { surface.layer }
     /// Top-left origin, like the surface's cell geometry.
     override public var isFlipped: Bool { true }
-    override public var acceptsFirstResponder: Bool { true }
+    override public var acceptsFirstResponder: Bool { !refusesKeyboard }
+
+    /// An overlay over the window has the keyboard: the view gives it up and refuses it until
+    /// the overlay closes, so no keystroke meant for the overlay reaches the shell.
+    public var refusesKeyboard = false {
+        didSet {
+            guard refusesKeyboard, let window, window.firstResponder === self else { return }
+            window.makeFirstResponder(nil)
+        }
+    }
 
     override public func becomeFirstResponder() -> Bool {
+        guard !refusesKeyboard else { return false }
         hasKeyboard = true
         updateFocus()
         emitGenerated(surface.terminal.encodeFocus(true))

@@ -565,7 +565,10 @@ extension WindowModel {
     /// The terminal beside the editor in its tab, else the tab worked in before.
     func returnToTerminal() {
         AppModel.log.info("return to terminal from \(self.activeMixed?.focusedEditor?.description ?? "no editor", privacy: .public)")
-        guard destination == .terminal, let mixed = activeMixed, mixed.focusedEditor != nil else { return }
+        guard destination == .terminal, let mixed = activeMixed, mixed.focusedEditor != nil else {
+            giveKeyboardToFocusedPane()
+            return
+        }
         if let leaf = mixed.leaves.first(where: { mixed.members[$0] != nil }) {
             focusLeaf(leaf, inMixedTab: mixed.id)
             return

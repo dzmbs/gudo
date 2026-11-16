@@ -1282,6 +1282,7 @@ private struct SheetContent: View {
 
 private struct RenameTabPrompt: ViewModifier {
     let workspace: Workspace
+    @Environment(WindowModel.self) private var model
     @State private var draft = ""
 
     func body(content: Content) -> some View {
@@ -1299,6 +1300,7 @@ private struct RenameTabPrompt: ViewModifier {
         }
         .onChange(of: workspace.renamingTab) { _, id in
             draft = workspace.session.tabs.first { $0.id == id }?.title ?? ""
+            model.overlayKeyboardChanged()
         }
     }
 }

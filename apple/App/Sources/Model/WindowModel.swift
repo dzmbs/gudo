@@ -82,12 +82,17 @@ final class WindowModel {
                 SettingsLink.shared.bringForward()
             }
             #endif
+            overlayKeyboardChanged()
         }
     }
     /// Opens a tool window (macOS), set by the window's view.
     @ObservationIgnored var openTool: ((ToolWindowRequest) -> Void)?
     /// The toolbar's host switcher is open.
-    var isHostSwitcherShown = false
+    var isHostSwitcherShown = false {
+        didSet { overlayKeyboardChanged() }
+    }
+    /// Who had the keyboard when the overlay over the window took it (`overlayHoldsKeyboard`).
+    @ObservationIgnored var overlayKeyboard = OverlayKeyboard()
     /// What the Replays sheet shows.
     var replayRequest = ReplayRequest.all
     /// The file the viewer sheet shows (iPhone, compact iPad).
@@ -138,6 +143,7 @@ final class WindowModel {
                 git.refreshArchived()
                 loadWorkflows()
             }
+            overlayKeyboardChanged()
         }
     }
     var paletteMode = PaletteMode.commands
@@ -146,7 +152,9 @@ final class WindowModel {
     @ObservationIgnored var workflowPane: PaneId?
     @ObservationIgnored var workflowLoad: Task<Void, Never>?
     /// The workflow argument form or New Workflow panel over the window.
-    var workflowPanel: WorkflowPanel?
+    var workflowPanel: WorkflowPanel? {
+        didSet { overlayKeyboardChanged() }
+    }
     /// The sidebar (Safari's model): shown, it holds the tabs; hidden, the tabs move to a strip on
     /// top (unless `TabPlacement.showsTabBarKey` is off). Per window; the last choice is the next
     /// window's start.
@@ -230,6 +238,7 @@ final class WindowModel {
         didSet {
             for (id, open) in workspaces {
                 open.onPaneBell = { [weak self] pane in self?.noteBell(inPane: pane, onGroup: id) }
+                open.refusesKeyboard = overlayKeyboard.isHeld
             }
         }
     }

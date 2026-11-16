@@ -130,7 +130,7 @@ public struct CommandPalette: View {
     /// a field in its key bar) can still be giving it up while the overlay fades in, so the
     /// request repeats until the field holds focus.
     private func takeFocus() async {
-        for _ in 0..<20 {
+        for _ in 0..<20 where isPresented {
             isFocused = true
             try? await Task.sleep(for: .milliseconds(25))
             if isFocused || Task.isCancelled { return }

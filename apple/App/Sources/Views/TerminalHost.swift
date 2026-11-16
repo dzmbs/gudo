@@ -105,7 +105,8 @@ struct TerminalHost {
         Task { @MainActor [workspace] in
             for attempt in 0..<20 {
                 if attempt > 0 { try? await Task.sleep(for: .milliseconds(16)) }
-                guard container.isActive, workspace.focusedPane == pane.id else { return }
+                // An overlay holds the keyboard: asking would only take it from the overlay.
+                guard container.isActive, workspace.focusedPane == pane.id, !view.refusesKeyboard else { return }
                 if let canvas = PaneDrawing.canvas(in: pane) {
                     canvas.takeKeyboard()
                     return
@@ -163,12 +164,12 @@ extension Pane {
         // AppKit hands first responder to the window as soon as the old container leaves it, so
         // the focused pane takes it back whenever nothing else in the window has it. Only the
         // focused pane: taking first responder focuses the pane.
-        guard let window = target.window, isFocusedPane(),
+        guard let window = target.window, isFocusedPane(), !view.refusesKeyboard,
               hadKeyboard || window.firstResponder == nil || window.firstResponder === window
         else { return announceMove(to: target) }
         if let canvas { canvas.takeKeyboard() } else { window.makeFirstResponder(view) }
         #else
-        if hadKeyboard, isFocusedPane() {
+        if hadKeyboard, isFocusedPane(), !view.refusesKeyboard {
             if let canvas { canvas.takeKeyboard() } else { view.becomeFirstResponder() }
         }
         #endif
