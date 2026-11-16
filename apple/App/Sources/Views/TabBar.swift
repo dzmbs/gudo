@@ -23,7 +23,7 @@ struct TabBar: View {
         HStack(spacing: 0) {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
-                    chips(active: active)
+                    chips(refs, active: active)
                         .coordinateSpace(name: StripSpans.space)
                         .animation(DS.Motion.standard, value: refs)
                 }
@@ -75,54 +75,43 @@ struct TabBar: View {
         }
     }
 
-    /// Every chip in strip order: window tabs, then each host's tabs (a mixed tab where the tab
-    /// it was made from was).
+    /// Every chip in strip order: the unified order the sidebar lists and ⌘1…⌘9 number.
     private var chipRefs: [TabRef] {
-        model.groups.windowTabs + model.groups.groups.flatMap(\.listed)
+        model.groups.tabs
     }
 
-    private func chips(active: TabRef?) -> some View {
-        let groups = model.groups.groups
-        let allTabs = model.groups.tabs
-        let activeIndex = active.flatMap { allTabs.firstIndex(of: $0) }
+    private func chips(_ refs: [TabRef], active: TabRef?) -> some View {
+        let groups = Dictionary(model.groups.groups.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let activeIndex = active.flatMap { refs.firstIndex(of: $0) }
         // Tabs name their host only while the window holds more than one host.
-        let isMultiHost = Set(allTabs.map(\.hostId)).count > 1
+        let isMultiHost = Set(refs.map(\.hostId)).count > 1
         return HStack(spacing: 0) {
-            ForEach(model.groups.windowTabs, id: \.self) { ref in
-                if let tab = model.composites.tab(ref.tab) {
-                    MixedTabChip(tab: tab, isActive: ref == active)
-                        .id(StripSpans.ChipID(ref: ref))
-                        .tabChipWidth()
-                        .modifier(ChipSpanReport(ref: ref, spans: spans))
-                        .modifier(ChipFrameReport(ref: ref))
-                        .motionTransition(.tab)
-                    Hairline(.vertical, style: DS.Palette.separator).frame(height: 16)
+            ForEach(Array(refs.enumerated()), id: \.element) { index, ref in
+                if index > 0 {
+                    Hairline(.vertical, style: DS.Palette.separator)
+                        .frame(height: 16)
+                        .opacity(Self.showsSeparator(before: index, active: activeIndex) ? 1 : 0)
                 }
-            }
-            ForEach(groups) { group in
-                ForEach(group.listed, id: \.self) { ref in
-                    let index = allTabs.firstIndex(of: ref) ?? 0
-                    if index > 0 {
-                        // Ghostty/AppKit draw no separator next to the selected tab.
-                        Hairline(.vertical, style: DS.Palette.separator)
-                            .frame(height: 16)
-                            .opacity(index == activeIndex || index - 1 == activeIndex ? 0 : 1)
+                Group {
+                    if ref.hostId == HostGroups.mixedId {
+                        if let mixed = model.composites.tab(ref.tab) { MixedTabChip(tab: mixed, isActive: ref == active) }
+                    } else if let group = groups[ref.hostId], let tab = group.tabs.first(where: { $0.id == ref.tab }) {
+                        TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
                     }
-                    Group {
-                        if let mixed = ref.hostId == HostGroups.mixedId ? model.composites.tab(ref.tab) : nil {
-                            MixedTabChip(tab: mixed, isActive: ref == active)
-                        } else if let tab = group.tabs.first(where: { group.ref($0.id) == ref }) {
-                            TabChip(tab: tab, ref: ref, group: group, isActive: ref == active, showsHost: isMultiHost)
-                        }
-                    }
-                    .id(StripSpans.ChipID(ref: ref))
-                    .tabChipWidth()
-                    .modifier(ChipSpanReport(ref: ref, spans: spans))
-                    .modifier(ChipFrameReport(ref: ref))
-                    .motionTransition(.tab)
                 }
+                .id(StripSpans.ChipID(ref: ref))
+                .tabChipWidth()
+                .modifier(ChipSpanReport(ref: ref, spans: spans))
+                .modifier(ChipFrameReport(ref: ref))
+                .motionTransition(.tab)
             }
         }
+    }
+
+    /// Whether the line before the chip at `index` shows: Ghostty and AppKit draw none next to
+    /// the selected tab.
+    static func showsSeparator(before index: Int, active: Int?) -> Bool {
+        index > 0 && index != active && index - 1 != active
     }
 }
 

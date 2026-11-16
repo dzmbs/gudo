@@ -36,6 +36,13 @@ final class TabStripTests: XCTestCase {
         XCTAssertEqual(StripSpans.anchor(chip: 700...860, visible: visible), .trailing)
     }
 
+    /// A line between every two chips, except either side of the selected one.
+    func testSeparatorsStandBetweenChipsExceptBesideTheSelection() {
+        XCTAssertFalse(TabBar.showsSeparator(before: 0, active: nil))
+        XCTAssertEqual((1..<6).map { TabBar.showsSeparator(before: $0, active: nil) }, Array(repeating: true, count: 5))
+        XCTAssertEqual((1..<6).map { TabBar.showsSeparator(before: $0, active: 3) }, [true, true, false, false, true])
+    }
+
     // MARK: The strip on screen
 
     #if os(macOS)
@@ -119,6 +126,22 @@ final class TabStripTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "\(ref) cut at the leading edge")
             XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "\(ref) cut at the trailing edge")
         }
+    }
+
+    /// The strip lists tabs in the order the sidebar and ⌘1…⌘9 do: a project's tabs first.
+    func testTheStripFollowsTheSidebarsOrder() async throws {
+        let (model, workspace) = try await stripModel(tabs: 5)
+        defer { model.close() }
+        let refs = workspace.session.tabs.map { TabRef(hostId: model.currentGroupId, tab: $0.id) }
+        model.newProject(from: [refs[3], refs[1]], name: "order", naming: false)
+        XCTAssertEqual(Array(model.groups.tabs.prefix(2)), [refs[3], refs[1]])
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 1300, frames: frames)
+        defer { window.close() }
+        let settledFrames = try await settled(frames, count: 5)
+        let stripOrder = settledFrames.sorted { $0.value.minX < $1.value.minX }.map(\.key)
+        XCTAssertEqual(stripOrder, model.groups.tabs)
+        XCTAssertEqual(stripOrder.map { model.groups.shortcutNumber(of: $0) }, [1, 2, 3, 4, 5])
     }
 
     private static func scrollView(in view: NSView) -> NSScrollView? {
