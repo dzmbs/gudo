@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use crate::{ClientEvent, ClientListener};
 
 /// Line written into the stream when a dropped connection forced a new shell.
-pub const RESTART_MARKER: &[u8] = b"\r\n\x1b[2m[connection lost \xe2\x80\x94 new shell]\x1b[0m\r\n";
+pub const RESTART_MARKER: &[u8] = b"\r\n\x1b[2m[connection lost: new shell]\x1b[0m\r\n";
 
 /// Settings for an [`SshPane`].
 #[derive(Debug, Clone)]
@@ -261,4 +261,19 @@ fn emit_bytes(listener: &dyn ClientListener, pane_id: PaneId, seq: &mut u64, dat
         seq: start,
         data,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_restart_marker_reads_as_plain_text() {
+        let marker = String::from_utf8(RESTART_MARKER.to_vec()).unwrap();
+        assert!(
+            marker.contains("[connection lost: new shell]"),
+            "{marker:?}"
+        );
+        assert!(!marker.contains(['\u{2014}', '\u{2013}']), "{marker:?}");
+    }
 }
