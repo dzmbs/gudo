@@ -145,7 +145,7 @@ local to the screen; drafts do not cross hosts.
 
 ## Touch presentation
 
-On iOS, tracked Claude/Codex panes have a title-bar Chat/Terminal control. New iPhone panes
+On iOS, tracked Claude, Codex and pi panes have a title-bar Chat/Terminal control. New iPhone panes
 prefer Chat; iPad panes prefer Terminal. Explicit choices persist by host and pane, not native
 session, and temporary availability fallbacks do not overwrite them. Other agents and the Mac
 remain Terminal-only.
@@ -772,6 +772,40 @@ open. The isolated cold-recovery probe is not general recovery acceptance. Hot h
 upgrade/restart is refused while this opt-in launch owns an active server/transport because relay
 handoff is not implemented. Existing Codex panes are never restarted or silently replaced to enable
 Chat. Claude MessageDisplay streaming is not implemented by this producer.
+
+## pi
+
+pi is an agent kind of its own (`AgentKind::Pi`, appended). `MoreDaemonFeatures::PI_AGENT` (bit 4)
+says the helper launches `PaneLaunch::Agent { agent: Pi }`, reports pi panes as agents (`"pi"` in
+`AgentStatus.kind`) and serves their Chat. Timeline schema 3 is the first that may name pi in a
+session: a watch that negotiated schema 1 or 2 is refused with "Update the app to use Chat with
+pi.", and the schema adapter turns a pi snapshot or session for such a watch into Unavailable, so
+an older app never decodes the kind. A newer app offers Chat on a pi pane, and starts pi, only when
+the helper advertises the bit; client-core refuses a pi launch locally on an older helper, which
+could not decode the variant. Accounts, usage and installs do not include pi.
+
+A launched pi is recorded as a shell resuming it (`resumable`), as a pi started by hand is, so no
+saved layout names it for an older helper. The daemon runs it, and a pi it brings back after a
+restart, under the same exit fence as other launched agents. Its state comes from pi's own OSC 7501
+reports. Chat reads its session file, `<agent dir>/sessions/--<cwd>--/<time>_<id>.jsonl` (or
+`PI_CODING_AGENT_SESSION_DIR`), found by the session id the daemon learns from pi's command line or
+the newest file pi wrote since it started. The file opens only inside the sessions folder, as a
+regular file, without following a final symbolic link, and only when its session record names that
+id and format 3; an older format asks to update pi, a newer one to update the helper, and a missing
+folder says where Chat looked. Until pi saves its first message Chat waits, saying it is looking.
+
+Entries map onto the common rows: user and assistant text (over 64 KiB as `LongText`), thinking
+("Thought for Ns" counts the whole response that opened with thinking, as pi records no thinking
+time of its own), tool calls with their results merged by call id (bash, read, edit, write, grep,
+find, ls; an edit's recorded patch gives its inline preview), shell commands the user ran, and
+notices for compaction, a model change, going back to an earlier point in the tree, errors and
+interruptions. Older pages read the windows before a record boundary and look past it for results
+of calls they hold. Output and long-text handles name the record and item, so a read parses only
+that record. A native watch on the session folder wakes the reader.
+
+Send pastes into a pi the daemon launched, through the common prepare/admit path, and reports
+**Sent, not confirmed**; a pi started by hand is read only. There is no Stop, approval or since-join
+Chat. Images a user pasted into pi show as a note, since the session keeps no file for them.
 
 ## Native composer safety prerequisites
 
