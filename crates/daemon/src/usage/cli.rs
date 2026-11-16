@@ -124,7 +124,7 @@ pub(crate) async fn app_server(env: &Env, method: &str, params: Value) -> Result
     let exchange = async move {
         let messages = [
             json!({"method": "initialize", "id": 1, "params": {
-                "clientInfo": {"name": brand::DAEMON_BIN, "title": brand::DAEMON_BIN, "version": env!("CARGO_PKG_VERSION")},
+                "clientInfo": {"name": brand::DAEMON_BIN, "title": brand::DAEMON_BIN, "version": brand::VERSION},
             }}),
             json!({"method": "initialized"}),
             json!({"method": method, "id": 2, "params": params}),

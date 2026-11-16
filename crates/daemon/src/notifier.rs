@@ -277,11 +277,7 @@ pub(crate) fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .use_preconfigured_tls(tls)
         .timeout(Duration::from_secs(15))
-        .user_agent(format!(
-            "{}/{}",
-            brand::DAEMON_BIN,
-            env!("CARGO_PKG_VERSION")
-        ))
+        .user_agent(format!("{}/{}", brand::DAEMON_BIN, brand::VERSION))
         .build()
         .expect("the HTTP client builds")
 }

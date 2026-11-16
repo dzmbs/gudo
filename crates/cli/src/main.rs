@@ -109,7 +109,7 @@ fn refusal(reason: &str) -> String {
 }
 
 #[derive(Parser)]
-#[command(name = brand::CLI_BIN, version, about = "Developer client for the host daemon")]
+#[command(name = brand::CLI_BIN, version = brand::VERSION, about = "Developer client for the host daemon")]
 struct Cli {
     /// Pairing ticket; defaults to the one saved by `pair`.
     #[arg(long, global = true)]

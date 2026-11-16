@@ -39,7 +39,7 @@ use clap::{Parser, Subcommand};
 use daemon::{Config, Daemon, RelayMode};
 
 #[derive(Parser)]
-#[command(name = brand::DAEMON_BIN, version, about = "Terminal and coding-agent host daemon")]
+#[command(name = brand::DAEMON_BIN, version = brand::VERSION, about = "Terminal and coding-agent host daemon")]
 struct Cli {
     /// State directory (keys, paired devices, layout). Defaults to `$GUDO_STATE_DIR`, then the
     /// XDG state dir on Linux and ~/Library/Application Support on macOS.
@@ -320,7 +320,7 @@ fn run(
         eprintln!(
             "{} {} serving as {}",
             brand::DAEMON_BIN,
-            env!("CARGO_PKG_VERSION"),
+            brand::VERSION,
             hex(&daemon.daemon_id().0)
         );
         if daemon.paired_devices() == 0 {
@@ -637,7 +637,7 @@ fn pair(
             "relay_url": ticket.relay_url,
             "relays": relays_label(&extras.relays),
             "running": info.is_some_and(|info| pid_alive(info.pid)),
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": brand::VERSION,
             "uses": uses,
             "ticket_id": reusable_id,
         });

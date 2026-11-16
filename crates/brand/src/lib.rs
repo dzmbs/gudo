@@ -8,6 +8,8 @@ pub const IS_DEV: bool = cfg!(gudo_dev);
 pub const PRODUCT_NAME: &str = if IS_DEV { "Gudo Dev" } else { "Gudo" };
 pub const CARGO_DAEMON_BIN: &str = RELEASE_DAEMON_BIN;
 pub const BUILD_DIRECTORY: &str = if IS_DEV { "dev" } else { "" };
+/// The product version, as the apps ship (`MARKETING_VERSION`), or `GUDO_VERSION` at build time.
+pub const VERSION: &str = env!("GUDO_VERSION");
 
 /// QUIC ALPN identifier for the client <-> daemon protocol, version 1.
 pub const ALPN: &[u8] = b"gudo/1";
@@ -140,6 +142,13 @@ pub const PANE_HEADER: &str = "X-Gudo-Pane";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_version_is_the_one_the_apps_ship_as() {
+        let project = include_str!("../../../apple/project.yml");
+        assert!(project.contains(&format!("MARKETING_VERSION: \"{VERSION}\"")));
+        assert_ne!(VERSION, "0.0.0");
+    }
 
     #[test]
     fn development_and_release_names_are_disjoint() {

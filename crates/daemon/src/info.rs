@@ -23,7 +23,7 @@ pub fn built_unix() -> u64 {
 /// with `build-info` reports none).
 pub fn build_info(features: DaemonFeatures) -> DaemonInfo {
     DaemonInfo {
-        version: env!("CARGO_PKG_VERSION").to_owned(),
+        version: brand::VERSION.to_owned(),
         build: BUILD_ID.to_owned(),
         built_unix: built_unix(),
         protocol: proto::PROTOCOL_LEVEL,

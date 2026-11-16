@@ -325,7 +325,7 @@ fn initialize(params: &Value) -> Value {
         "capabilities": { "tools": {} },
         "serverInfo": {
             "name": format!("{}-drawings", brand::PRODUCT_NAME),
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": brand::VERSION,
         },
         "instructions": instructions(),
     })

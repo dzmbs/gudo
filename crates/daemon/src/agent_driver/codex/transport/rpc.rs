@@ -23,7 +23,7 @@ pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> 
         .connect_on(stream)
         .await
         .map_err(io::Error::other)?;
-    connection.send(Message::text(serde_json::json!({"id":INITIALIZE_ID,"method":"initialize","params":{"clientInfo":{"name":brand::CLI_BIN,"version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}}).to_string())).await.map_err(io::Error::other)?;
+    connection.send(Message::text(serde_json::json!({"id":INITIALIZE_ID,"method":"initialize","params":{"clientInfo":{"name":brand::CLI_BIN,"version":brand::VERSION},"capabilities":{"experimentalApi":true}}}).to_string())).await.map_err(io::Error::other)?;
     reply(&mut connection, INITIALIZE_ID).await?;
     connection
         .send(Message::text(r#"{"method":"initialized"}"#))
