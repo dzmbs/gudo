@@ -512,8 +512,10 @@ changing their policy requires a helper update.
 pane created which (`creators`, for the terminal tools), written
 atomically (tmp, fsync, rename, fsync dir) 500 ms after the last change and on shutdown. On
 start the layout is restored with the same ids; shells restart in their last directory
-(OSC 7), agents resume, one-off commands come back as shells. An unreadable file is moved
-aside, never overwritten.
+(OSC 7), agents resume, one-off commands come back as shells. Panes the sessions show come
+first, and agents resume 750 ms apart (their shell waits, showing the saved screen), so a
+restart after a crash or `kill` never starts every agent at once (`tests/it/restore_pacing.rs`).
+An unreadable file is moved aside, never overwritten.
 
 **Screens** (`daemon::screens`): `<state>/screens/<pane>.zst` holds a pane's primary screen
 and newest scrollback (up to 4000 rows, to the cursor's) as styled text: text, colours and

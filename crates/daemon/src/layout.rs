@@ -67,6 +67,23 @@ impl Session {
         self.tabs.iter().flat_map(|tab| leaves(&tab.root))
     }
 
+    /// The panes shown on screen for the active tab, focused first.
+    fn shown_panes(&self) -> Vec<PaneId> {
+        let Some(tab) = self
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab_id) == self.active_tab)
+        else {
+            return Vec::new();
+        };
+        if let Some(zoomed) = tab.zoomed {
+            return vec![zoomed];
+        }
+        let mut panes: Vec<_> = leaves(&tab.root).collect();
+        panes.sort_by_key(|&pane| pane != tab.focused);
+        panes
+    }
+
     /// Takes `tab` out of its project, dropping the definition once no tab uses it. Only
     /// the project left is dropped: others may just have been defined for tabs to join next.
     fn leave_project(&mut self, tab: TabId) {
@@ -387,6 +404,21 @@ impl Layout {
         self.sessions.iter().flat_map(Session::panes).collect()
     }
 
+    /// Every pane, those the sessions show on screen first.
+    pub fn panes_shown_first(&self) -> Vec<PaneId> {
+        let shown: Vec<PaneId> = self
+            .sessions
+            .iter()
+            .flat_map(Session::shown_panes)
+            .collect();
+        let rest: Vec<PaneId> = self
+            .all_panes()
+            .into_iter()
+            .filter(|pane| !shown.contains(pane))
+            .collect();
+        shown.into_iter().chain(rest).collect()
+    }
+
     pub fn session_of_pane(&self, pane: PaneId) -> Option<SessionId> {
         self.locate(pane)
             .map(|(session_index, _)| self.sessions[session_index].id)
@@ -438,22 +470,9 @@ impl Layout {
     #[cfg(test)]
     /// The panes shown on screen for the session's active tab, focused first.
     pub fn visible_panes(&self, session: SessionId) -> Vec<PaneId> {
-        let Some(session) = self.session(session) else {
-            return Vec::new();
-        };
-        let Some(tab) = session
-            .tabs
-            .iter()
-            .find(|tab| Some(tab.tab_id) == session.active_tab)
-        else {
-            return Vec::new();
-        };
-        if let Some(zoomed) = tab.zoomed {
-            return vec![zoomed];
-        }
-        let mut panes: Vec<_> = leaves(&tab.root).collect();
-        panes.sort_by_key(|&pane| pane != tab.focused);
-        panes
+        self.session(session)
+            .map(Session::shown_panes)
+            .unwrap_or_default()
     }
 
     fn locate(&self, pane: PaneId) -> Option<(usize, usize)> {

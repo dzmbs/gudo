@@ -35,6 +35,7 @@ mod redteam;
 mod relays;
 mod reopen;
 mod repos;
+mod restore_pacing;
 mod security;
 mod shell;
 mod stress;

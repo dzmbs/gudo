@@ -1763,13 +1763,14 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble, resumable, run_again, created_at) = match start {
+        let (restored, preamble, resumable, run_again, created_at, agent_delay) = match start {
             PaneStart::New => (
                 false,
                 Vec::new(),
                 None,
                 None,
                 proto::UnixMillis(crate::identity::now_millis()),
+                Duration::ZERO,
             ),
             // Without a recorded creation time the pane may be older than any guest.
             PaneStart::Restored(restored) => (
@@ -1778,7 +1779,13 @@ impl Core {
                 restored.resumable,
                 restored.run_again,
                 restored.created_at.unwrap_or(proto::UnixMillis(0)),
+                restored.agent_delay,
             ),
+        };
+        let agent_wait = if agent_delay.is_zero() {
+            String::new()
+        } else {
+            format!("sleep {:.2}; ", agent_delay.as_secs_f64())
         };
         let (launch, restored) = match launch {
             PaneLaunch::Reopen { pane_id, cwd } => {
@@ -1974,7 +1981,7 @@ impl Core {
                             "-i",
                             "-l",
                             "-c",
-                            &format!("{pre_command}{resume_line}; {}", then_shell()),
+                            &format!("{agent_wait}{pre_command}{resume_line}; {}", then_shell()),
                         ]);
                     }
                     (None, Some(pre_command)) => {
@@ -2144,7 +2151,7 @@ impl Core {
                     "-l",
                     "-c",
                     &format!(
-                        "{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
+                        "{agent_wait}{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
                         then_shell()
                     ),
                 ]);
@@ -3595,7 +3602,13 @@ pub(crate) struct Restored {
     pub run_again: Option<String>,
     /// When it was first opened, if its record says.
     pub created_at: Option<proto::UnixMillis>,
+    /// How long its agent waits before starting, so agents resume one after another.
+    pub agent_delay: Duration,
 }
+
+/// A resuming agent reads its transcript and starts its runtime, about a second of CPU for
+/// Claude Code or Codex; this far apart a restart never runs many of those at once.
+const AGENT_RESTORE_SPACING: Duration = Duration::from_millis(750);
 
 /// Whether a restored pane's agent continues its session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3649,8 +3662,9 @@ pub(crate) fn restore(
         saved_at,
     } = saved;
     core.restore_closed(closed);
-    let ids = lock(&core.layout).all_panes();
+    let ids = lock(&core.layout).panes_shown_first();
     let mut failed = Vec::new();
+    let mut agents_resumed = 0;
     for id in ids {
         // Canvas panes run nothing; the artifact store remembers them.
         if core.art.is_canvas(id) {
@@ -3756,7 +3770,14 @@ pub(crate) fn restore(
         };
         let resumes_something =
             restored_agent || resumable.is_some() || matches!(launch, PaneLaunch::Agent { .. });
+        let agent_delay = if resumes_something {
+            agents_resumed += 1;
+            AGENT_RESTORE_SPACING * (agents_resumed - 1)
+        } else {
+            Duration::ZERO
+        };
         let start = PaneStart::Restored(Restored {
+            agent_delay,
             preamble,
             agent: if restored_agent {
                 AgentStart::Resumed
