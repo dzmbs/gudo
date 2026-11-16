@@ -599,6 +599,11 @@ impl Pane {
             .unwrap_or_default()
     }
 
+    /// The visible screen with soft-wrapped rows joined, for quoting what it says.
+    pub fn screen_lines(&self) -> String {
+        lock(&self.vt).text(TextRegion::Active)
+    }
+
     pub(crate) fn screen_view(&self) -> crate::term::ScreenView {
         crate::term::screen_view(&lock(&self.vt).term)
     }
@@ -1442,6 +1447,47 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(pane.size(), changed_grid);
+        let _ = pane.pty().signal(pty::Signal::Kill);
+    }
+
+    #[tokio::test]
+    async fn screen_lines_keep_a_wrapped_sentence_whole() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'Codex is not installed on this host\\n'; exec sleep 30",
+        ]);
+        let size = PaneSize {
+            cols: 20,
+            rows: 5,
+            width_px: 0,
+            height_px: 0,
+        };
+        let (pane, _events) = Pane::spawn(
+            PaneId(1),
+            SnapGen(1),
+            command,
+            Vec::new(),
+            size,
+            1 << 20,
+            VtLimits {
+                scrollback_bytes: 1 << 20,
+                image_storage_bytes: 0,
+            },
+            &DefaultColors::default(),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pane.screen_text().contains("host") {
+            assert!(Instant::now() < deadline, "{}", pane.screen_text());
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            pane.screen_lines()
+                .contains("Codex is not installed on this host"),
+            "{}",
+            pane.screen_lines()
+        );
         let _ = pane.pty().signal(pty::Signal::Kill);
     }
 

@@ -4,7 +4,7 @@
 //! Whatever a program prints is untrusted: no escape sequence reaches the agent, characters
 //! that render as nothing are dropped, and every result says where its text came from.
 
-use ghostty_vt::{Terminal, TextRegion};
+use ghostty_vt::{Terminal, TextRegion, Wrap};
 use serde::Serialize;
 
 use proto::Seq;
@@ -93,7 +93,9 @@ pub fn render(bytes: &[u8], cols: u16) -> String {
     };
     let _ = term.set_scrollback_max_bytes(Some(64 << 20));
     term.write(bytes);
-    let text = term.text(TextRegion::All).unwrap_or_default();
+    let text = term
+        .text_wrapped(TextRegion::All, Wrap::Join)
+        .unwrap_or_default();
     let trimmed = text.trim_end_matches(['\n', ' ']).len();
     let mut text = text;
     text.truncate(trimmed);
@@ -232,6 +234,13 @@ mod tests {
         assert!(output.text.ends_with("line 999"));
         assert!(output.text.len() < 2200);
         assert_eq!(output.cursor, "c7");
+    }
+
+    #[test]
+    fn a_line_longer_than_the_pane_reads_as_one_line() {
+        let long = "word ".repeat(10);
+        let text = render(format!("{long}\r\nnext\r\n").as_bytes(), 20);
+        assert_eq!(text, format!("{}\nnext", long.trim_end()));
     }
 
     #[test]

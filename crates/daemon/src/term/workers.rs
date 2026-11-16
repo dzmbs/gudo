@@ -212,7 +212,7 @@ fn blocked_kind(reason: agents::BlockedReason) -> &'static str {
 
 /// The last lines the pane shows, as printed text.
 fn screen_excerpt(entry: &PaneEntry) -> Option<String> {
-    let screen = entry.pane.screen_text();
+    let screen = entry.pane.screen_lines();
     let lines: Vec<&str> = screen
         .lines()
         .map(str::trim_end)
