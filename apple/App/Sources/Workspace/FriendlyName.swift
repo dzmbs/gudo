@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Short, friendly tab names ("quiet-otter"), given to every new tab so tabs are easy to tell
 /// apart and to talk about. The words are curated: calm, neutral, easy to say and to spell, no
@@ -20,13 +21,29 @@ enum FriendlyName {
         "tiger", "valley", "wren", "yak", "zephyr", "acorn", "brook", "pine",
     ]
 
-    /// A new name, avoiding the ones in use when it can.
+    /// Every name given out since launch: a tab renamed away from its name never sees it come
+    /// back on another tab.
+    private static let issued = Mutex<Set<String>>([])
+
+    /// A name never given out before and not in `used`, while any is left.
     static func make(avoiding used: Set<String> = []) -> String {
-        for _ in 0..<12 {
-            let name = "\(adjectives.randomElement()!)-\(nouns.randomElement()!)"
-            if !used.contains(name) { return name }
+        issued.withLock { issued in
+            let name = freshName(avoiding: used.union(issued))
+            issued.insert(name)
+            return name
         }
-        return "\(adjectives.randomElement()!)-\(nouns.randomElement()!)"
+    }
+
+    private static func freshName(avoiding taken: Set<String>) -> String {
+        let random = { "\(adjectives.randomElement() ?? "quiet")-\(nouns.randomElement() ?? "otter")" }
+        for _ in 0..<24 {
+            let name = random()
+            if !taken.contains(name) { return name }
+        }
+        for adjective in adjectives.shuffled() {
+            if let noun = nouns.shuffled().first(where: { !taken.contains("\(adjective)-\($0)") }) { return "\(adjective)-\(noun)" }
+        }
+        return random()
     }
 
     /// Whether a tab title is one of ours (so a shell title may replace it when the user asked
