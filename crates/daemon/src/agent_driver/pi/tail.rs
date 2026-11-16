@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 
 use proto::{
-    AgentKind, PaneId, TimelineCursor, TimelineItem, TimelineOp, TimelineSession, TimelineSnapshot,
-    UnixMillis, WorkspaceResponse, WsError,
+    AgentKind, PaneId, TimelineBody, TimelineCursor, TimelineItem, TimelineOp, TimelineSession,
+    TimelineSnapshot, UnixMillis, WorkspaceResponse, WsError,
 };
 use tokio::sync::mpsc;
 
@@ -70,7 +70,9 @@ pub(super) fn open(
         wake,
         controls,
     };
-    tail.start()?;
+    if tail.start()? {
+        tail.note_recorded(&entry, &tail.items);
+    }
     Ok(Box::new(tail))
 }
 
@@ -196,6 +198,18 @@ impl SessionTail {
         }
     }
 
+    /// What pi recorded in its session tells the pane's input fence its field was submitted.
+    fn note_recorded(&self, entry: &PaneEntry, items: &[(u64, TimelineItem)]) {
+        let Some(session) = self.target.session.as_deref() else {
+            return;
+        };
+        let prompts = items.iter().filter_map(|(_, item)| match &item.body {
+            TimelineBody::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        });
+        lock(&entry.pane.agent_input_gate).recorded_in_session(session, prompts);
+    }
+
     fn changed(&self, current: &Target) -> bool {
         current.root != self.target.root
             || current.folder != self.target.folder
@@ -246,10 +260,13 @@ impl AgentSession for SessionTail {
             .ok_or_else(|| WsError::NotFound("agent pane".into()))?;
         let current = target(core, &entry)?;
         if self.changed(&current) {
-            return self.restart(current);
+            let operations = self.restart(current)?;
+            self.note_recorded(&entry, &self.items);
+            return Ok(operations);
         }
         let Some(reading) = &mut self.reading else {
             if self.start()? {
+                self.note_recorded(&entry, &self.items);
                 self.advance();
                 return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
             }
@@ -261,6 +278,9 @@ impl AgentSession for SessionTail {
             .appended(&mut reading.stream, self.cursor.epoch)?;
         if more {
             let _ = self.wake.try_send(());
+        }
+        if !shaped.items.is_empty() || !shaped.results.is_empty() {
+            self.note_recorded(&entry, &shaped.items);
         }
         let mut operations = Vec::new();
         let renamed = session::merge(

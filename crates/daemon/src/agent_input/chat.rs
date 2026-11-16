@@ -39,6 +39,7 @@ pub(crate) async fn request(
                     .as_ref()
                     .map(|id| id.as_str().to_owned()),
             ),
+            // Until pi writes its session it is the launch's.
             None => (
                 crate::agent_driver::chat_agent(&entry)
                     .filter(|kind| *kind == proto::AgentKind::Pi)
@@ -46,7 +47,8 @@ pub(crate) async fn request(
                 lock(&entry.record)
                     .resumable
                     .as_ref()
-                    .and_then(|agent| agent.session_id.clone()),
+                    .and_then(|agent| agent.session_id.clone())
+                    .or_else(|| gate.active_launch().map(str::to_owned)),
             ),
         };
         if !driver(kind)

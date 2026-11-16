@@ -32,6 +32,11 @@ struct PiPane {
 
 /// A daemon whose pane launched pi in session `fixture`, with pi's agent folder `fixture`'s.
 async fn pi_pane(fixture: &mut Fixture, launched: bool) -> PiPane {
+    pi_pane_resuming(fixture, launched, Some(SESSION)).await
+}
+
+/// As `pi_pane`, with pi started in `resume`, or fresh with no session written yet.
+async fn pi_pane_resuming(fixture: &mut Fixture, launched: bool, resume: Option<&str>) -> PiPane {
     let root = tempfile::tempdir().unwrap();
     let bin = root.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -41,6 +46,9 @@ async fn pi_pane(fixture: &mut Fixture, launched: bool) -> PiPane {
     std::fs::create_dir_all(&work).unwrap();
     let work = work.canonicalize().unwrap();
     move_into_folder_of(fixture, &work);
+    if resume.is_none() {
+        std::fs::remove_file(&fixture.path).unwrap();
+    }
     let captured = root.path().join("received");
     let mut config = crate::Config::new(root.path());
     config.relay = crate::RelayMode::Disabled;
@@ -69,7 +77,7 @@ async fn pi_pane(fixture: &mut Fixture, launched: bool) -> PiPane {
             "pi".into(),
             PaneLaunch::Agent {
                 agent: AgentKind::Pi,
-                resume: Some(SESSION.into()),
+                resume: resume.map(str::to_owned),
                 cwd: Some(work.display().to_string()),
             },
         )
@@ -260,6 +268,109 @@ async fn without_a_sessions_folder_chat_says_where_it_looked() {
     assert!(
         message.starts_with("Chat can't find pi's sessions folder."),
         "{message}"
+    );
+    pi.daemon.shutdown().await;
+}
+
+async fn prepared(pi: &PiPane) -> (u64, bool) {
+    let ChatSendStatus::Prepared {
+        ticket,
+        needs_confirmation,
+        ..
+    } = pi.client.chat_prepare(pi.entry.pane.id).await.unwrap()
+    else {
+        panic!("expected a ticket");
+    };
+    (ticket, needs_confirmation)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_launched_pi_takes_chat_prompts_without_asking_until_someone_types() {
+    let mut fixture = Fixture::new();
+    fixture.user("Hello");
+    fixture.reply("Hi.");
+    let pi = pi_pane(&mut fixture, true).await;
+    let pane = pi.entry.pane.id;
+    pi.client.timeline_watch_capabilities(pane).await.unwrap();
+
+    let (ticket, needs_confirmation) = prepared(&pi).await;
+    assert!(!needs_confirmation, "nothing was typed in Terminal");
+    let client = Arc::clone(&pi.client);
+    let sending = tokio::spawn(async move {
+        client
+            .chat_send(pane, ticket, "run the tests".into(), None)
+            .await
+    });
+    let captured = pi.captured.clone();
+    wait_until(move || {
+        std::fs::read(&captured).is_ok_and(|bytes| bytes == b"\x1b[200~run the tests\x1b[201~\r")
+    })
+    .await;
+    fixture.user("run the tests");
+    assert_eq!(sending.await.unwrap().unwrap(), ChatSendStatus::Confirmed);
+    fixture.reply("All green.");
+
+    let (_, needs_confirmation) = prepared(&pi).await;
+    assert!(
+        !needs_confirmation,
+        "pi took the last send, so its field is empty"
+    );
+
+    pi.client.send_input(pane, b"half a thought".to_vec());
+    let captured = pi.captured.clone();
+    wait_until(move || {
+        std::fs::read(&captured).is_ok_and(|bytes| bytes.ends_with(b"half a thought"))
+    })
+    .await;
+    let (_, needs_confirmation) = prepared(&pi).await;
+    assert!(
+        needs_confirmation,
+        "text typed in Terminal would be sent with it"
+    );
+    pi.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_sent_in_terminal_leaves_pi_clean_for_chat() {
+    let mut fixture = Fixture::new();
+    fixture.reply("Ready.");
+    let pi = pi_pane(&mut fixture, true).await;
+    let pane = pi.entry.pane.id;
+    pi.client.timeline_watch_capabilities(pane).await.unwrap();
+
+    pi.client.send_input(pane, b"look at the logs\r".to_vec());
+    let captured = pi.captured.clone();
+    wait_until(move || std::fs::read(&captured).is_ok_and(|bytes| bytes.ends_with(b"logs\r")))
+        .await;
+    assert!(prepared(&pi).await.1, "pi has not taken the message yet");
+    fixture.user("look at the logs");
+    let entry = Arc::clone(&pi.entry);
+    let client = Arc::clone(&pi.client);
+    tokio::time::timeout(Duration::from_secs(10), async move {
+        loop {
+            if let Ok(ChatSendStatus::Prepared {
+                needs_confirmation: false,
+                ..
+            }) = client.chat_prepare(entry.pane.id).await
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("pi recorded the message, so its field is empty");
+    pi.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fresh_pi_takes_its_first_chat_prompt_without_asking() {
+    let mut fixture = Fixture::new();
+    let pi = pi_pane_resuming(&mut fixture, true, None).await;
+    let (_, needs_confirmation) = prepared(&pi).await;
+    assert!(
+        !needs_confirmation,
+        "a pi with no conversation yet has an empty field"
     );
     pi.daemon.shutdown().await;
 }

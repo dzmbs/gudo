@@ -300,6 +300,19 @@ impl Draft {
         }
     }
 
+    /// The agent's own record of `session` holds `prompt`: a Chat send of it arrived, whether
+    /// it named `session` or, before the agent had one, `launch`.
+    pub(crate) fn recorded(&mut self, session: &str, launch: Option<&str>, prompt: &str) {
+        let arrived = self.pending.as_ref().is_some_and(|pending| {
+            (pending.session == session || launch == Some(pending.session.as_str()))
+                && pending.revision == self.revision
+                && normalize(prompt).as_deref() == Some(pending.prompt.as_str())
+        });
+        if arrived {
+            self.finish(Receipt::Confirmed);
+        }
+    }
+
     pub(crate) fn acknowledgement(
         &self,
         revision: u64,

@@ -803,9 +803,13 @@ interruptions. Older pages read the windows before a record boundary and look pa
 of calls they hold. Output and long-text handles name the record and item, so a read parses only
 that record. A native watch on the session folder wakes the reader.
 
-Send pastes into a pi the daemon launched, through the common prepare/admit path, and reports
-**Sent, not confirmed**; a pi started by hand is read only. There is no Stop, approval or since-join
-Chat. Images a user pasted into pi show as a note, since the session keeps no file for them.
+Send pastes into a pi the daemon launched, through the common prepare/admit path; a pi started by
+hand is read only. pi has no hooks, so its session file stands in for them: a send is **Confirmed**
+once pi records the same prompt within five seconds (else **Sent, not confirmed**), and anything pi
+records clears the draft as a Codex turn does (nothing typed since, or the last key Enter). A launch
+starts clean, keyed by its launch id until pi names its session, so the first send needs no
+confirmation either; text typed in Terminal since still does. There is no Stop, approval or
+since-join Chat. Images a user pasted into pi show as a note, since the session keeps no file for them.
 
 ## Native composer safety prerequisites
 

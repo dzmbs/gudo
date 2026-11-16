@@ -95,6 +95,20 @@ impl AgentInputGate {
         self.draft.delivered_beside_terminal(session);
     }
 
+    /// An agent without hooks wrote to `session`'s file, `prompts` among what it recorded:
+    /// what Terminal's field held was submitted, so it is clean unless typed into since.
+    pub(crate) fn recorded_in_session<'a>(
+        &mut self,
+        session: &str,
+        prompts: impl IntoIterator<Item = &'a str>,
+    ) {
+        let launch = self.active_launch().map(str::to_owned);
+        for prompt in prompts {
+            self.draft.recorded(session, launch.as_deref(), prompt);
+        }
+        self.cleared_in_terminal(session);
+    }
+
     pub(crate) fn pending(launch: String) -> Self {
         Self {
             phase: AgentInputPhase::Pending(launch),
@@ -112,6 +126,9 @@ impl AgentInputGate {
     fn arm(&mut self, launch: &str) -> bool {
         if matches!(&self.phase, AgentInputPhase::Pending(active) if active == launch) {
             self.phase = AgentInputPhase::Open(launch.to_owned());
+            // The agent starts with an empty field: clean for the conversation it has yet to
+            // name, which Chat calls by the launch (an agent's own session never matches it).
+            self.draft.cleared_in_terminal(launch);
             true
         } else {
             false
