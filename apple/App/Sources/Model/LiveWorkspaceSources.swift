@@ -571,6 +571,8 @@ final class LiveAgentFeed: AgentFeed {
 
     func launch(_ request: AgentLaunchRequest) async throws -> String? {
         guard let daemon = hosts.connection(request.hostId) as? DaemonConnection else { throw HostError.notConnected }
+        // The new tab joins the project of the tab it was started from, right after it.
+        let origin = window?.currentTab
         let api = try daemon.workspace.client()
         let session = daemon.layout.session
         guard let splitFrom = session.activeTab?.focused ?? session.tabs.first?.root.panes.first else {
@@ -618,7 +620,7 @@ final class LiveAgentFeed: AgentFeed {
             guard let session = daemon.layout.sessionId else { throw HostError.notConnected }
             let pane = try await daemon.workspace.repoClient().scriptRun(
                 cwd: request.repo ?? directory ?? "~", sessionId: session, name: request.name ?? "", command: "")
-            window?.reveal(host: request.hostId, pane: pane)
+            window?.reveal(host: request.hostId, pane: pane, joiningProjectOf: origin)
             return nil
         }
         let started = ContinuousClock.now
@@ -631,7 +633,7 @@ final class LiveAgentFeed: AgentFeed {
             prompt: nil, submit: true, readyTimeoutMs: 30_000,
             newTabIn: daemon.layout.sessionId, account: request.account))
         log.info("launched \(request.agent.rawValue, privacy: .public) pane=\(launched.paneId) in \((ContinuousClock.now - started) / .milliseconds(1), format: .fixed(precision: 0)) ms")
-        window?.reveal(host: request.hostId, pane: launched.paneId)
+        window?.reveal(host: request.hostId, pane: launched.paneId, joiningProjectOf: origin)
         if let prompt = request.prompt.nonEmpty {
             let pane = launched.paneId
             let title = request.agent.title
@@ -1479,8 +1481,8 @@ extension WindowModel {
         }
     }
     /// Shows a host's pane in this window: switches to the host, then focuses the pane once
-    /// its layout has it.
-    func reveal(host: String, pane: UInt64) {
+    /// its layout has it. `origin`: the pane's tab joins that tab's project, right after it.
+    func reveal(host: String, pane: UInt64, joiningProjectOf origin: TabRef? = nil) {
         destination = .terminal
         sheet = nil
         if workspace?.hostId != host { show(.host(host)) }
@@ -1489,7 +1491,9 @@ extension WindowModel {
                 // Through the tab that holds it: a mixed or editor tab on screen would otherwise
                 // stay in front of the host's own tab.
                 if let self, let workspace = self.workspace(ofGroup: host),
-                   workspace.session.tabs.contains(where: { $0.root.panes.contains(PaneId(pane)) }) {
+                   let tab = workspace.session.tabs.first(where: { $0.root.panes.contains(PaneId(pane)) }) {
+                    let ref = TabRef(hostId: host, tab: tab.id)
+                    if let origin, origin != ref { self.join(ref, projectOf: origin) }
                     self.focus(pane: PaneId(pane), onGroup: host)
                     return
                 }

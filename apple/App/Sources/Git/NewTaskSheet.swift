@@ -269,8 +269,9 @@ struct NewTaskSheet: View {
                 let seed = model.newAgentSeed
                 model.newAgentSeed = NewAgentSeed()
                 hostID = hostID ?? (hosts.first { $0.id == seed.host } ?? hosts.first { $0.id == model.workspace?.hostId } ?? hosts.first)?.id
+                // The current tab's repository, else the tab's own folder: never another repository.
                 let preferred = [seed.repo, model.git.worktree?.repo].compactMap(\.self)
-                repoPath = repoPath ?? (repos.first { preferred.contains($0.path) } ?? repos.first)?.path
+                repoPath = repoPath ?? repos.first { preferred.contains($0.path) }?.path
                 worktree = repo != nil
                 if let seeded = seed.prompt { prompt = seeded }
                 // A phone's keyboard would scroll the runner and host out of view as the sheet opens.
@@ -290,8 +291,8 @@ struct NewTaskSheet: View {
             // The host's repositories can arrive after the sheet opened: one is picked, but
             // New Worktree stays as it opened rather than adding a section under the pointer.
             .onChange(of: repos.map(\.path)) { previousPaths, paths in
-                guard previousPaths.isEmpty, repoPath == nil, !paths.isEmpty else { return }
-                repoPath = model.git.worktree?.repo ?? paths.first
+                guard previousPaths.isEmpty, repoPath == nil, let repo = model.git.worktree?.repo, paths.contains(repo) else { return }
+                repoPath = repo
             }
         }
         #if os(iOS)
