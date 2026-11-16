@@ -36,6 +36,11 @@ final class TabStripTests: XCTestCase {
         XCTAssertEqual(StripSpans.anchor(chip: 700...860, visible: visible), .trailing)
     }
 
+    func testOnlyAResizeReScrolls() {
+        XCTAssertFalse(StripSpans.isResize(from: 0...500, to: 120...620), "a scroll")
+        XCTAssertTrue(StripSpans.isResize(from: 0...1300, to: 0...520))
+    }
+
     /// A line between every two chips, except either side of the selected one.
     func testSeparatorsStandBetweenChipsExceptBesideTheSelection() {
         XCTAssertFalse(TabBar.showsSeparator(before: 0, active: nil))
@@ -126,6 +131,26 @@ final class TabStripTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "\(ref) cut at the leading edge")
             XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "\(ref) cut at the trailing edge")
         }
+    }
+
+    /// After the window narrows, the selected chip is brought back whole into view.
+    func testTheSelectedChipStaysInViewWhenTheWindowNarrows() async throws {
+        let (model, workspace) = try await stripModel(tabs: 14)
+        defer { model.close() }
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 1300, frames: frames)
+        defer { window.close() }
+        _ = try await settled(frames, count: 14)
+        let last = try XCTUnwrap(model.groups.tabs.last)
+        model.focus(last)
+        _ = try await settled(frames, count: 14)
+        window.setContentSize(NSSize(width: 520, height: 60))
+        _ = try await settled(frames, count: 14)
+        let scrollView = try XCTUnwrap(Self.scrollView(in: try XCTUnwrap(window.contentView)))
+        let shown = scrollView.convert(scrollView.bounds, to: nil)
+        let chip = try XCTUnwrap(frames.byTab[last])
+        XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "cut at the leading edge")
+        XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "cut at the trailing edge")
     }
 
     /// The strip lists tabs in the order the sidebar and ⌘1…⌘9 do: a project's tabs first.

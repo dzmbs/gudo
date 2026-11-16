@@ -35,8 +35,11 @@ struct TabBar: View {
                 }
                 .onScrollGeometryChange(for: ClosedRange<CGFloat>.self) { geometry in
                     geometry.contentOffset.x...geometry.contentOffset.x + geometry.containerSize.width
-                } action: { _, visible in
+                } action: { old, visible in
                     spans.visible = visible
+                    // A resized window can leave the selection past an edge: brought back at once,
+                    // as the strip follows the window's edge.
+                    if StripSpans.isResize(from: old, to: visible) { reveal(active, with: scroller, animated: false) }
                 }
                 .stripEdgeFade(edges)
                 .onChange(of: refs) { old, new in
@@ -64,14 +67,18 @@ struct TabBar: View {
 
     /// Brings the selected chip whole into view by the least travel, once a chip just added has
     /// been laid out.
-    private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy) {
+    private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy, animated: Bool = true) {
         guard let ref else { return }
         Task { @MainActor in
             // Where the spans know no better (a chip not yet measured), the scroll's own least
             // travel, which leaves a chip in view where it is.
             let anchor = spans.anchor(revealing: ref)
-            withAnimation(DS.Motion.standard) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
-            TabTimeline.mark(.scrolledIntoView)
+            if animated {
+                withAnimation(DS.Motion.standard) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
+                TabTimeline.mark(.scrolledIntoView)
+            } else if anchor != nil {
+                scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor)
+            }
         }
     }
 
@@ -132,6 +139,11 @@ final class StripSpans {
     func anchor(revealing ref: TabRef) -> UnitPoint? {
         guard let chip = chips[ref] else { return nil }
         return Self.anchor(chip: chip, visible: visible)
+    }
+
+    /// The strip's own width changed (the window was resized), not only where it is scrolled.
+    static func isResize(from old: ClosedRange<CGFloat>, to new: ClosedRange<CGFloat>) -> Bool {
+        abs((old.upperBound - old.lowerBound) - (new.upperBound - new.lowerBound)) > 0.5
     }
 
     static func anchor(chip: ClosedRange<CGFloat>, visible: ClosedRange<CGFloat>) -> UnitPoint? {
