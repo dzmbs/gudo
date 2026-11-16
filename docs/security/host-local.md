@@ -240,7 +240,20 @@ ticket (a bearer credential for ownership) is printed only when stderr is a term
 into a launchd log or the journal.
 
 **Service files.** The paths in the systemd unit are quoted and escaped (`%`, `$`, quotes,
-control characters refused). Paths in the plist are XML-escaped.
+control characters refused). Paths in the plists are XML-escaped. The app's job (`service
+start`) writes its plist 0600 (`O_NOFOLLOW`) in the 0700 state directory, loads it into the
+user's own `gui/<uid>` domain and deletes it; its log is 0600 in a 0700 `logs` directory there.
+The label is derived from the state directory, so another folder's helper is never touched.
+
+**The app's installed helper.** The Mac app copies its bundled helper to
+`<state>/Helper/Versions/` (0700 `Helper`) and runs only that copy. It clears the copy's
+quarantine mark, which is safe only because the copy is checked before it ever runs as the
+helper: when the bundled build is signed, the copy's signature must be valid (strict) with the
+same code directory hash and team as the bundled file, which the app's own sealed signature
+covers; and the copy must run and report the SHA-256 of the bundled file. A file that differs is
+refused and nothing is swapped in. `Versions/Current` is replaced by swapping a staged folder in,
+never by writing over a file a running helper executes. The same user can replace these files,
+as they can replace the app; that is the same-user trust below.
 
 **Upgrade.** Only the owner can upgrade the daemon. The build must have the announced size and
 SHA-256, must run here and report this OS and CPU, must not be older than the running build

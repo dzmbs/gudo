@@ -441,19 +441,50 @@ host's helper needs an update") and `epoch` (the daemon run).
 
 **This Mac's helper** (`LocalHelper`, macOS). The Mac app bundles its own daemon
 (`Contents/MacOS/<name>-hostd`, from `cargo xtask build-hostd-macos`, copied and signed by the
-"This Mac Helper" build phase) and a LaunchAgent plist (`Contents/Library/LaunchAgents/<bundle
-id>.hostd.plist`, `BundleProgram`). At launch it registers the agent with `SMAppService` (runs at
-login, survives quitting the app), or runs the daemon as its child when Settings ▸ This Mac ▸ Keep
-Sessions Running in the Background is off or the login item is not allowed. The daemon uses its
-default folder (`~/Library/Application Support/<name>`, where `gudo` and the agent hooks look); a
-daemon already running there that is not an app's (`hostd service install`, a `run` in a
-terminal: its executable is outside any `.app`) is used as is, and the app's own login item is
-unregistered so launchd does not keep starting one that cannot take the folder. The app pairs
+"This Mac Helper" build phase), but never runs it from the bundle, so moving, renaming,
+re-signing or updating the app leaves the running helper and its launchd job alone.
+
+- **Install** (`HelperInstall`). Each start copies the bundled build to
+  `<state>/Helper/Versions/<CFBundleVersion>-<code hash>/` unless that build is there already
+  (compared by code directory hash, else SHA-256), clears the copy's quarantine mark, and checks
+  it: when the bundled build is signed, the copy's signature is valid with the same code hash and
+  team; and the copy runs (`build-info --json`) and reports the SHA-256 of the bundled file
+  (`exe_sha256`). A staged copy of that folder then takes `Versions/Current`'s place in one step
+  (`renamex_np(RENAME_SWAP)`), so the path never names half a build and a running helper keeps
+  the file it started from. Builds other than the current one and the one before it, and staging
+  folders left over, are removed. `<state>` is the daemon's default folder below, so Gudo Dev
+  has its own. If installing fails the bundled build runs, as a child only.
+- **Launch.** `Versions/Current/<name>-hostd --state-dir <state> service start --json` (DAEMON.md
+  §3 "The app's launchd job"): one launchd job per state folder that runs until logout, started
+  again by launchd after a crash, never at login. It returns at once when a helper already runs
+  there. Only when launchd refuses the job (exit 3), when Settings ▸ This Mac ▸ Keep Sessions
+  Running After You Quit is off, or in test launches, the helper runs as the app's child.
+  **Start Helper at Login** (off by default) runs `service install` from `Versions/Current`
+  instead, a LaunchAgent in `~/Library/LaunchAgents`; switching either setting restarts the
+  helper (shells start again, agents resume, screens are restored).
+- **What runs.** The executable of the helper on the folder tells (`LocalHelper.runningHelper`):
+  under `Helper/Versions` it is the app's (its job, the login service or a child) and restarts
+  in place into a newly installed `Current` (`hostd restart`: same process, so launchd keeps
+  it, sessions kept). Inside an `.app` it is an earlier version's login item or child: kept, so
+  its sessions stay, restarted in place into the build at its own path, and its login item is
+  switched off (`launchctl disable`) so it does not start at the next login; one that cannot
+  restart while the registered build differs is replaced as before. Anywhere else (`hostd
+  service install` of another build, a `run` in a terminal) it is used as is and only redialled.
+- **Migration from the login item.** Earlier versions registered `Contents/Library/LaunchAgents/
+  <bundle id>.hostd.plist` (`BundleProgram`) with `SMAppService`; the plist stays in the bundle
+  so it can be unregistered, and nothing registers it any more. Once nothing of it runs (the
+  next start with no helper, or its helper ended), the login item is unregistered, its label
+  switched on again for whoever registers it next, and the job takes over the same folder,
+  keys, pairing and `endpoint.json`.
+
+The daemon uses its default folder (`~/Library/Application Support/<name>`, where `gudo` and the
+agent hooks look; `<state>/bin/<cli>` points at `Versions/Current`, which stays put across
+updates). The app pairs
 once with a `pair --json --local` ticket (`gudo devices` lists the device as "This Mac (Gudo
 app)") as the owner, saved as a host with `thisDevice` and named "This Mac": dialled on loopback
 alone (`ConnectOptions.thisComputer`: no relay, no Wi-Fi address, no lookup, from the first
 pairing dial on), so it never needs the network; listed first, no helper-update offers (a new
-app build restarts the login item: `launchctl kickstart -k`), and an empty plain local group
+app build is installed and the helper restarts into it in place), and an empty plain local group
 gives way to it (plain shells still open stay until closed). When the helper refuses the app's device as removed (`InvalidGrant`,
 `Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
 has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
@@ -466,17 +497,28 @@ and until this launch first reaches it, This Mac reads "Starting…" (`Connectio
 contact", a light wash over panes that are not saved screens after 1 s, never the lost-connection
 card (past 40 s a card says the helper hasn't answered yet, with Retry Now). A link to a running helper that drops reads as reconnecting, and its card says the helper
 isn't answering, never that sessions keep running. Each step of a start is logged with how long it
-took (info, category `helper`, "helper start: …"); a login item that runs nothing is unregistered
-without waiting for it, and the helper from before the rename is only looked for while its folder
-can still matter. When the helper ends on its own (killed, crashed, stopped from a
-terminal), the app sees its process exit, redials This Mac at once ("Connecting", the last
-frame stays) and starts the helper again after 0.5 s, further apart with jitter while it keeps
+took (info, category `helper`, "helper start: …"; installing takes a few milliseconds when the
+build is in place); an earlier version's login item that runs nothing is unregistered without
+waiting for it, and the helper from before the rename is only looked for while its folder can
+still matter. When the helper ends on its own (killed, crashed, stopped from a terminal), the
+app sees its process exit, redials This Mac at once ("Connecting", the last frame stays) and
+starts it again through `service start` after 0.5 s, further apart with jitter while it keeps
 ending right after starting, and leaves it stopped after five of those in a row
-(`HelperRespawn`); launchd's own restart of a crashed login item is found and used, and a
-daemon the user runs on the folder is only redialled. Stop Helper ends it and brings back a
-plain shell. Test
-launches (`AppData`) never start it unless `-localHelper YES`, and then only as a child in the test
-folder (`apple/Dogfood/this-mac.json`). iPhone and iPad have no helper.
+(`HelperRespawn`). launchd restarts a crashed job by itself (at most every 10 s); `service start`
+finds that helper when it is up or starting, and otherwise replaces the waiting job, so the two
+never race for the folder. A daemon the user runs on the folder is only redialled. Stop Helper
+ends it (`service stop`: SIGTERM, so it saves its sessions, then the job is removed; also
+`service uninstall` with Start Helper at Login) and brings back a plain shell. Test launches
+(`AppData`) never start it unless `-localHelper YES`, and then as a child in the test folder
+(`apple/Dogfood/this-mac.json`) unless `-localHelperKeepsRunning YES`. iPhone and iPad have no
+helper.
+
+Tests: `HelperInstallTests` (copy, check, quarantine, swap while the old file is open, refusal
+of a copy that is another build, pruning), `LocalHelperTests` (the start plan, what runs, the
+job's answers and refusal), `LocalHelperJobTests` (a real helper as a launchd job from its
+installed copy, found again after `kill -9`, gone after Stop Helper; its own state folder and
+job label), `LocalHelperRespawnTests` (the child). Daemon side: `cargo test -p hostd --test
+service_job`.
 
 **What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`
 next to the two `.gz` daemons (file, OS, CPU, build, time, level); project.yml bundles it and
@@ -1543,9 +1585,10 @@ past 4 KiB, it is dropped with a toast saying why (`WindowModel.heldInputDropMes
 reaches the core only when it is sent, so the core's resend of unacknowledged input after a
 reconnect (`InputAck`, `INPUT_RESUME`) never sends it twice.
 
-**This Mac.** The helper usually already runs as a login item: `AppModel.connectEarly` dials it
-in `AppModel.init`, before any window, when its `endpoint.json` names a live process with the
-paired daemon id; the helper's own start (login item checks, pairing) runs as before and redials
+**This Mac.** The helper usually already runs (its launchd job outlives the app):
+`AppModel.connectEarly` dials it in `AppModel.init`, before any window, when its `endpoint.json`
+names a live process with the paired daemon id; the helper's own start (install check,
+`service start`, pairing) runs as before and redials
 at once a dial that started before it was up (a redial cancels a dial in flight). A connection
 on its way shows nothing for a 1 s grace: no notice, no "Connecting to…" page, saved tabs at
 full strength (`HostGroup.showsAsLive`). `LaunchTimeline` logs process start → first frame → live (category

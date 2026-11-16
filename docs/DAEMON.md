@@ -624,7 +624,7 @@ and only once), `mp::policy` unit test.
   takes it again. If writing the hand-off fails the old build stops the panes and restarts
   cold; if `exec` fails (and `.prev` too) it ends the panes before exiting.
 - **Local restart** (`gudo-hostd restart`): after a package manager or the Mac app replaced the
-  executable on disk, asks the running daemon over the hook socket (`RestartCall`, with the
+  executable on disk (the app swaps a new folder in at `Helper/Versions/Current`), asks the running daemon over the hook socket (`RestartCall`, with the
   daemon's own `hook.token`, not a pane's) to hand off into the build now at its path. It
   answers `current` when the file is the one it started from, `refused` (nothing changes) when
   the new build fails `build-info` or does not read its hand-off, else `restarting`; the
@@ -653,7 +653,8 @@ and only once), `mp::policy` unit test.
   one (SSH bootstrap's upgrade path). A daemon started as `gudo-hostd` removes a leftover
   `unnamed-hostd` (and `.prev`) next to it. The Mac app stops the old app's helper login item
   (`dev.unnamed.app.hostd`) and the old `service install` agent, and disables both
-  (`LocalHelper.retireLegacyHelper`), so its own helper can move the state. Agents' MCP
+  (`LocalHelper.retireLegacyHelper`), so its own helper can move the state. The app's own
+  login item from earlier versions is retired as APP-ARCHITECTURE.md §14 describes. Agents' MCP
   registrations under `unnamed` / `unnamed_drawings` are removed when the server is registered
   again; the env vars a pane gets are `GUDO_*`, and the hook shim and MCP server also read `UN_*`.
 
@@ -676,6 +677,8 @@ gudo-hostd status
 gudo-hostd build-info --json   # version, build, protocol level, OS, CPU, host name
 gudo-hostd service install     # systemd --user (Linux) / LaunchAgent (macOS); (re)starts it
 gudo-hostd service uninstall
+gudo-hostd service start --json   # macOS: a launchd job until logout, unless one runs already
+gudo-hostd service stop        # macOS: stop that job (sessions saved, back on the next start)
 #   --state-dir DIR (or $GUDO_STATE_DIR), run: --bind ADDR, --no-relay, --shell PATH
 #   logs: GUDO_LOG=debug
 
@@ -718,6 +721,42 @@ replies. It is a test tool; the app renders from its own VT.
 
 Default state directory: `$XDG_STATE_HOME/gudo`, else `~/.local/state/gudo` on Linux and
 `~/Library/Application Support/gudo` on macOS. One daemon per state dir (`hostd.lock`).
+
+### The app's launchd job (`service start`, macOS)
+
+How the Mac app runs This Mac's helper (APP-ARCHITECTURE.md §14), and usable from a terminal.
+`service start [--json] [--timeout S] [--bind A] [--no-relay] [--shell P]`:
+
+1. Takes `<state>/start.lock` (flock), so concurrent starts and stops run one at a time.
+2. A helper already running on the state dir (live pid and the instance lock), started by
+   anyone, is the answer. One holding the instance lock without an endpoint yet (launchd
+   restarting a crash, a `run` starting) is waited for.
+3. Otherwise it writes `<state>/<label>.plist` (0600), label `<service label>.app.<first 12 hex
+   digits of the SHA-256 of the canonical state dir>` (`dev.gudo.hostd.app.…`; Gudo Dev
+   `dev.gudo.dev.hostd.app.…`), boots out a stale job with that label, bootstraps the file into
+   `gui/<uid>` (retrying for a moment while the old label goes) and deletes it. The job runs
+   `[<this executable>, --state-dir, <dir>, run, <options>]` with `KeepAlive {SuccessfulExit
+   = false}` (which also starts it once loaded: no `RunAtLoad`, nothing at login),
+   `ProcessType Interactive`, `AbandonProcessGroup`, the state dir as working directory and
+   stdout and stderr in `<state>/logs/hostd.log` (kept as `hostd.log.1` past 8 MiB).
+4. Waits until the helper has written `endpoint.json` with a live pid holding the instance
+   lock (20 s by default). If the job's pid differs (someone else took the folder first), the
+   job is booted out and the other helper is the answer. On timeout the job is booted out and
+   the last log line reported.
+
+`--json` prints `{label, started, pid, daemon_id, endpoint}`. Exit 3 means launchd refused the
+job (the app then runs the helper as its child). launchd starts the helper again after a crash
+or `kill -9` (exit with a failure or a signal), at most every 10 s, never after a clean stop;
+the job lives until logout. `service stop` sends the job's pid SIGTERM (the helper saves its
+screens and layout), waits for it, then boots the job out; a helper started any other way is
+left running. `service install` and `uninstall` are unchanged and separate (label
+`dev.gudo.hostd`, a file in `~/Library/LaunchAgents`, `RunAtLoad`). Tests:
+`tests/service_job.rs` (idempotent start, stop, a crash restarted by launchd, a stale job
+replaced, concurrent starts, a helper started elsewhere left alone), against the real launchd
+with a job per temporary state dir, removed however the test ends.
+
+An executable under `Helper/Versions/<version>/` (the app's installed copy) is never upgraded
+over the connection, like one inside an app bundle: the app installs its builds.
 
 ### Cloud VMs and headless Linux
 
