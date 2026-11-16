@@ -22,6 +22,20 @@ struct ShortcutsSheet: View {
         ]
     }
 
+    /// One row per action name, with every key that runs it (⌘K and ⇧⌘P are one Command Palette).
+    static func rows(_ actions: [WorkspaceAction]) -> [(title: String, keys: [[String]])] {
+        var rows: [(title: String, keys: [[String]])] = []
+        for action in actions {
+            let keys = action.shortcuts.map(\.symbols)
+            if let index = rows.firstIndex(where: { $0.title == action.title }) {
+                for key in keys where !rows[index].keys.contains(key) { rows[index].keys.append(key) }
+            } else {
+                rows.append((action.title, keys))
+            }
+        }
+        return rows
+    }
+
     private func matches(_ action: WorkspaceAction) -> Bool {
         query.isEmpty || action.title.localizedCaseInsensitiveContains(query)
     }
@@ -58,15 +72,17 @@ struct ShortcutsSheet: View {
     private var list: some View {
         GroupedList {
             ForEach(sections, id: \.0) { title, actions in
-                let shown = actions.filter(matches)
+                let shown = Self.rows(actions.filter(matches))
                 if !shown.isEmpty {
                     Section {
-                        ForEach(shown, id: \.self) { action in
+                        ForEach(shown, id: \.title) { row in
                             HStack {
-                                Text(action.title)
+                                Text(row.title)
                                 Spacer()
-                                ShortcutLabel(action.shortcut.symbols)
-                                    .foregroundStyle(DS.Palette.textSecondary)
+                                ForEach(row.keys, id: \.self) { keys in
+                                    ShortcutLabel(keys)
+                                        .foregroundStyle(DS.Palette.textSecondary)
+                                }
                             }
                             .accessibilityElement(children: .combine)
                         }
