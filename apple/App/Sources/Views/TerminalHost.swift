@@ -55,6 +55,17 @@ struct TerminalHost {
             subviews.first?.frame = bounds
         }
         #else
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            // A layout change (rotating across the compact width) takes the terminal out of the
+            // window on its way to another container, and leaving the window resigns it.
+            if newWindow == nil, let pane, pane.view.superview === self, pane.view.isFirstResponder {
+                pane.keyboardHandOffUntil = .now + Self.keyboardHandOff
+            }
+        }
+
+        static let keyboardHandOff = Duration.seconds(1)
+
         override func didMoveToWindow() {
             super.didMoveToWindow()
             pane?.placeView(joining: window == nil ? nil : self)
@@ -151,7 +162,9 @@ extension Pane {
         #if os(macOS)
         let hadKeyboard = canvas?.ownsKeyboard ?? (view.window?.firstResponder === view)
         #else
-        let hadKeyboard = canvas?.ownsKeyboard ?? view.isFirstResponder
+        let handedOff = keyboardHandOffUntil.map { ContinuousClock.now < $0 } ?? false
+        keyboardHandOffUntil = nil
+        let hadKeyboard = canvas?.ownsKeyboard ?? (view.isFirstResponder || handedOff)
         #endif
         view.removeFromSuperview()
         view.frame = target.bounds

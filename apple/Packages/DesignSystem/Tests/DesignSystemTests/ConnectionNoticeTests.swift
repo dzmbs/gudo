@@ -12,6 +12,8 @@ import Testing
         let copy = NoticeCopy.reconnecting(to: "studio-MacBook-Pro.local", ago: "12s ago")
         #expect(copy.text == "Reconnecting to studio-MacBook-Pro.local… · last contact 12s ago")
         #expect(copy.compactAfter == "… · 12s ago", "the time survives the short line")
+        #expect(NoticeCopy.squeezed("… · 12s ago") == " · 12s ago", "a cut host name has one ellipsis, not two")
+        #expect(NoticeCopy.squeezed(" · 12s ago") == " · 12s ago")
         #expect(NoticeCopy.shortHost("studio-MacBook-Pro.local") == "studio-MacBook-Pro")
         #expect(NoticeCopy.shortHost("box.tail1234.ts.net") == "box")
         #expect(NoticeCopy.shortHost("studio") == "studio")

@@ -33,6 +33,9 @@ final class Pane {
     private(set) var connection = PaneConnection.live
     #if os(iOS)
     var chat: PaneChatState?
+    /// The terminal had the keyboard as its container left the window: the container that takes
+    /// it next, this soon, gives the keyboard back.
+    @ObservationIgnored var keyboardHandOffUntil: ContinuousClock.Instant?
     #endif
     /// Showing the screen this device saved last, until the host sends its own.
     private(set) var showsSavedScreen = false

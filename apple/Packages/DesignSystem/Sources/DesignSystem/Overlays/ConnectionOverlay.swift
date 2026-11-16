@@ -180,12 +180,24 @@ private struct ConnectionOverlayModifier: ViewModifier {
             let presentation = presentation(now: context.date)
             content
                 .fadedTowardTerminalBackground(presentation.dimmed ? 0.45 : 0)
-                .allowsHitTesting(state.isLive || state == .paused || state == .disconnected || savedAndConnecting)
+                // A link that drops for a moment leaves the panes as they were: the terminal keeps
+                // the keyboard and its place (a view that stops taking touches gives the keyboard
+                // up, and the grid moves under it). Only the card takes the panes away.
+                .allowsHitTesting(presentation.card == nil)
                 .overlay(alignment: .topTrailing) {
                     if let notice = presentation.notice {
-                        ConnectionNotice(state: state, copy: notice)
-                            .padding(DS.Space.l)
-                            .motionTransition(.fade)
+                        // The notice is also the way to act on it: Retry Now or Disconnect.
+                        Menu {
+                            Button("Retry Now", systemImage: "arrow.clockwise", action: onRetry)
+                            Button("Disconnect", systemImage: "xmark.circle", action: onDisconnect)
+                        } label: {
+                            ConnectionNotice(state: state, copy: notice)
+                        }
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
+                        .menuIndicator(.hidden)
+                        .padding(DS.Space.l)
+                        .motionTransition(.fade)
                     }
                 }
                 .overlay {
@@ -199,11 +211,6 @@ private struct ConnectionOverlayModifier: ViewModifier {
         .onChange(of: state.isQuiet || state.isLive, initial: true) { _, healthy in
             downSince = healthy ? nil : (downSince ?? .now)
         }
-    }
-
-    /// Saved screens on the way to live take clicks and scrolls; typed input waits (held).
-    private var savedAndConnecting: Bool {
-        if case .connecting = state { showsSavedState } else { false }
     }
 
     private struct Presentation: Equatable {
@@ -276,6 +283,11 @@ struct NoticeCopy: Equatable {
 
     var text: String { before + (host ?? "") + after }
 
+    /// `after` beside a host name already cut short by an ellipsis: without a second one.
+    static func squeezed(_ after: String) -> String {
+        after.hasPrefix("…") ? String(after.dropFirst()) : after
+    }
+
     /// A host name for a short line: without its domain ("studio.local", "box.tail1234.ts.net").
     static func shortHost(_ name: String) -> String {
         guard let dot = name.firstIndex(of: "."), dot > name.startIndex,
@@ -300,7 +312,7 @@ struct ConnectionNotice: View {
                 if let compact = copy.compactAfter {
                     line(host: copy.host, after: compact)
                 }
-                line(host: copy.host.map(NoticeCopy.shortHost), after: copy.compactAfter ?? copy.after, squeezes: true)
+                line(host: copy.host.map(NoticeCopy.shortHost), after: NoticeCopy.squeezed(copy.compactAfter ?? copy.after), squeezes: true)
             }
             .monospacedDigit()
             .accessibilityLabel(copy.text)

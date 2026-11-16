@@ -31,6 +31,13 @@ enum DesignFixtures {
             }
             programs(workspace)
             return
+        case "connection-drop":
+            // The link drops a while after launch and comes back: time to raise the keyboard first.
+            try? await Task.sleep(for: .seconds(10))
+            model.connectionOverride = .reconnecting(attempt: 1, since: .now)
+            try? await Task.sleep(for: .seconds(8))
+            model.connectionOverride = nil
+            return
         case "live-splits":
             if let tab = workspace.session.activeTab, tab.root.panes.count == 1 {
                 workspace.apply(.split(tab.focused, .horizontal))
