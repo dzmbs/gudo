@@ -79,6 +79,31 @@ import TerminalCore
         #expect(abs(first.minX - (220 - 20 * centeredCell.width) / 2) < 0.01)
     }
 
+    /// However the host's grid differs from the view's, it is drawn inside the padding on every
+    /// side, as the view's own grid is.
+    @Test func aHostGridOfAnotherSizeKeepsThePaddingOnEverySide() throws {
+        var appearance = TerminalAppearance()
+        appearance.padding = 4
+        appearance.paddingBalance = true
+        let viewport = CGSize(width: 1200, height: 700)
+        for (extraColumns, extraRows) in [(1, 0), (-1, 0), (0, 1), (0, -1), (3, -3), (-3, 3), (8, 8), (-8, -8), (60, 20)] {
+            let terminal = Terminal(cols: 80, rows: 24) { _ in }
+            let surface = try TerminalSurface(terminal: terminal, appearance: appearance)
+            surface.sizeFollowsStream = true
+            surface.layout(size: viewport, scale: 2)
+            let grid = try #require(surface.grid)
+            let columns = Int(grid.cols) + extraColumns, rows = Int(grid.rows) + extraRows
+            terminal.resize(cols: UInt16(columns), rows: UInt16(rows), cellWidth: grid.cellWidth, cellHeight: grid.cellHeight)
+            let first = surface.rect(for: GridPoint(x: 0, y: 0))
+            let last = surface.rect(for: GridPoint(x: columns - 1, y: rows - 1))
+            let shape = "\(extraColumns) columns, \(extraRows) rows"
+            #expect(first.minX >= appearance.padding - 0.01, "\(shape)")
+            #expect(first.minY >= appearance.padding - 0.01, "\(shape)")
+            #expect(viewport.width - last.maxX >= appearance.padding - 0.01, "\(shape)")
+            #expect(viewport.height - last.maxY >= appearance.padding - 0.01, "\(shape)")
+        }
+    }
+
     @Test func largerRemoteGridFitsAndHitTestingReachesItsLastCell() throws {
         let terminal = Terminal(cols: 160, rows: 50) { _ in }
         let surface = try TerminalSurface(terminal: terminal, fontSize: 12)
