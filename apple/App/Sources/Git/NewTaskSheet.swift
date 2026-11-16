@@ -68,6 +68,15 @@ struct NewTaskSheet: View {
         return book.resolve(agent, project: model.currentProjectId, override: accountPicks[accountKey])
     }
 
+    /// Agents the host answered it does not have: offered, but quieter than the ones it has.
+    private var missingRunners: Set<Runner> {
+        guard let installs else { return [] }
+        return Set(Runner.allCases.filter { runner in
+            guard let agent = runner.agent, case .missing? = installs[agent] else { return false }
+            return true
+        })
+    }
+
     private var status: LaunchStatus {
         guard host != nil else { return .noHost }
         guard let agent = runner.agent else { return .shell }
@@ -129,7 +138,7 @@ struct NewTaskSheet: View {
                 // On the page, not in a card: a segmented control is a control, not a row.
                 #if os(iOS)
                 Section {
-                    RunnerPicker(selection: $runner)
+                    RunnerPicker(selection: $runner, missing: missingRunners)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
                 }
@@ -169,7 +178,7 @@ struct NewTaskSheet: View {
                     Toggle(isOn: $worktree) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("New Worktree")
-                            Text("Its own branch, PORT and tab, so it can't trip over your checkout.")
+                            Text("Its own branch and tab, so it can't trip over your checkout.")
                                 .font(.footnote)
                                 .foregroundStyle(DS.Palette.textSecondary)
                         }
@@ -259,7 +268,7 @@ struct NewTaskSheet: View {
             #if os(macOS)
             // A Mac form draws a card behind every section: the picker sits on the page above it.
             .safeAreaInset(edge: .top, spacing: 0) {
-                RunnerPicker(selection: $runner)
+                RunnerPicker(selection: $runner, missing: missingRunners)
                     .padding(.horizontal, DS.Space.xl)
                     .padding(.top, DS.Space.m)
             }
@@ -362,6 +371,7 @@ struct NewTaskSheet: View {
 /// sheet presents and the keyboard rises.
 private struct RunnerPicker: View {
     @Binding var selection: NewTaskSheet.Runner
+    var missing: Set<NewTaskSheet.Runner> = []
     @Namespace private var pill
 
     var body: some View {
@@ -383,7 +393,7 @@ private struct RunnerPicker: View {
                         // make the words jump.
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
-                        .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
+                        .foregroundStyle(selected ? DS.Palette.text : missing.contains(runner) ? DS.Palette.textTertiary : DS.Palette.textSecondary)
                         .frame(maxWidth: .infinity, minHeight: 32)
                         .background {
                             if selected {
@@ -398,6 +408,7 @@ private struct RunnerPicker: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(runner.title)
                 .accessibilityAddTraits(selected ? .isSelected : [])
+                .accessibilityValue(missing.contains(runner) ? "Not installed" : "")
             }
         }
         .padding(2)
@@ -455,9 +466,10 @@ private struct LaunchStatusRow: View {
 
     private func lines(_ detail: some View) -> some View {
         VStack(alignment: .leading, spacing: 2) {
+            // Whole words on two lines, never "rea…buntu" cut through the middle.
             Text(title)
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             detail
                 .font(.footnote)
                 .foregroundStyle(DS.Palette.textSecondary)
