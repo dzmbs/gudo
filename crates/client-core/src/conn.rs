@@ -517,7 +517,7 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
                 });
             }
         }
-        let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
+        let _ = tokio::time::timeout(redial_wait(backoff), inner.reconnect.notified()).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
 }
@@ -572,6 +572,17 @@ fn start_over_after(inner: &Inner, failed_dials: u32) {
     if failed_dials.is_multiple_of(FRESH_ENDPOINT_AFTER) {
         inner.rebind.store(true, Ordering::SeqCst);
     }
+}
+
+/// `backoff` plus up to half again at random, so the clients of a daemon that went away
+/// spread their redials instead of arriving together when it comes back.
+fn redial_wait(backoff: Duration) -> Duration {
+    let mut random = [0; 4];
+    if getrandom::fill(&mut random).is_err() {
+        return backoff;
+    }
+    let unit = f64::from(u32::from_le_bytes(random)) / f64::from(u32::MAX);
+    backoff.mul_f64(1.0 + unit / 2.0)
 }
 
 async fn dial_within(
@@ -1759,6 +1770,15 @@ mod tests {
 
     use super::*;
     use crate::ConnectOptions;
+
+    #[test]
+    fn redial_waits_are_spread_so_clients_never_redial_in_step() {
+        for backoff in [MIN_BACKOFF, Duration::from_secs(1), MAX_BACKOFF] {
+            let waits: Vec<Duration> = (0..64).map(|_| redial_wait(backoff)).collect();
+            assert!(waits.iter().all(|wait| *wait >= backoff && *wait <= backoff * 3 / 2));
+            assert!(waits.iter().any(|wait| *wait != waits[0]));
+        }
+    }
 
     #[test]
     fn old_daemons_are_not_sent_activity_claims_or_unknown_policies() {
