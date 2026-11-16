@@ -6,12 +6,18 @@ enum PaneSizingSource: Equatable, Sendable {
     case fixed
     case shared
 
-    static func resolve(_ state: PaneSizing, myPeer: UInt64?, policy: SizePolicy, isLocalDriver: Bool) -> Self? {
+    /// Who decides the pane's size when it is not this view: nil while nobody else does. With no
+    /// owner, only a fixed grid, or the smallest of several clients' grids, is someone else's.
+    static func resolve(_ state: PaneSizing, myPeer: UInt64?, policy: SizePolicy, isLocalDriver: Bool, othersConnected: Bool) -> Self? {
         if let peer = state.peer {
+            guard let myPeer else { return nil }
             if peer != myPeer { return .peer(peer) }
             return isLocalDriver ? nil : .anotherWindow
         }
-        if case .fixed = policy { return .fixed }
-        return .shared
+        switch policy {
+        case .fixed: return .fixed
+        case .smallest: return othersConnected ? .shared : nil
+        case .lastActive, .lastInput, .followLease: return nil
+        }
     }
 }

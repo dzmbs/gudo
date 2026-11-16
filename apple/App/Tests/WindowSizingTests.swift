@@ -14,12 +14,29 @@ final class WindowSizingTests: XCTestCase {
     func testSizingSourceUsesTheConnectionNotItsSharedPrincipal() {
         let mine = PaneSizing(paneId: 1, peer: 7)
         let other = PaneSizing(paneId: 1, peer: 8)
-        XCTAssertNil(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: true))
-        XCTAssertEqual(PaneSizingSource.resolve(other, myPeer: 7, policy: .lastActive, isLocalDriver: true), .peer(8))
-        XCTAssertEqual(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: false), .anotherWindow)
+        XCTAssertNil(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: true, othersConnected: true))
+        XCTAssertEqual(PaneSizingSource.resolve(other, myPeer: 7, policy: .lastActive, isLocalDriver: true, othersConnected: true), .peer(8))
+        XCTAssertEqual(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: false, othersConnected: true), .anotherWindow)
         let composite = PaneSizing(paneId: 1, peer: nil)
-        XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .fixed(cols: 80, rows: 24), isLocalDriver: true), .fixed)
-        XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .smallest, isLocalDriver: true), .shared)
+        XCTAssertEqual(
+            PaneSizingSource.resolve(composite, myPeer: 7, policy: .fixed(cols: 80, rows: 24), isLocalDriver: true, othersConnected: true), .fixed)
+        XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .smallest, isLocalDriver: true, othersConnected: true), .shared)
+    }
+
+    /// Nobody claiming the size yet (this client's own size on its way, or every window in the
+    /// background) is not someone else deciding it; nor is a lone client's smallest grid.
+    func testOnlyAnotherClientDecidingTheSizeIsShown() {
+        let unclaimed = PaneSizing(paneId: 1, peer: nil)
+        for policy in [SizePolicy.lastActive, .lastInput, .followLease, .smallest] {
+            XCTAssertNil(PaneSizingSource.resolve(unclaimed, myPeer: 7, policy: policy, isLocalDriver: true, othersConnected: false), "\(policy)")
+        }
+        for policy in [SizePolicy.lastActive, .lastInput, .followLease] {
+            XCTAssertNil(PaneSizingSource.resolve(unclaimed, myPeer: 7, policy: policy, isLocalDriver: true, othersConnected: true), "\(policy)")
+        }
+        XCTAssertEqual(
+            PaneSizingSource.resolve(unclaimed, myPeer: 7, policy: .fixed(cols: 80, rows: 24), isLocalDriver: true, othersConnected: false), .fixed)
+        let mine = PaneSizing(paneId: 1, peer: 7)
+        XCTAssertNil(PaneSizingSource.resolve(mine, myPeer: nil, policy: .lastActive, isLocalDriver: true, othersConnected: false))
     }
 
     func testNativeViewFitsAndCentersSharedGridsWithoutReflow() throws {

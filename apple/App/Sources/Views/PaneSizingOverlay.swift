@@ -34,8 +34,9 @@ struct PaneSizingOverlay: View {
         _ = pane.resizesSent
         guard daemon.status.isLive, let state = daemon.sizing[pane.id],
               let metadata = daemon.meta[pane.id], pane.view.surface.grid != nil else { return nil }
-        return PaneSizingSource.resolve(state, myPeer: daemon.multiplayer.myPeer,
-                                        policy: metadata.sizePolicy, isLocalDriver: pane.isSizingTap)
+        let session = daemon.multiplayer
+        return PaneSizingSource.resolve(state, myPeer: session.myPeer, policy: metadata.sizePolicy, isLocalDriver: pane.isSizingTap,
+                                        othersConnected: session.peers.keys.contains { $0 != session.myPeer })
     }
 
     private func canUseSize(in daemon: DaemonConnection) -> Bool {
