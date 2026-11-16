@@ -79,6 +79,8 @@ final class NarrowWindowSidebarTests: XCTestCase {
         workspace.split(.horizontal)
         let panes = try XCTUnwrap(workspace.session.activeTab?.root.panes)
         XCTAssertEqual(panes.count, 2)
+        // The mock host outlives the test: its tab goes back to one pane.
+        defer { if let added = panes.last { workspace.apply(.close(added)) } }
 
         window.setContentSize(NSSize(width: 640, height: 600))
         try await Task.sleep(for: .milliseconds(200))
