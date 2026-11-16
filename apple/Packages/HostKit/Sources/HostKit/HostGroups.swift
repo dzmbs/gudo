@@ -699,6 +699,41 @@ public final class HostGroups {
         tabs.firstIndex(of: ref)
     }
 
+    /// Whether the sidebar lists `ref`'s row: its project is expanded, or, outside any project,
+    /// its host's group is.
+    public func isRowShown(_ ref: TabRef) -> Bool {
+        isRowShown(ref, projects: projects, groups: groups)
+    }
+
+    private func isRowShown(_ ref: TabRef, projects: [Project], groups: [HostGroup]) -> Bool {
+        if let project = projects.first(where: { $0.tabs.contains(ref) }) { return !collapsedProjects.contains(project.id) }
+        guard let group = groups.first(where: { $0.listed.contains(ref) }) else { return true }
+        return !collapsed.contains(group.id)
+    }
+
+    /// Expands the project or group that hides `ref`'s row.
+    public func showRow(_ ref: TabRef) {
+        if let project = project(of: ref) {
+            collapsedProjects.remove(project.id)
+        } else if let group = groups.first(where: { $0.listed.contains(ref) }) {
+            collapsed.remove(group.id)
+        }
+    }
+
+    /// The tab to select once `closing` close while `current` is selected: the nearest one in
+    /// the unified order whose row shows, looking after it first; where every row left is
+    /// hidden, the nearest one all the same (its row then has to be shown).
+    public func successor(of current: TabRef, closing: Set<TabRef>) -> TabRef? {
+        let all = tabs
+        guard let index = all.firstIndex(of: current) else { return nil }
+        let after = all[(index + 1)...].filter { !closing.contains($0) }
+        let before = all[..<index].reversed().filter { !closing.contains($0) }
+        let nearest = after + before
+        let groups = self.groups
+        let projects = projects(in: groups)
+        return nearest.first { isRowShown($0, projects: projects, groups: groups) } ?? nearest.first
+    }
+
     /// The tab `offset` steps from `current` in the unified list, wrapping around across host
     /// boundaries (⇧⌘] is +1, ⇧⌘[ is -1). Without a current tab (or one no longer listed), the
     /// first tab of `fallbackHost`'s neighbourhood: the first (+1) or last (-1) tab overall.

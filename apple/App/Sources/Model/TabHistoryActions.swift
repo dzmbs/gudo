@@ -15,6 +15,9 @@ extension WindowModel {
     /// closed together come back together (⇧⌘T, Undo).
     func closeTabs(_ refs: [TabRef], undoable: Bool) {
         expandedTabs.subtract(refs)
+        // The host would pick its own neighbour, which may sit in a collapsed group: the next
+        // selection is the nearest tab the sidebar shows.
+        let successor = currentTab.flatMap { refs.contains($0) ? groups.successor(of: $0, closing: Set(refs)) : nil }
         let batch = refs.count > 1 ? UUID() : nil
         var closed: [ClosedTab] = []
         for ref in refs {
@@ -33,6 +36,10 @@ extension WindowModel {
             }
         }
         recentlyClosed.record(closed)
+        if let successor {
+            if !groups.isRowShown(successor) { withAnimation(DS.Motion.standard) { groups.showRow(successor) } }
+            focus(successor)
+        }
         tabSelection.keep(Set(groups.tabs))
         guard undoable, !closed.isEmpty else { return }
         let message = closed.count == 1 ? "Closed “\(closed[0].title)”" : "Closed \(closed.count) tabs"

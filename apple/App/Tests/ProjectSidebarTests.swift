@@ -201,6 +201,35 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(model.sheet, .shortcuts, "only the overview closes")
     }
 
+    /// ⌘W never leaves the selection on a row a collapsed group hides: the nearest tab the
+    /// sidebar shows takes over, and where none shows, the next one's group opens.
+    func testClosingATabSelectsARowTheSidebarShows() throws {
+        func shownRows() -> [TabRef] {
+            model.sidebarItems(drop: nil, projectMove: nil).items.compactMap { if case .row(let ref, _) = $0 { ref } else { nil } }
+        }
+        let hetzner = try XCTUnwrap(model.groups.group("fixture-hetzner"))
+        let migrate = hetzner.ref(try XCTUnwrap(hetzner.tabs.first { $0.title == "db-migrate" }).id)
+        let infra = try XCTUnwrap(model.projects.first { $0.name == "infra" })
+        // The host's own neighbour of db-migrate is deploy, in infra.
+        XCTAssertTrue(infra.tabs.contains(hetzner.ref(try XCTUnwrap(hetzner.tabs.first { $0.title == "deploy" }).id)))
+        model.groups.collapsedProjects.insert(infra.id)
+        model.focus(migrate)
+        XCTAssertEqual(model.currentTab, migrate)
+        model.closeTab(migrate, undoable: false)
+        let next = try XCTUnwrap(model.currentTab)
+        XCTAssertNotEqual(next, migrate)
+        XCTAssertTrue(shownRows().contains(next), "\(next) is selected but its row is hidden")
+
+        let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
+        for group in model.groups.groups { model.groups.collapsed.insert(group.id) }
+        for ref in app.tabs {
+            model.focus(ref)
+            model.closeTab(ref, undoable: false)
+            let selected = try XCTUnwrap(model.currentTab)
+            XCTAssertTrue(shownRows().contains(selected), "\(selected) is selected but its row is hidden")
+        }
+    }
+
     func testMoveTabKeysStayWithinTheSection() throws {
         let app = try XCTUnwrap(model.projects.first)
         model.focus(app.tabs[0])
