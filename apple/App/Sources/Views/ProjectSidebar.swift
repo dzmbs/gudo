@@ -819,6 +819,9 @@ private struct ProjectHeader: View {
             .onExitCommand { finishRename(keep: true) }
             #endif
             .onChange(of: fieldFocused) { _, focused in if !focused { finishRename() } }
+            // On the theme's own field surface, not the system's black field editor.
+            .padding(.horizontal, DS.Space.xs)
+            .fieldSurface(isFocused: fieldFocused, cornerRadius: DS.Radius.field)
             .accessibilityIdentifier("project-name-field")
     }
 
