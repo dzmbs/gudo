@@ -98,12 +98,28 @@ final class FontGrid {
     private var faceIndexByName: [String: Int] = [:]
     private var resolved: [ResolveKey: (face: Int, glyph: CGGlyph)?] = [:]
     private var glyphs: [GlyphKey: RenderedGlyph?] = [:]
+    /// Clusters that shape to more than one glyph (a letter and its combining marks), by face.
+    private var clusters: [ResolveKey: ShapedCluster?] = [:]
+    private var clusterGlyphs: [ClusterKey: RenderedGlyph?] = [:]
     private var spriteGlyphs: [SpriteGlyphKey: RenderedGlyph?] = [:]
     private var sprites: [SpriteKey: RenderedGlyph] = [:]
 
     private struct ResolveKey: Hashable {
         var text: String
         var style: FontStyle
+    }
+
+    /// A grapheme cluster shaped in one face: its glyphs and where each sits from the origin.
+    struct ShapedCluster {
+        var face: Int
+        var glyphs: [CGGlyph]
+        var positions: [CGPoint]
+    }
+
+    private struct ClusterKey: Hashable {
+        var text: String
+        var style: FontStyle
+        var span: Int
     }
 
     private struct GlyphKey: Hashable {
@@ -283,6 +299,9 @@ final class FontGrid {
         var text = ""
         text.unicodeScalars.append(contentsOf: scalars.compactMap(Unicode.Scalar.init))
         let key = ResolveKey(text: text, style: style)
+        if scalars.count > 1, let cluster = shapedCluster(text, key: key), cluster.glyphs.count > 1 {
+            return compositeGlyph(cluster, text: text, style: style, base: base, span: span)
+        }
         let hit: (face: Int, glyph: CGGlyph)?
         if let cached = resolved[key] {
             hit = cached
@@ -359,6 +378,7 @@ final class FontGrid {
         directGlyphs.removeAll()
         asciiGlyphs.update(repeating: nil, count: Self.asciiTableSize)
         glyphs.removeAll()
+        clusterGlyphs.removeAll()
         spriteGlyphs.removeAll()
         sprites.removeAll()
         epoch += 1
@@ -380,7 +400,75 @@ final class FontGrid {
             if let glyph = glyphInFace(primary, utf16) { return (style.rawValue, glyph) }
             if presentation == .text, let hit = textFallback(utf16, primary: primary) { return hit }
         }
+        if presentation != .emoji, let face = clusterFace(scalars, primary: primary),
+           let cluster = shape(text, in: face), let glyph = cluster.glyphs.first {
+            return (faceIndex(for: face), glyph)
+        }
         return cascade(text, primary: primary)
+    }
+
+    /// The face a letter and its combining marks are drawn in, as Ghostty picks it: the primary
+    /// face when it has every codepoint of the cluster, else the first fallback chosen for one
+    /// of them that has them all. Nil when no face has them all.
+    func clusterFace(_ scalars: [Unicode.Scalar], primary: CTFont) -> CTFont? {
+        let meaningful = scalars.filter { ![0xFE0E, 0xFE0F, 0x200D].contains($0.value) }
+        guard meaningful.count > 1 else { return nil }
+        let candidates = [primary] + meaningful.map { scalar in
+            let string = String(scalar) as CFString
+            return CTFontCreateForString(primary, string, CFRange(location: 0, length: CFStringGetLength(string)))
+        }
+        return candidates.first { face in
+            meaningful.allSatisfy { glyphInFace(face, Array(String($0).utf16)) != nil }
+        }
+    }
+
+    /// The cluster's glyphs in `face` alone, with their offsets from the origin (marks placed
+    /// over their letter by the face's own positioning).
+    private func shape(_ text: String, in face: CTFont) -> ShapedCluster? {
+        guard let attributed = CFAttributedStringCreate(nil, text as CFString, [kCTFontAttributeName: face] as CFDictionary) else { return nil }
+        let line = CTLineCreateWithAttributedString(attributed)
+        var glyphs: [CGGlyph] = [], positions: [CGPoint] = []
+        for run in CTLineGetGlyphRuns(line) as? [CTRun] ?? [] {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            // A run CoreText had to draw from another face: the face does not cover the cluster.
+            guard let runFont = attributes[kCTFontAttributeName], CFGetTypeID(runFont as CFTypeRef) == CTFontGetTypeID(),
+                  CTFontCopyPostScriptName(runFont as! CTFont) as String == CTFontCopyPostScriptName(face) as String
+            else { return nil }
+            let count = CTRunGetGlyphCount(run)
+            var runGlyphs = [CGGlyph](repeating: 0, count: count)
+            var runPositions = [CGPoint](repeating: .zero, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: count), &runGlyphs)
+            CTRunGetPositions(run, CFRange(location: 0, length: count), &runPositions)
+            glyphs += runGlyphs
+            positions += runPositions
+        }
+        guard !glyphs.isEmpty, !glyphs.contains(0) else { return nil }
+        return ShapedCluster(face: faceIndex(for: face), glyphs: glyphs, positions: positions)
+    }
+
+    /// The cluster as shaped in its one face (`clusterFace`), cached per text and style.
+    private func shapedCluster(_ text: String, key: ResolveKey) -> ShapedCluster? {
+        if let cached = clusters[key] { return cached }
+        let scalars = Array(text.unicodeScalars)
+        guard EmojiPresentation(scalars) != .emoji else { return nil }
+        let primary = faces[key.style.rawValue]
+        let cluster = clusterFace(scalars, primary: primary).flatMap { shape(text, in: $0) }
+        if clusters.count >= maxCacheEntries { clusters.removeAll() }
+        clusters[key] = cluster
+        return cluster
+    }
+
+    /// A letter with its marks, drawn together in one bitmap.
+    private func compositeGlyph(_ cluster: ShapedCluster, text: String, style: FontStyle, base: UInt32, span: Int) -> RenderedGlyph? {
+        let key = ClusterKey(text: text, style: style, span: span)
+        if let cached = clusterGlyphs[key] { return cached }
+        guard mayRasterize() else { return nil }
+        let deferred = deferrals
+        let rendered = render(
+            glyphs: cluster.glyphs, positions: cluster.positions, face: faces[cluster.face],
+            isFallback: cluster.face >= FontStyle.allCases.count, codepoint: base, constraintWidth: max(1, span))
+        if deferrals == deferred { clusterGlyphs[key] = rendered }
+        return rendered
     }
 
     /// The face CoreText picks for a single character when it is a color one, else the system's
@@ -467,9 +555,20 @@ final class FontGrid {
     /// box (Nerd Font rules, symbols, emoji), centre on the rounded cell, keep the subpixel
     /// position in the bitmap.
     private func render(glyph: CGGlyph, face: CTFont, isFallback: Bool, codepoint: UInt32, constraintWidth: Int) -> RenderedGlyph? {
-        var cgGlyph = glyph
-        let rect = CTFontGetBoundingRectsForGlyphs(face, .horizontal, &cgGlyph, nil, 1)
-        guard rect.width >= 0.25, rect.height >= 0.25 else { return nil }
+        render(glyphs: [glyph], positions: [.zero], face: face, isFallback: isFallback, codepoint: codepoint, constraintWidth: constraintWidth)
+    }
+
+    /// `glyphs` at `positions` (a letter and its marks) as one bitmap, placed as their union.
+    private func render(
+        glyphs: [CGGlyph], positions: [CGPoint], face: CTFont, isFallback: Bool, codepoint: UInt32, constraintWidth: Int
+    ) -> RenderedGlyph? {
+        var bounds = [CGRect](repeating: .zero, count: glyphs.count)
+        CTFontGetBoundingRectsForGlyphs(face, .horizontal, glyphs, &bounds, glyphs.count)
+        let rect = zip(bounds, positions)
+            .map { $0.offsetBy(dx: $1.x, dy: $1.y) }
+            .filter { !$0.isEmpty }
+            .reduce(CGRect.null) { $0.union($1) }
+        guard !rect.isNull, rect.width >= 0.25, rect.height >= 0.25 else { return nil }
 
         let isColor = CTFontGetSymbolicTraits(face).contains(.traitColorGlyphs)
         var constraint = isColor ? NerdFontConstraint.emoji : NerdFontConstraint.forCodepoint(codepoint)
@@ -534,8 +633,8 @@ final class FontGrid {
             }
             context.translateBy(x: fracX, y: fracY)
             context.scaleBy(x: width / rect.width, y: height / rect.height)
-            var position = CGPoint(x: -rect.origin.x, y: -rect.origin.y)
-            CTFontDrawGlyphs(face, &cgGlyph, &position, 1, context)
+            let placed = positions.map { CGPoint(x: $0.x - rect.origin.x, y: $0.y - rect.origin.y) }
+            CTFontDrawGlyphs(face, glyphs, placed, glyphs.count, context)
             return true
         }
         guard drawn else { return nil }
