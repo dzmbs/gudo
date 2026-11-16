@@ -593,7 +593,8 @@ fn activation_script(
   echo started=service
 else
   printf '%s\n' "$output" | sed 's/^/service-output=/'
-  cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {hostd} run || exec {hostd} run) </dev/null >>"$(dirname {hostd})/hostd.log" 2>&1 &
+  log="$(dirname {hostd})/hostd.log"
+  cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {hostd} run --log-file "$log" || exec {hostd} run --log-file "$log") </dev/null >>"$log" 2>&1 &
   echo started=detached
 fi
 "#
@@ -918,7 +919,7 @@ mod tests {
         let bin = home.path().join("bin dir");
         std::fs::create_dir_all(&bin).unwrap();
         let helper = format!(
-            "#!/bin/sh\ncase \"$1\" in\n  service) {service} ;;\n  restart) {restart} ;;\n  run) echo running ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1\" in\n  service) {service} ;;\n  restart) {restart} ;;\n  run) echo \"running $2\" ;;\nesac\n",
             service = if service_works {
                 "exit 0"
             } else {
@@ -975,7 +976,7 @@ mod tests {
         );
         let log = home.path().join("bin dir/hostd.log");
         for _ in 0..50 {
-            if std::fs::read_to_string(&log).is_ok_and(|text| text.contains("running")) {
+            if std::fs::read_to_string(&log).is_ok_and(|text| text.contains("running --log-file")) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(100));

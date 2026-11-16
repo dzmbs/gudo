@@ -102,8 +102,9 @@ and a reused one two (probe, pair):
    (macOS), verified on the remote, then renamed into place.
 4. **Start** if uploaded or not running: `gudo-hostd service install` (systemd `--user`,
    now restarting an older daemon; LaunchAgent). If no service manager works (container,
-   macOS without a GUI login), the daemon is started detached (`setsid … run`) and the report
-   says so. A note suggests `loginctl enable-linger` when lingering is off.
+   macOS without a GUI login), the daemon is started detached (`setsid … run --log-file`,
+   which keeps `hostd.log` under 8 MB plus one older file) and the report says so. A unit
+   file written where systemd cannot load it is removed again. A note suggests `loginctl enable-linger` when lingering is off.
 5. **Pair**: `gudo-hostd pair --json --wait 30` (new, backwards compatible) waits for a
    live daemon to record its endpoint and, up to 10 s more, its home relay, then prints
    `{ticket, daemon_id, expires_unix_ms, addrs, relay_url, running, version}`.

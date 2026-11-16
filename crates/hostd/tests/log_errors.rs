@@ -47,6 +47,53 @@ fn a_log_that_is_not_a_terminal_is_plain_text() {
     assert!(!log.contains('\u{1b}'), "{log:?}");
 }
 
+/// Started without a service manager, the daemon writes its own log file, where it can
+/// keep it small, instead of whatever its stderr is.
+#[test]
+fn a_log_file_takes_the_whole_log() {
+    use std::io::Read as _;
+    let dir = tempfile::tempdir().unwrap();
+    let log_path = dir.path().join("hostd.log");
+    let mut daemon = Command::new(HOSTD)
+        .env("HOME", dir.path())
+        .env("CLAUDE_CONFIG_DIR", dir.path().join(".claude"))
+        .env("CODEX_HOME", dir.path().join(".codex"))
+        .arg("--state-dir")
+        .arg(dir.path().join("state"))
+        .args([
+            "run",
+            "--no-relay",
+            "--bind",
+            "127.0.0.1:0",
+            "--shell",
+            "/bin/sh",
+            "--log-file",
+        ])
+        .arg(&log_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut log = String::new();
+    while !log.contains("serving as") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+        log = std::fs::read_to_string(&log_path).unwrap_or_default();
+    }
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+    let mut elsewhere = String::new();
+    daemon
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut elsewhere)
+        .unwrap();
+    assert!(log.contains("INFO") && log.contains("serving as"), "{log}");
+    assert_eq!(elsewhere, "");
+}
+
 #[test]
 fn an_unwritable_log_does_not_stop_the_daemon() {
     let dir = tempfile::tempdir().unwrap();

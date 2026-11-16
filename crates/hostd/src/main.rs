@@ -29,6 +29,7 @@
 mod app_job;
 mod askpass;
 mod devices;
+mod log_file;
 mod service;
 
 use std::fs::OpenOptions;
@@ -79,6 +80,10 @@ enum Command {
         /// Register shared agent hooks and MCP tools, including with a custom state directory.
         #[arg(long)]
         install_agent_integration: bool,
+        /// Log to this file instead of stderr, keeping it small: a full one moves to
+        /// `<file>.1`. For a daemon started without a service manager.
+        #[arg(long)]
+        log_file: Option<PathBuf>,
     },
     /// Print a one-time pairing ticket as text and QR code.
     Pair {
@@ -258,7 +263,15 @@ fn main() -> Result<()> {
             no_relay,
             shell,
             install_agent_integration,
-        } => run(state_dir, bind, no_relay, shell, install_agent_integration),
+            log_file,
+        } => run(
+            state_dir,
+            bind,
+            no_relay,
+            shell,
+            install_agent_integration,
+            log_file.as_deref(),
+        ),
         Command::Pair {
             list: true, json, ..
         } => pending_tickets(&state_dir, json),
@@ -378,10 +391,15 @@ fn run(
     no_relay: bool,
     shell: Option<PathBuf>,
     install_agent_integration: bool,
+    log_file: Option<&Path>,
 ) -> Result<()> {
     // First, while this process has one thread and before it starts any program: what the
     // build this process ran before its `exec` handed over.
     let inherited = daemon::Inherited::claim();
+    if let Some(log_file) = log_file {
+        log_file::write_to(log_file)
+            .with_context(|| format!("logging to {}", log_file.display()))?;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env(brand::env_var("LOG"))
