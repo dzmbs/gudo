@@ -178,14 +178,22 @@ async fn drive(
                 listener.on_event(ClientEvent::Refused {
                     reason: err.to_string(),
                 });
-                // Wait for the user to fix it (`reconnect_now`) or to close the pane.
-                tokio::select! {
-                    _ = states.wait_for(|state| !matches!(state, ConnectionState::NeedsAttention { .. })) => continue,
-                    command = commands.recv() => match command {
-                        Some(Command::Close) | None => break,
-                        _ => continue,
-                    },
+                // Wait for the user to fix it (`reconnect_now`) or to close the pane; what is
+                // typed meanwhile goes nowhere.
+                loop {
+                    tokio::select! {
+                        _ = states.wait_for(|state| !matches!(state, ConnectionState::NeedsAttention { .. })) => break,
+                        command = commands.recv() => match command {
+                            Some(Command::Close) | None => {
+                                listener.on_event(ClientEvent::PaneClosed { pane_id });
+                                return;
+                            }
+                            Some(Command::Resize(new_size)) => size = new_size,
+                            Some(Command::Input(_)) => {}
+                        },
+                    }
                 }
+                continue;
             }
         };
         let (shell, mut output) = match connection.open_shell(&options.pty_request(size)).await {

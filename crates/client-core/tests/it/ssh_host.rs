@@ -336,6 +336,58 @@ async fn tmux_pane_reattaches_after_a_drop() {
     session.close();
 }
 
+/// A host that needs the user (here its key changed) is reported once, however much is
+/// typed into the pane meanwhile.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
+async fn a_pane_reports_a_host_that_needs_attention_once() {
+    let env = env();
+    let known_hosts = KnownHosts::in_memory();
+    let other_key = ssh::generate_ed25519("").unwrap();
+    known_hosts
+        .pin(&env.host, env.port, &other_key.public_key)
+        .unwrap();
+    let mut options = options(&env);
+    options.known_hosts = Arc::new(known_hosts);
+    let session = Session::start(
+        Target::direct(HostSpec::new(&env.host, &env.user).with_port(env.port)),
+        options,
+        ReconnectPolicy::default(),
+        None,
+    );
+    let (listener, events) = EventQueue::channel();
+    let pane = SshPane::open(
+        session.clone(),
+        SshPaneOptions::new(
+            PaneId(1),
+            PaneSize {
+                cols: 80,
+                rows: 24,
+                width_px: 0,
+                height_px: 0,
+            },
+        ),
+        listener,
+    );
+    let mut events = Stream::new(events);
+    events
+        .until(|event| matches!(event, ClientEvent::Refused { .. }))
+        .await;
+    for _ in 0..3 {
+        pane.send_input(b"ls\r".to_vec());
+    }
+    pane.close();
+    let mut refusals = 0;
+    events
+        .until(|event| {
+            refusals += usize::from(matches!(event, ClientEvent::Refused { .. }));
+            matches!(event, ClientEvent::PaneClosed { .. })
+        })
+        .await;
+    assert_eq!(refusals, 0, "refused again for keystrokes");
+    session.close();
+}
+
 /// The static daemon build for the test VM (made by scripts/ssh-test-vm.sh).
 fn hostd_binary(platform: ssh::HostPlatform) -> PathBuf {
     if let Some(path) = std::env::var_os("GUDO_SSH_TEST_HOSTD") {
