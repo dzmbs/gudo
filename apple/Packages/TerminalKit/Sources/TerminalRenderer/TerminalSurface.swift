@@ -531,6 +531,10 @@ public final class TerminalSurface {
 
     /// Close enough to count as there: a spring's last moves are under a pixel each.
     static let arrivalTolerance: CGFloat = 1.5
+    /// How long past its deadline a view may still reach its target: a layout can settle a few
+    /// frames after its animation's nominal end (the detail column takes its resting width once
+    /// the sidebar has come in). Drawn there meanwhile, it would change its grid twice.
+    static let lateArrival = Duration.milliseconds(250)
     /// How long the program's output must pause after a resize to count as redrawn, and how
     /// long a view that arrived waits for that at most.
     static let redrawQuiet = Duration.milliseconds(30)
@@ -618,7 +622,7 @@ public final class TerminalSurface {
             motion.outputSeen = output
             motion.quietSince = now
         }
-        if motion.arrived == nil, now >= motion.deadline { motion.arrived = now }
+        if motion.arrived == nil, now >= motion.deadline + Self.lateArrival { motion.arrived = now }
         self.motion = motion
         guard let arrived = motion.arrived else { return false }
         // A remote pane's terminal takes its new size when its stream says so.

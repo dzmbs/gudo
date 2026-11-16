@@ -71,6 +71,27 @@ extension LayoutHoldTests {
             #expect(surface.pendingGridSize == nil)
         }
 
+        /// A view that reaches its size a few frames after the motion's nominal end (the detail
+        /// column takes its resting width once the sidebar has come in) still changes its grid
+        /// once: it is not drawn, and fitted, at the size it passes through.
+        @Test func aViewThatArrivesAfterTheDeadlineStillChangesItsGridOnce() async throws {
+            let terminal = Terminal(cols: 20, rows: 6) { _ in }
+            let (surface, changes) = try surface(terminal, width: 800)
+            surface.prepareResize(to: CGSize(width: 400, height: 200), within: .milliseconds(100))
+            let after = try #require(surface.grid)
+
+            let start = ContinuousClock.now
+            while ContinuousClock.now - start < .milliseconds(220) {
+                surface.layout(size: CGSize(width: 800, height: 200), scale: 2)
+                try await Task.sleep(for: .milliseconds(8))
+            }
+            surface.layout(size: CGSize(width: 400, height: 200), scale: 2)
+            try await waitUntilDrawing(surface)
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(changes() == [after])
+            #expect(surface.grid == after)
+        }
+
         /// The canvas lays a moving pane out once, at its final size, and moves it by transform
         /// over a still: the grid changes once, for that size, and the terminal draws again
         /// before the motion settles, so the still gives way to a terminal already redrawn.
