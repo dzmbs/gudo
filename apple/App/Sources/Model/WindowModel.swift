@@ -216,6 +216,8 @@ final class WindowModel {
     /// The searched pane's own search: its terminal's matches and the selected one (`PaneSearch.swift`).
     var searchStatus = SearchStatus.idle
     @ObservationIgnored weak var searchPane: Pane?
+    /// The needle changed: the first match the search reports is selected.
+    @ObservationIgnored var searchFollowsTyping = false
     /// Fetching older scrollback from the host to reach a match only the host still has.
     @ObservationIgnored var searchHistoryTask: Task<Void, Never>?
     /// The Add Host sheet's starting mode and destination (quick connect pre-fills SSH).

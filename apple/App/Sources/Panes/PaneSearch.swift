@@ -58,6 +58,12 @@ extension WindowModel {
                 guard let self, let pane, self.searchPane === pane else { return }
                 PaneSearchLog.log.debug("status total=\(status.total) sel=\(status.selected ?? -1) complete=\(status.isComplete)")
                 self.searchStatus = status
+                // As the needle is typed, the nearest match is selected and shown, as Return would.
+                if self.searchFollowsTyping, status.selected == nil, status.total > 0 {
+                    self.searchFollowsTyping = false
+                    pane.view.surface.selectMatch(.next)
+                    self.searchStatus = pane.view.surface.search?.status ?? status
+                }
             }
         }
         applySearch()
@@ -78,6 +84,12 @@ extension WindowModel {
         searchHistoryTask?.cancel()
         surface.setSearch(isSearchShown ? searchNeedle : "", caseSensitive: searchCaseSensitive)
         searchStatus = surface.search?.status ?? .idle
+        searchFollowsTyping = isSearchShown && !searchNeedle.isEmpty
+        if searchFollowsTyping, searchStatus.selected == nil, searchStatus.total > 0 {
+            searchFollowsTyping = false
+            surface.selectMatch(.next)
+            searchStatus = surface.search?.status ?? .idle
+        }
     }
 
     /// ⌘G / Return: the next match up from the prompt, wrapping at the oldest.

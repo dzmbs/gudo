@@ -138,6 +138,16 @@ final class PaneSearchFocusTests: XCTestCase {
         XCTAssertTrue(fieldHasKeyboard, "keyboard: \(describeKeyboardOwner())")
     }
 
+    func testTypingANeedleSelectsTheNearestMatchAtOnce() async throws {
+        type("qzx qzx")
+        await waitUntil { self.screenText().contains("qzx qzx") }
+        await openSearch()
+        type("qz")
+        await waitUntil { self.model.searchStatus.selected != nil }
+        XCTAssertNotNil(model.searchStatus.selected, "a match is selected without Return: \(model.searchStatus)")
+        XCTAssertGreaterThanOrEqual(model.searchStatus.total, 2)
+    }
+
     #if os(macOS)
     func testEscapeInTheFieldClosesTheBarAndTheTerminalTakesTheKeyboard() async throws {
         let terminal = try terminalView()
@@ -209,7 +219,7 @@ final class PaneSearchFocusTests: XCTestCase {
         }
     }
 
-    private static let keyCodes: [Character: UInt16] = ["e": 14, "q": 12, "x": 7, "z": 6]
+    private static let keyCodes: [Character: UInt16] = ["e": 14, "q": 12, "x": 7, "z": 6, " ": 49]
 
     /// Keys as the window delivers them, to whatever has the keyboard.
     private func type(_ text: String) {
