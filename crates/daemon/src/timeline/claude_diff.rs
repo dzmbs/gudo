@@ -50,6 +50,57 @@ pub(super) fn result_diff(result: &RichResult) -> Vec<FileDiff> {
     }]
 }
 
+/// The bounded inline preview of a unified diff of the file at `path`.
+pub(crate) fn unified_preview(path: &str, unified: &str) -> Vec<FileDiff> {
+    let mut patches: Vec<Patch> = Vec::new();
+    for line in unified.lines() {
+        if let Some(patch) = hunk_header(line) {
+            patches.push(patch);
+        } else if let Some(patch) = patches.last_mut() {
+            patch.lines.push(line.to_owned());
+        }
+    }
+    if patches.is_empty() {
+        return Vec::new();
+    }
+    let mut preview = Preview::default();
+    let hunks = patches
+        .iter()
+        .filter_map(|patch| preview.hunk(patch))
+        .collect();
+    vec![FileDiff {
+        path: path.to_owned(),
+        old_path: None,
+        change: FileChange::Modified,
+        binary: false,
+        additions: preview.additions,
+        deletions: preview.deletions,
+        hunks,
+        hunks_omitted: preview.omitted,
+    }]
+}
+
+/// `@@ -a[,b] +c[,d] @@`.
+fn hunk_header(line: &str) -> Option<Patch> {
+    let ranges = line.strip_prefix("@@ -")?.split_once(" @@")?.0;
+    let (old, new) = ranges.split_once(" +")?;
+    let range = |range: &str| -> Option<(u32, u32)> {
+        match range.split_once(',') {
+            Some((start, lines)) => Some((start.parse().ok()?, lines.parse().ok()?)),
+            None => Some((range.parse().ok()?, 1)),
+        }
+    };
+    let (old_start, old_lines) = range(old)?;
+    let (new_start, new_lines) = range(new)?;
+    Some(Patch {
+        lines: Vec::new(),
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+    })
+}
+
 impl Preview {
     fn line(&mut self, line: &str) -> Option<DiffLine> {
         let (kind, text) = match line.as_bytes().first() {
@@ -218,5 +269,19 @@ mod tests {
             assert_eq!(files[0].hunks[0].lines[0].text.chars().count(), 512);
             assert_eq!(files[0].hunks_omitted, omitted);
         }
+    }
+
+    #[test]
+    fn a_unified_diff_previews_its_hunks_and_counts_every_line() {
+        let unified = "--- a.rs\n+++ a.rs\n@@ -2,3 +2,3 @@ fn main\n keep\n-old\n+new\n@@ -10 +10,2 @@\n+one\n+two\n";
+        let files = unified_preview("/w/a.rs", unified);
+        assert_eq!(files.len(), 1);
+        let file = &files[0];
+        assert_eq!((file.additions, file.deletions), (3, 1));
+        assert_eq!(file.hunks.len(), 2);
+        assert_eq!((file.hunks[1].old_start, file.hunks[1].old_lines), (10, 1));
+        assert_eq!(file.hunks[0].lines[1].kind, LineKind::Removed);
+        assert!(!file.hunks_omitted);
+        assert!(unified_preview("/w/a.rs", "no hunks").is_empty());
     }
 }
