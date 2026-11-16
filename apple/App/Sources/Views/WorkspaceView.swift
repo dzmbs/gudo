@@ -38,6 +38,7 @@ struct WorkspaceView: View {
     let workspace: Workspace
     @Environment(WindowModel.self) private var model
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// The layout's frame in window points: where the fold falls within it.
     @State private var frame = CGRect.zero
@@ -174,7 +175,9 @@ struct WorkspaceView: View {
                     .frame(width: SidebarSlide.detailWidth(
                         window: geometry.size.width, sidebar: width + gutter, shown: shown, resting: sidebarRests == shown))
                     .transaction(value: sidebarRests == shown) { $0.animation = nil }
-                    .offset(x: SidebarSlide.detailOffset(sidebar: width + gutter, shown: shown))
+                    // Interpolated here, above the frame that must not animate: a plain offset
+                    // of that frame took its transaction and snapped to where it was going.
+                    .modifier(SlideOffset(x: SidebarSlide.detailOffset(sidebar: width + gutter, shown: shown)))
                     if shown, page != nil {
                         FoldGutter().frame(width: layout.gutter).offset(x: width)
                     }
@@ -189,13 +192,21 @@ struct WorkspaceView: View {
                             // A page ends at the fold: no divider to drag there.
                             if page == nil { SidebarDivider(width: $sidebarWidth).opacity(shown ? 1 : 0) }
                         }
-                        .offset(x: SidebarSlide.sidebarOffset(sidebar: width, shown: shown))
+                        .modifier(SlideOffset(x: SidebarSlide.sidebarOffset(sidebar: width, shown: shown)))
                         .allowsHitTesting(shown)
                         .disabled(!shown)
                         .accessibilityHidden(!shown)
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 .clipped()
+            }
+            .onChange(of: shown) { _, shown in
+                guard model.destination == .terminal, !model.isEditorFullScreen, deck == nil else { return }
+                let strip = showsTabBar && !model.isEditorFullScreen && !layout.isPages ? DS.Size.tabStrip : 0
+                let sidebar = width + (page != nil ? layout.gutter : 0)
+                model.arrangement.prepareTerminals(
+                    resizingCanvasBy: CGSize(width: shown ? -sidebar : sidebar, height: shown ? strip : -strip),
+                    within: DS.Motion.structuralSettle)
             }
             .task(id: shown) {
                 try? await Task.sleep(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
@@ -240,6 +251,47 @@ enum SidebarSlide {
     static func detailOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? sidebar : 0 }
 
     static func sidebarOffset(sidebar: CGFloat, shown: Bool) -> CGFloat { shown ? 0 : -sidebar }
+}
+
+/// A horizontal offset that animates as a value of its own, whatever the transaction of the
+/// view it moves.
+struct SlideOffset: ViewModifier, Animatable {
+    var x: CGFloat
+
+    var animatableData: CGFloat {
+        get { x }
+        set { x = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.offset(x: x)
+    }
+}
+
+/// The panes under the tab strip as it comes or goes. Laid out once, at their new place, they
+/// start where they were and travel there in the structural spring, drawn over the strip, so a
+/// pane header never jumps by the strip's height or sits under it while it fades.
+struct StripRoom: ViewModifier {
+    let stripShown: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.keyframeAnimator(initialValue: CGFloat(0), trigger: stripShown) { content, offset in
+            content.offset(y: reduceMotion ? 0 : offset)
+        } keyframes: { _ in
+            Self.keyframes(stripShown: stripShown)
+        }
+    }
+
+    /// From where the panes were (above their new place when the strip arrives, below it when
+    /// it goes) to rest, by `structuralSettle`.
+    @KeyframesBuilder<CGFloat>
+    static func keyframes(stripShown: Bool) -> some Keyframes<CGFloat> {
+        KeyframeTrack {
+            MoveKeyframe(stripShown ? -DS.Size.tabStrip : DS.Size.tabStrip)
+            SpringKeyframe(0, duration: DS.Motion.structuralSettle, spring: DS.Motion.Role.structural.spring)
+        }
+    }
 }
 
 /// A Mac window too narrow for the sidebar beside a useful terminal hides it, and shows it again
@@ -466,6 +518,8 @@ private struct DetailColumn: View {
                     .background(theme.background.ignoresSafeArea(.all, edges: .bottom))
                     // The ink goes on each destination, never above a toolbar.
                     .chromeContent()
+                    .modifier(StripRoom(stripShown: showsStrip))
+                    .zIndex(1)
             case .inbox:
                 InboxView(feed: model.agents, onLaunch: { model.newAgent() }, onNewTerminal: { model.newTab() })
             case .hosts:
@@ -601,6 +655,7 @@ private struct TerminalToolbar: ToolbarContent {
     @Environment(WindowModel.self) private var model
     #if os(macOS)
     @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     #endif
 

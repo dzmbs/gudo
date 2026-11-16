@@ -267,12 +267,13 @@ struct CanvasLayout {
     }
 
     /// The canvas `session`'s active tab gets at this layout's size: what an op would lead to.
-    init?(session: Session, like layout: CanvasLayout) {
+    /// `size`: the canvas's size when it is about to change (the sidebar coming or going).
+    init?(session: Session, like layout: CanvasLayout, size: CGSize? = nil) {
         guard let tab = session.activeTab else { return nil }
         let metrics = layout.metrics
         self.init(
             node: session.tiledRoot(of: tab) ?? tab.root, floats: FloatScene(session: session, tab: tab, hidden: layout.floatsHidden),
-            zoomed: tab.zoomed, focused: tab.focused, size: layout.bounds.size, gap: metrics.gap, header: metrics.header, cell: metrics.cell,
+            zoomed: tab.zoomed, focused: tab.focused, size: size ?? layout.bounds.size, gap: metrics.gap, header: metrics.header, cell: metrics.cell,
             padding: metrics.padding, headers: metrics.headers)
     }
 
@@ -513,6 +514,17 @@ final class PaneArrangement {
             else { continue }
             terminal.view.surface.prepareResize(to: size, within: .milliseconds(Int(duration * 1000)))
         }
+    }
+
+    /// The canvas is about to grow by `change` (shrinking when negative): the sidebar comes or
+    /// goes, with the tab strip. Each terminal's grid changes once, now, for where it is going,
+    /// so its program has redrawn by the time the slide settles, and its last frame shows until
+    /// then.
+    func prepareTerminals(resizingCanvasBy change: CGSize, within duration: Double) {
+        guard let layout, let session = workspace?.session else { return }
+        let size = CGSize(width: layout.bounds.width + change.width, height: layout.bounds.height + change.height)
+        guard let target = CanvasLayout(session: session, like: layout, size: size) else { return }
+        prepareTerminals(for: target, within: duration)
     }
 
     /// The terminals of the layout keep showing their frame while a preview moves them about.
