@@ -359,10 +359,15 @@ nonisolated public enum ProjectNaming {
         return nil
     }
 
-    /// `base`, else "base 2", "base 3"…, whichever no name in `taken` has (ignoring case).
+    /// `base`, else "base N" counting on from the highest number in `taken` (ignoring case).
     public static func unique(_ base: String, taken: some Sequence<String>) -> String {
         let taken = Set(taken.map { $0.lowercased() })
-        if !taken.contains(base.lowercased()) { return base }
-        return (2...).lazy.map { "\(base) \($0)" }.first { !taken.contains($0.lowercased()) }!
+        let lowered = base.lowercased()
+        if !taken.contains(lowered) { return base }
+        // After the highest number in use, so names count up in the order they were made.
+        let highest = taken.compactMap { name -> Int? in
+            name == lowered ? 1 : name.hasPrefix(lowered + " ") ? Int(name.dropFirst(lowered.count + 1)) : nil
+        }.max() ?? 1
+        return "\(base) \(highest + 1)"
     }
 }

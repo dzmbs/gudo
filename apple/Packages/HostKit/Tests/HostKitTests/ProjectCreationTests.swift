@@ -42,6 +42,7 @@ import Testing
     @Test func namesAreNeverTaken() {
         #expect(ProjectNaming.unique("app", taken: ["web"]) == "app")
         #expect(ProjectNaming.unique("app", taken: ["App", "app 2"]) == "app 3")
+        #expect(ProjectNaming.unique("New Project", taken: ["New Project", "New Project 7"]) == "New Project 8", "counts on from the highest")
     }
 }
 
