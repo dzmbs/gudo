@@ -143,6 +143,38 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertFalse(arrangement.hidesTerminal(of: PaneId(2)))
     }
 
+    /// A new pane's terminal is hidden while it arrives, but what it has drawn shows: its
+    /// first frame is its still as soon as it is drawn, and each frame after it, so its prompt
+    /// is there on the way in instead of popping in when the spring settles.
+    func testAnArrivingPaneShowsWhatItsTerminalDrawsOnTheWayIn() async throws {
+        let arrangement = PaneArrangement()
+        let before = Self.canvas(Self.one, headers: false), after = Self.canvas(Self.two)
+        let prompt = Self.solid(0, 1, 0, size: CGSize(width: 8, height: 8))
+        let output = Self.solid(0, 0, 1, size: CGSize(width: 8, height: 8))
+        var drawn: DrawnFrame?
+        let start = ContinuousClock.now
+        arrangement.begin(
+            CanvasMotion(from: before, to: after), in: after, raising: nil, for: DS.Motion.structuralSettle,
+            image: { _ in Self.picture }, departed: { _ in nil }, drawn: { pane in pane == PaneId(2) ? drawn : nil })
+        XCTAssertNil(arrangement.still(of: PaneId(2)), "nothing drawn yet: its background")
+
+        drawn = DrawnFrame(generation: 1) { prompt }
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(arrangement.still(of: PaneId(2)) === prompt, "its first frame, on the way in")
+        drawn = DrawnFrame(generation: 2) { output }
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(arrangement.still(of: PaneId(2)) === output, "and the frames after it")
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(DS.Motion.structuralSettle), "while it is still arriving")
+        XCTAssertTrue(arrangement.hidesTerminal(of: PaneId(2)), "its live terminal waits for the spring")
+
+        let version = arrangement.settledVersion
+        while arrangement.settledVersion == version, ContinuousClock.now - start < .seconds(2) {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertNil(arrangement.still(of: PaneId(2)))
+        XCTAssertFalse(arrangement.hidesTerminal(of: PaneId(2)))
+    }
+
     /// A layout pass that begins again from where the motion is going (the canvas lays out
     /// twice for one change) keeps what is arriving: its terminal stays hidden and it stays
     /// under the panes making room.

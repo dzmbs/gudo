@@ -365,6 +365,12 @@ extension CGRect {
     }
 }
 
+/// What a terminal has drawn so far: a count of its frames, and a picture of the latest.
+struct DrawnFrame {
+    let generation: Int
+    let image: () -> CGImage?
+}
+
 // MARK: - Arrangement (dragging, snapping, dropping)
 
 /// One canvas's live arrangement: windows following the hand with their snap guides, a pane
@@ -399,6 +405,8 @@ final class PaneArrangement {
     /// Bumped when a layout motion settles: the stills give way to the terminals, departing
     /// panes go, and a zoomed pane's shadow fades.
     private(set) var settledVersion = 0
+    /// Bumped when an arriving pane's terminal draws a frame, which shows as its still.
+    private(set) var arrivalsDrawn = 0
 
     func still(of pane: PaneId) -> CGImage? { stills[pane] }
     /// The pane moves over its still or arrives: its live terminal waits until the motion settles.
@@ -425,11 +433,13 @@ final class PaneArrangement {
     ///
     /// `holding` tells whether a pane's terminal still shows its held frame (its program's
     /// redraw has not come in): its still waits for it, so the crossfade never reveals a frame
-    /// that is about to jump.
+    /// that is about to jump. `drawn` gives what an arriving pane's terminal has drawn so far:
+    /// each frame shows as its still while it arrives, so its prompt comes in with it.
     func begin(
         _ motion: CanvasMotion, in layout: CanvasLayout, raising: PaneId?, for seconds: Double,
         image: (PaneId) -> CGImage?, departed: (PaneId) -> CGImage?,
-        holding: @escaping (PaneId) -> Bool = { _ in false }
+        holding: @escaping (PaneId) -> Bool = { _ in false },
+        drawn: @escaping (PaneId) -> DrawnFrame? = { _ in nil }
     ) {
         for pane in motion.moving where stills[pane] == nil {
             if let still = image(pane) { stills[pane] = still }
@@ -442,6 +452,7 @@ final class PaneArrangement {
         isMoving = true
         motionGeneration += 1
         let generation = motionGeneration
+        if !self.motion.seeds.isEmpty { showArrivals(drawn, until: generation) }
         let length = max(seconds, Self.stillDuration)
         Task { @MainActor [weak self] in
             let start = ContinuousClock.now
@@ -458,6 +469,26 @@ final class PaneArrangement {
 
     /// The panes whose live terminal the motion hides.
     private var redrawing: [PaneId] { Array(stills.keys) + Array(motion.seeds.keys) }
+
+    /// Each frame an arriving pane's terminal draws becomes its still at once, until motion
+    /// `generation` is over: a new pane shows its first frame on its way in, never only its
+    /// background until it lands.
+    private func showArrivals(_ drawn: @escaping (PaneId) -> DrawnFrame?, until generation: Int) {
+        Task { @MainActor [weak self] in
+            var shown: [PaneId: Int] = [:]
+            while let self, self.motionGeneration == generation, self.isMoving {
+                var changed = false
+                for pane in self.motion.seeds.keys {
+                    guard let frame = drawn(pane), frame.generation != shown[pane], let image = frame.image() else { continue }
+                    shown[pane] = frame.generation
+                    self.stills[pane] = image
+                    changed = true
+                }
+                if changed { self.untracked { self.arrivalsDrawn += 1 } }
+                try? await Task.sleep(for: .milliseconds(8))
+            }
+        }
+    }
 
     /// The motion is at rest and the terminals have drawn: each still crossfades to its live
     /// terminal.

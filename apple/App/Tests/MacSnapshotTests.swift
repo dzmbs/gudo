@@ -1037,6 +1037,7 @@ final class MacSnapshotTests: XCTestCase {
             arrangement.scrub = .init(from: from, progress: 0)
             change()
             await pump(0.1)
+            await drawArrivals(model)
             model.workspace?.layoutChangeUntil = .now + .seconds(8)
             let spring = DS.Motion.Role.structural.spring
             for (index, time) in [0, 0.03, 0.06, 0.1, 0.15, 0.22, 0.3, 0.5].enumerated() {
@@ -1158,6 +1159,7 @@ final class MacSnapshotTests: XCTestCase {
         arrangement.scrub = .init(from: from, progress: 0)
         change()
         await pump(0.1)
+        await drawArrivals(model)
         for (index, time) in Self.motionTimes.enumerated() {
             arrangement.scrub = .init(from: from, progress: spring.value(target: 1.0, time: time))
             await pump(0.08)
@@ -1171,6 +1173,16 @@ final class MacSnapshotTests: XCTestCase {
         await pump(0.8)
         await present(model)
         try? capture(window, "\(name)-rest")
+    }
+
+    /// Draws each terminal that is not holding a frame, as the display link draws it on screen
+    /// (a window off every display gets no drawables): a new pane draws its first frame as it
+    /// arrives, and it shows as its still.
+    private func drawArrivals(_ model: WindowModel) async {
+        for (_, terminal) in model.workspace?.panes ?? [:] where !terminal.view.surface.isHoldingFrame {
+            _ = terminal.view.surface.renderIfDirty(offscreen: true)
+        }
+        await pump(0.05)
     }
 
     /// Keeps what each terminal shows now, for the frames of a motion that holds it.

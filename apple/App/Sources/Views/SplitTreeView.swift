@@ -185,6 +185,7 @@ struct SplitTreeView: View {
             // Before any terminal is told its new size: the stills are of the frames on screen.
             let _ = change != .none && animated ? beginMotion(from: lastLayout.layout, to: target, settle: settle) : ()
             let _ = arrangement.settledVersion
+            let _ = arrangement.arrivalsDrawn
             let drawn = Self.drawn(target, motion: arrangement)
             let _ = arrangement.update(layout: drawn, tree: tree)
             // Every terminal is laid out once, at its new size: its grid changes once, now, and
@@ -325,6 +326,11 @@ struct SplitTreeView: View {
             holding: { [tree] leaf in
                 guard let (workspace, pane) = tree.resolve(leaf) else { return false }
                 return workspace.panes[pane]?.view.surface.isHoldingFrame ?? false
+            },
+            drawn: { [tree] leaf in
+                guard let (workspace, pane) = tree.resolve(leaf), let surface = workspace.panes[pane]?.view.surface,
+                      surface.contentGeneration > 0 else { return nil }
+                return DrawnFrame(generation: surface.contentGeneration) { surface.snapshot() }
             })
     }
 
