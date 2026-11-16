@@ -21,6 +21,36 @@ final class ChatItemPresentationTests: XCTestCase {
         }
     }
 
+    func testAFailedCommandNamesItsExitCode() throws {
+        var failed = try tool(status: "Failed")
+        failed.exit = 101
+        XCTAssertEqual(ChatItemPresentation.toolStateLabel(failed), "Failed · exit 101")
+        failed.status = .known(.denied)
+        XCTAssertEqual(ChatItemPresentation.toolStateLabel(failed), "Denied")
+    }
+
+    func testAnExpandedCallShowsItsCommandOrPathRatherThanItsJSON() throws {
+        var shell = try tool(kind: "Shell")
+        shell.input = #"{"command":"cargo test -p proto","description":"Run the tests"}"#
+        XCTAssertEqual(ChatItemPresentation.toolInputSummary(shell), "$ cargo test -p proto")
+        shell.input = "git status --short"
+        XCTAssertEqual(ChatItemPresentation.toolInputSummary(shell), "$ git status --short")
+        var read = try tool(kind: "Read")
+        read.input = #"{"file_path":"/work/README.md","limit":40}"#
+        XCTAssertEqual(ChatItemPresentation.toolInputSummary(read), "/work/README.md")
+        var other = try tool(kind: "Search")
+        other.input = #"{"pattern":"clock"}"#
+        XCTAssertEqual(ChatItemPresentation.toolInputSummary(other), other.input)
+        other.input = ""
+        XCTAssertNil(ChatItemPresentation.toolInputSummary(other))
+    }
+
+    func testTheTurnEndReadsAsOneLine() throws {
+        let end = try JSONDecoder().decode(TimelineTurnEnd.self, from: Data(#"{"duration_ms":94000,"input_tokens":null,"output_tokens":3100}"#.utf8))
+        XCTAssertEqual(ChatItemPresentation.turnSummary(end),
+                       "Worked for 1m 34s · " + UInt64(3_100).formatted(.number.notation(.compactName)) + " tokens")
+    }
+
     func testToolKindsAndTitlesAreLiteralAndBounded() throws {
         for (kind, label) in [("Shell", "Command"), ("Read", "Read"), ("Search", "Search"), ("Edit", "Edit"),
                               ("Write", "Write"), ("Fetch", "Fetch"), ("WebSearch", "Web search"),

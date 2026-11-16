@@ -36,7 +36,7 @@ nonisolated enum ChatRowSpacing {
         if previous.id.item == row.id.item { return above == .prompt ? DS.Space.xs : DS.Space.m }
         switch (above, below) {
         case (.prompt, .prompt): return DS.Space.xs
-        case (.prompt, _): return DS.Space.xxl
+        case (.prompt, _): return DS.Space.l
         case (_, .prompt): return DS.Space.xxxl
         case (.work, .work): return 0
         case (.reply, .work), (.work, .reply), (_, .turnEnd): return DS.Space.s

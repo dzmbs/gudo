@@ -33,6 +33,7 @@ struct ChatInlineImage: View {
     let path: String
     let height: CGFloat
     let loader: ChatImageLoader?
+    var alignment: Alignment = .leading
     @State private var image: CGImage?
     @State private var failed = false
 
@@ -56,7 +57,7 @@ struct ChatInlineImage: View {
                 .background(DS.Palette.sidebar, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: height, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: height, alignment: alignment)
         .frame(height: height)
         .task(id: path) {
             guard image == nil, let loader else { return }

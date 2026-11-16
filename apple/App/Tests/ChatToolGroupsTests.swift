@@ -18,6 +18,18 @@ final class ChatToolGroupsTests: XCTestCase {
         XCTAssertEqual(ChatRowSpacing.role(of: folded[1]), .work)
     }
 
+    func testTheOutcomeIsSeparateSoTheLineCanColourIt() throws {
+        let rows = try [tool("a", kind: "Shell"), tool("b", kind: "Shell", status: "Failed"), tool("c", kind: "Read", status: "Denied")]
+        let tools = rows.compactMap { row -> TimelineTool? in
+            guard case .item(let item) = row.content, case .tool(let tool) = item.body else { return nil }
+            return tool
+        }
+        XCTAssertEqual(ChatToolGroups.actions(tools), "Ran 2 commands, read a file")
+        XCTAssertEqual(ChatToolGroups.outcome(tools), "1 failed, 1 denied")
+        XCTAssertEqual(ChatToolGroups.summary(tools), "Ran 2 commands, read a file (1 failed, 1 denied)")
+        XCTAssertNil(ChatToolGroups.outcome(Array(tools.prefix(1))))
+    }
+
     func testExpandingAGroupShowsEveryCallUnderItsLine() throws {
         let rows = try [tool("a", kind: "Shell"), tool("b", kind: "Search")]
         let identifier = try XCTUnwrap(ChatToolGroups.fold(rows, expanded: []).first?.id)

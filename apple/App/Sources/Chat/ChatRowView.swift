@@ -29,6 +29,8 @@ struct ChatRowView: View {
     @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
     @ScaledMetric(relativeTo: .body) private var diffLineHeight = DS.Size.proseDiffLineHeight
     @Environment(\.terminalTheme) private var terminalTheme
+    @Environment(\.chatRowWidth) private var rowWidth
+    @Environment(\.chrome) private var chrome
 
     var body: some View {
         content
@@ -79,7 +81,7 @@ struct ChatRowView: View {
     @ViewBuilder private func markdown(_ block: ChatMarkdownBlock) -> some View {
         switch block.kind {
         case .paragraph:
-            Text(block.text).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
+            Text(inlineCode(block.text)).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
             Text(block.text)
@@ -90,7 +92,7 @@ struct ChatRowView: View {
             HStack(alignment: .top, spacing: DS.Space.m) {
                 RoundedRectangle.rounded(DS.Radius.chip).fill(DS.Palette.border)
                     .frame(width: DS.Size.proseQuoteRule)
-                Text(block.text).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
+                Text(inlineCode(block.text)).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .list:
             VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -98,7 +100,7 @@ struct ChatRowView: View {
                     HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                         Text(line.marker).foregroundStyle(DS.Palette.textSecondary)
                             .frame(minWidth: DS.Space.l, alignment: .trailing)
-                        Text(line.text).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(inlineCode(line.text)).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.leading, CGFloat(min(line.depth, Self.maximumIndentationDepth)) * DS.Space.l)
                 }
@@ -108,26 +110,9 @@ struct ChatRowView: View {
                 ChatCodeBlock(code: code, language: language) { actions.selectText(code.text) }
             }
         case .table:
-            let widths = ChatTableColumns.widths(block.table, characterWidth: tableCharacterWidth)
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                ScrollView(.horizontal) {
-                    Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.gap10) {
-                        ForEach(Array(block.table.enumerated()), id: \.offset) { index, cells in
-                            GridRow(alignment: .firstTextBaseline) {
-                                ForEach(Array(cells.enumerated()), id: \.offset) { column, cell in
-                                    Text(cell).fontWeight(index == 0 ? .semibold : .regular)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                        .frame(width: widths.indices.contains(column) ? widths[column] : DS.Size.proseTableColumn,
-                                               alignment: .leading)
-                                }
-                            }
-                            if index == 0 { Divider().gridCellColumns(cells.count) }
-                        }
-                    }.font(DS.Font.proseSecondary).padding(DS.Space.l)
-                }
-                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-                .fixedSize(horizontal: false, vertical: true)
-                .overlay { RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.hairline) }
+                ChatTable(rows: block.table.map { $0.map(inlineCode) }, characterWidth: tableCharacterWidth,
+                          available: rowWidth > 0 ? ChatReadingColumn.textWidth(in: rowWidth) : .infinity)
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
                         .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
@@ -166,7 +151,8 @@ struct ChatRowView: View {
             if !images.isEmpty {
                 HStack(spacing: DS.Space.s) {
                     ForEach(Array(images.enumerated()), id: \.offset) { _, path in
-                        ChatInlineImage(path: path, height: ChatImageBox.attachmentHeight, loader: actions.loadImage)
+                        ChatInlineImage(path: path, height: ChatImageBox.attachmentHeight, loader: actions.loadImage,
+                                        alignment: .trailing)
                     }
                 }
             }
@@ -191,35 +177,42 @@ struct ChatRowView: View {
             .padding(.leading, DS.Space.xxxl)
     }
 
+    /// A prompt on a light bubble: the ink at the sidebar strength on dark chrome, a step deeper
+    /// on light chrome, where 5 % barely shows on paper.
     private func bubble(_ text: String) -> some View {
         Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
-            .background(DS.Palette.sidebar, in: .rect(cornerRadius: DS.Radius.card, style: .continuous))
+            .background(chrome.scheme == .light ? DS.Palette.raised : DS.Palette.sidebar,
+                        in: .rect(cornerRadius: DS.Radius.card, style: .continuous))
     }
 
-    /// Under a prompt, quietly: where it came from, when, and Copy and Send again.
+    /// Under a prompt, quietly and close to it: where it came from, when, and Copy and Send again.
+    /// The glyphs sit a step apart; each still answers a 44 pt touch, reaching up over the bubble's edge.
     private func promptFooter(_ item: TimelineItem, text: String, canResend: Bool) -> some View {
-        HStack(spacing: 0) {
+        HStack(spacing: DS.Space.s) {
             if let time = ChatItemPresentation.promptTime(item.at) {
-                Text(verbatim: item.origin == .terminal ? "From Terminal · " + time : time)
-                    .monospacedDigit().padding(.trailing, DS.Space.xs)
+                Text(verbatim: item.origin == .terminal ? "From Terminal · " + time : time).monospacedDigit()
             } else if item.origin == .terminal {
-                Text("From Terminal").padding(.trailing, DS.Space.xs)
+                Text("From Terminal")
             }
-            Button { UIPasteboard.general.string = text } label: {
-                Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
-                    .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-            }
+            footerButton("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
             if canResend, let resend = actions.resend {
-                Button { resend(text) } label: {
-                    Label("Send again", systemImage: "arrow.clockwise").labelStyle(.iconOnly)
-                        .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
-                }
-                .accessibilityIdentifier("chat-resend")
+                footerButton("Send again", systemImage: "arrow.clockwise") { resend(text) }
+                    .accessibilityIdentifier("chat-resend")
             }
         }
-        .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+        .font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+        .frame(height: DS.Size.touchTarget)
+        .padding(.top, -DS.Space.m).padding(.bottom, -DS.Space.s)
         .buttonStyle(.plain)
+    }
+
+    private func footerButton(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+                .frame(width: DS.Space.l, height: DS.Size.touchTarget)
+                .contentShape(Rectangle().inset(by: -DS.Space.m))
+        }
     }
 
     private var fromTerminal: some View {
@@ -324,28 +317,37 @@ struct ChatRowView: View {
 
     private func turnEndContent(_ item: TimelineItem, end: TimelineTurnEnd) -> some View {
         HStack(spacing: DS.Space.s) {
-            Text("Worked for \(duration(end.durationMs))")
-            if let tokens = end.outputTokens { Text("· \(tokens.formatted(.number.notation(.compactName))) tokens").monospacedDigit() }
+            Text(verbatim: ChatItemPresentation.turnSummary(end))
             Spacer(minLength: 0)
             if actions.supportsDiffs {
                 Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }
             }
-        }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary).padding(.vertical, DS.Space.s)
+        }.font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
     }
 
     private func toolGroupContent(_ group: ChatToolGroup) -> some View {
-        Button(action: toggle) {
+        let tools = group.tools.compactMap { item -> TimelineTool? in
+            if case .tool(let tool) = item.body { tool } else { nil }
+        }
+        return Button(action: toggle) {
             HStack(spacing: DS.Space.xs) {
-                Text(verbatim: group.summary).font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
-                    .lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true)
+                Text(verbatim: ChatToolGroups.actions(tools)).foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(1).truncationMode(.tail)
+                if let outcome = ChatToolGroups.outcome(tools) {
+                    Text(verbatim: "(" + outcome + ")").foregroundStyle(DS.Palette.error)
+                        .lineLimit(1).fixedSize()
+                }
+                if group.additions + group.deletions > 0 {
+                    Group {
+                        Text(verbatim: "+\(group.additions)").foregroundStyle(DS.Palette.done)
+                        Text(verbatim: "−\(group.deletions)").foregroundStyle(DS.Palette.error)
+                    }
+                    .font(DS.Font.meta).fixedSize()
+                }
                 Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                Spacer(minLength: DS.Space.xs)
-                if group.additions + group.deletions > 0 {
-                    Text(verbatim: "+\(group.additions)").foregroundStyle(DS.Palette.done)
-                    Text(verbatim: "−\(group.deletions)").foregroundStyle(DS.Palette.error)
-                }
-            }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
+                Spacer(minLength: 0)
+            }.font(DS.Font.proseSecondary).frame(minHeight: DS.Size.touchTarget)
         }
         .buttonStyle(ChatRowButtonStyle())
         .accessibilityLabel(group.summary)
@@ -364,17 +366,21 @@ struct ChatRowView: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1).truncationMode(.tail)
                         .shimmering(tool.status == .known(.running), text: ChatItemPresentation.toolTitle(tool))
-                    Spacer(minLength: DS.Space.xs)
-                    if let state = ChatItemPresentation.toolStateLabel(tool) {
-                        Text(state).foregroundStyle(tool.status == .known(.interrupted) ? DS.Palette.textSecondary : DS.Palette.error)
-                    } else if !tool.diff.isEmpty {
-                        Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
-                            .foregroundStyle(DS.Palette.done)
-                        Text("−\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.deletions) })")
-                            .foregroundStyle(DS.Palette.error)
-                    } else if let time = tool.durationMs { Text(duration(time)).foregroundStyle(DS.Palette.textTertiary) }
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    Group {
+                        if let state = ChatItemPresentation.toolStateLabel(tool) {
+                            Text(state).foregroundStyle(tool.status == .known(.interrupted) ? DS.Palette.textSecondary : DS.Palette.error)
+                        } else if !tool.diff.isEmpty {
+                            Text("+\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.additions) })")
+                                .foregroundStyle(DS.Palette.done)
+                            Text("−\(tool.diff.reduce(UInt64(0)) { $0 + UInt64($1.deletions) })")
+                                .foregroundStyle(DS.Palette.error)
+                        } else if let time = tool.durationMs { Text(duration(time)).foregroundStyle(DS.Palette.textTertiary) }
+                    }
+                    .fixedSize()
+                    Image(systemName: "chevron.right")
                         .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Spacer(minLength: 0)
                 }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
             }.buttonStyle(ChatRowButtonStyle())
                 .accessibilityLabel(ChatItemPresentation.toolKind(tool) + ": " + ChatItemPresentation.toolTitle(tool))
@@ -384,8 +390,8 @@ struct ChatRowView: View {
                 ChatInlineImage(path: path, height: ChatImageBox.height, loader: actions.loadImage)
             }
             if isExpanded {
-                if !tool.input.isEmpty {
-                    Text(verbatim: String(tool.input.prefix(2_000))).font(DS.Font.literalSmall)
+                if let input = ChatItemPresentation.toolInputSummary(tool) {
+                    Text(verbatim: input).font(DS.Font.literalSmall)
                         .foregroundStyle(DS.Palette.textSecondary).lineLimit(8)
                 }
                 if let output = tool.output, !output.preview.isEmpty {
@@ -394,8 +400,9 @@ struct ChatRowView: View {
                             .font(DS.Font.literalSmall).foregroundStyle(terminalTheme.foreground)
                             .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
                     }
+                    .scrollIndicators(.hidden)
                     .frame(height: CGFloat(min(output.preview.split(separator: "\n", omittingEmptySubsequences: false).count, 12)) * outputLineHeight + 2 * DS.Space.m)
-                    .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
+                    .background(terminalTheme.codeSurface, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
                 }
                 if let preview = row.inlineDiff { inlineDiff(preview) }
                 if tool.kind == .known(.task) {
@@ -500,6 +507,10 @@ struct ChatRowView: View {
 
     private func duration(_ milliseconds: UInt64) -> String { ChatItemPresentation.duration(milliseconds) }
 
+    private func inlineCode(_ text: AttributedString) -> AttributedString {
+        ChatInlineCode.styled(text, background: chrome.color(.raised))
+    }
+
     private func toolGlyph(_ kind: TimelineToolKind) -> String {
         switch kind {
         case .known(.shell): "terminal"
@@ -526,6 +537,91 @@ private struct ChatRowButtonStyle: ButtonStyle {
     }
 }
 
+extension EnvironmentValues {
+    /// The width Chat lays its rows out in: a table fits itself to it before it scrolls.
+    @Entry var chatRowWidth: CGFloat = 0
+}
+
+/// A Markdown table as an open grid: a separator under the header and hairlines between rows,
+/// no box. Columns fit the reading column first; a table that still does not fit scrolls
+/// sideways with its cut edge faded.
+private struct ChatTable: View {
+    let rows: [[AttributedString]]
+    let characterWidth: CGFloat
+    let available: CGFloat
+    @State private var edges = ChatScrollEdges()
+
+    var body: some View {
+        let widths = ChatTableColumns.widths(rows, characterWidth: characterWidth, spacing: DS.Space.l, available: available)
+        if ChatTableColumns.width(of: widths, spacing: DS.Space.l) > available {
+            ScrollView(.horizontal) { grid(widths) }
+                .scrollIndicators(.hidden)
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+                .fixedSize(horizontal: false, vertical: true)
+                .onScrollGeometryChange(for: ChatScrollEdges.self) { geometry in
+                    ChatScrollEdges(offset: geometry.contentOffset.x, content: geometry.contentSize.width,
+                                    container: geometry.containerSize.width)
+                } action: { _, edges in self.edges = edges }
+                .chatEdgeFade(edges)
+        } else {
+            grid(widths)
+        }
+    }
+
+    private func grid(_ widths: [CGFloat]) -> some View {
+        Grid(alignment: .leading, horizontalSpacing: DS.Space.l, verticalSpacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                if index > 0 {
+                    Hairline(style: index == 1 ? DS.Palette.separator : DS.Palette.hairline)
+                        .gridCellUnsizedAxes(.horizontal)
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    ForEach(Array(cells.enumerated()), id: \.offset) { column, cell in
+                        Text(cell).fontWeight(index == 0 ? .semibold : .regular)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: widths.indices.contains(column) ? widths[column] : DS.Size.proseTableColumn,
+                                   alignment: .leading)
+                            .padding(.vertical, DS.Space.s)
+                    }
+                }
+            }
+        }
+        .font(DS.Font.proseSecondary)
+    }
+}
+
+/// Which ends of a sideways scroller have more to show.
+struct ChatScrollEdges: Equatable {
+    var leading = false
+    var trailing = false
+
+    init() {}
+
+    init(offset: CGFloat, content: CGFloat, container: CGFloat) {
+        leading = offset > 0.5
+        trailing = offset + container < content - 0.5
+    }
+}
+
+extension View {
+    /// A soft fade where content runs past an edge, so a cut line reads as more to scroll to.
+    func chatEdgeFade(_ edges: ChatScrollEdges) -> some View {
+        mask {
+            HStack(spacing: 0) {
+                // style-exempt: a mask, only its alpha counts
+                LinearGradient(colors: [edges.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: DS.Size.stripFade)
+                Rectangle()
+                // style-exempt: a mask, only its alpha counts
+                LinearGradient(colors: [.black, edges.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: DS.Size.stripFade)
+            }
+        }
+    }
+}
+
+/// A fenced code block: a quiet header with the language and Copy over the code in the
+/// terminal's font, on the terminal's own background lifted a step so it reads as a surface.
 private struct ChatCodeBlock: View {
     let code: ChatCodeSnippet
     let language: String?
@@ -534,6 +630,7 @@ private struct ChatCodeBlock: View {
     @AppStorage(TerminalPreferences.Key.fontSize) private var fontSize = TerminalPreferences.Default.fontSize
     @Environment(\.colorSchemeContrast) private var contrast
     @ScaledMetric(relativeTo: .callout) private var scale: CGFloat = 1
+    @State private var edges = ChatScrollEdges()
 
     private var lineHeight: CGFloat {
         let font = TerminalFont.regular.flatMap { UIFont(name: $0, size: fontSize) }
@@ -543,29 +640,45 @@ private struct ChatCodeBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(language?.isEmpty == false ? language ?? "Code" : "Code")
-                Spacer()
-                Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = code.text }
-            }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                .padding(.horizontal, DS.Space.m).frame(height: DS.Size.touchTarget)
-                .background(DS.Palette.raised)
+            HStack(spacing: DS.Space.s) {
+                Text(verbatim: language?.isEmpty == false ? language ?? "" : "code")
+                    .font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textTertiary)
+                Spacer(minLength: 0)
+                Button { UIPasteboard.general.string = code.text } label: {
+                    Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
+                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                        .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("chat-code-copy")
+            }
+            .padding(.leading, DS.Space.m)
+            .frame(height: DS.Size.touchTarget)
+            .background(DS.Palette.sidebar)
+            Hairline(style: DS.Palette.hairline)
             ScrollView(.horizontal) {
                 Text(ChatCodeStyler.text(code, theme: terminalTheme, increasedContrast: contrast == .increased))
                     .font(TerminalFont.font(size: fontSize, relativeTo: .callout)).lineSpacing(DS.Space.xxs * scale)
                     .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
             }
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: ChatScrollEdges.self) { geometry in
+                ChatScrollEdges(offset: geometry.contentOffset.x, content: geometry.contentSize.width,
+                                container: geometry.containerSize.width)
+            } action: { _, edges in self.edges = edges }
+            .chatEdgeFade(edges)
             .frame(height: CGFloat(code.visibleLineCount) * lineHeight + 2 * DS.Space.m)
             if code.isTruncated {
+                Hairline(style: DS.Palette.hairline)
                 Button(code.lineCount == 1 ? "Show full code" : "Show all \(code.lineCount) lines", action: showAll)
                     .font(DS.Font.caption).padding(.horizontal, DS.Space.m)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .foregroundStyle(DS.Palette.textSecondary).background(DS.Palette.raised)
+                    .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
+                    .foregroundStyle(DS.Palette.textSecondary).background(DS.Palette.sidebar)
             }
         }
-        .background(DS.Palette.terminal, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
-        .clipShape(.rect(cornerRadius: DS.Radius.pane, style: .continuous))
-        .overlay { RoundedRectangle.rounded(DS.Radius.pane).strokeBorder(DS.Palette.hairline) }
+        .background(terminalTheme.codeSurface, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
+        .clipShape(.rect(cornerRadius: DS.Radius.control, style: .continuous))
     }
 }
 #endif

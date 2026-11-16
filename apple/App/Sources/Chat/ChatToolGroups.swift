@@ -49,6 +49,12 @@ nonisolated enum ChatToolGroups {
     }
 
     static func summary(_ tools: [TimelineTool]) -> String {
+        let text = actions(tools)
+        return outcome(tools).map { text + " (" + $0 + ")" } ?? text
+    }
+
+    /// What the calls did, "Ran 3 commands, read 2 files".
+    static func actions(_ tools: [TimelineTool]) -> String {
         var order: [Phrase] = []
         var counts: [Phrase: Int] = [:]
         for tool in tools {
@@ -57,13 +63,17 @@ nonisolated enum ChatToolGroups {
             counts[phrase, default: 0] += 1
         }
         let text = order.map { $0.words(counts[$0] ?? 0) }.joined(separator: ", ")
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+
+    /// The calls that did not finish, "1 failed, 1 denied", or nil when every one did.
+    static func outcome(_ tools: [TimelineTool]) -> String? {
         var outcomes: [String] = []
         for (status, word) in [(TimelineToolStatusTag.failed, "failed"), (.denied, "denied"), (.interrupted, "interrupted")] {
             let count = tools.count(where: { $0.status == .known(status) })
             if count > 0 { outcomes.append("\(count) \(word)") }
         }
-        let sentence = text.prefix(1).uppercased() + text.dropFirst()
-        return outcomes.isEmpty ? sentence : sentence + " (" + outcomes.joined(separator: ", ") + ")"
+        return outcomes.isEmpty ? nil : outcomes.joined(separator: ", ")
     }
 
     private static func joinsRun(_ row: ChatRow) -> Bool {

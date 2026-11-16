@@ -65,6 +65,7 @@ final class ChatRenderGalleryTests: XCTestCase {
         .background(chrome.baseColor)
         .chromeContent()
         .environment(\.terminalTheme, theme)
+        .environment(\.chatRowWidth, Self.width)
         .environment(\.chrome, chrome)
         .environment(\.colorScheme, chrome.scheme)
     }
