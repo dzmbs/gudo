@@ -699,14 +699,7 @@ impl Client {
         config: ClientConfig,
         listener: Arc<dyn ClientListener>,
     ) -> Result<Self, ClientError> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("client-core")
-            .enable_all()
-            .build()?;
-        let mut client = Self::connect_on(runtime.handle(), ticket, config, listener)?;
-        client.runtime = Some(runtime);
-        Ok(client)
+        Self::connect_with(ticket, config, ConnectOptions::default(), listener)
     }
 
     /// Like [`connect`](Self::connect), but runs on `runtime` (shared with other clients,
@@ -737,15 +730,31 @@ impl Client {
         options: ConnectOptions,
         listener: Arc<dyn ClientListener>,
     ) -> Result<Self, ClientError> {
+        Self::on_own_runtime(|runtime| {
+            Self::connect_on_with(runtime, ticket, config, options, listener)
+        })
+    }
+
+    /// Starts a client on a runtime of its own, which it keeps.
+    pub(crate) fn on_own_runtime(
+        start: impl FnOnce(&tokio::runtime::Handle) -> Result<Self, ClientError>,
+    ) -> Result<Self, ClientError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("client-core")
             .enable_all()
             .build()?;
-        let mut client =
-            Self::connect_on_with(runtime.handle(), ticket, config, options, listener)?;
-        client.runtime = Some(runtime);
-        Ok(client)
+        match start(runtime.handle()) {
+            Ok(mut client) => {
+                client.runtime = Some(runtime);
+                Ok(client)
+            }
+            Err(error) => {
+                // Dropping a runtime blocks, which panics when the caller is async code.
+                runtime.shutdown_background();
+                Err(error)
+            }
+        }
     }
 
     /// Like [`connect_on`](Self::connect_on), with [`ConnectOptions`].

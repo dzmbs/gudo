@@ -276,14 +276,7 @@ impl Client {
         config: crate::ClientConfig,
         listener: Arc<dyn crate::ClientListener>,
     ) -> Result<Self, crate::ClientError> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("client-core")
-            .enable_all()
-            .build()?;
-        let mut client = Self::join_on(runtime.handle(), invite, config, listener)?;
-        client.runtime = Some(runtime);
-        Ok(client)
+        Self::on_own_runtime(|runtime| Self::join_on(runtime, invite, config, listener))
     }
 
     /// Like [`join`](Self::join), with [`ConnectOptions`](crate::ConnectOptions).
@@ -297,14 +290,9 @@ impl Client {
         options: crate::ConnectOptions,
         listener: Arc<dyn crate::ClientListener>,
     ) -> Result<Self, crate::ClientError> {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("client-core")
-            .enable_all()
-            .build()?;
-        let mut client = Self::join_on_with(runtime.handle(), invite, config, options, listener)?;
-        client.runtime = Some(runtime);
-        Ok(client)
+        Self::on_own_runtime(|runtime| {
+            Self::join_on_with(runtime, invite, config, options, listener)
+        })
     }
 
     /// Like [`join`](Self::join), on a shared runtime.

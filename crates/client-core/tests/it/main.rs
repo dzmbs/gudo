@@ -158,6 +158,27 @@ fn rejects_bad_input_up_front() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn bad_input_from_async_code_is_an_error_not_a_panic() {
+    let (listener, _events) = EventQueue::channel();
+    for ticket in ["gudo://pair/AAAA", "not a ticket"] {
+        assert!(matches!(
+            Client::connect(ticket, ClientConfig::new(vec![0; 32]), listener.clone()),
+            Err(ClientError::Ticket(_))
+        ));
+        assert!(matches!(
+            Client::connect_with(
+                ticket,
+                ClientConfig::new(vec![0; 32]),
+                client_core::ConnectOptions::default(),
+                listener.clone()
+            ),
+            Err(ClientError::Ticket(_))
+        ));
+        assert!(Client::join(ticket, ClientConfig::new(vec![0; 32]), listener.clone()).is_err());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_secret_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let daemon = daemon(dir.path()).await;
