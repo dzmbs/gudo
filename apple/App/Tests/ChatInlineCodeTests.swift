@@ -1,4 +1,5 @@
 #if os(iOS)
+import DesignSystem
 import SwiftUI
 import UIKit
 import XCTest
@@ -13,11 +14,11 @@ final class ChatInlineCodeTests: XCTestCase {
     }
 
     func testCodeBreaksOnlyBetweenItsWordsWhereThoseFitALine() throws {
-        let styled = ChatInlineCode.styled(try prose(Self.command), background: .gray)
+        let joined = ChatInlineCode.joined(try prose(Self.command))
         let font = UIFont.monospacedSystemFont(ofSize: 17, weight: .regular)
         let longestWord = Self.command.split(separator: " ").map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
         for width in stride(from: longestWord + 4, through: longestWord + 220, by: 7) {
-            let lines = Self.lines(of: String(styled.characters), font: font, width: width)
+            let lines = Self.lines(of: String(joined.characters), font: font, width: width)
             for line in lines.dropLast() {
                 let breakAfter = line.last.map { $0.isWhitespace } ?? true
                 XCTAssertTrue(breakAfter, "at \(width) pt a line ends inside a word of code: \(line.debugDescription)")
@@ -26,14 +27,84 @@ final class ChatInlineCodeTests: XCTestCase {
         }
     }
 
-    func testCodeReadsTheSameAndOnlyItsSpansChange() throws {
+    func testCodeReadsTheSameAsItsSource() throws {
         let source = try prose(Self.command)
-        let styled = ChatInlineCode.styled(source, background: .gray)
-        XCTAssertEqual(Self.visible(String(styled.characters)), String(source.characters))
-        XCTAssertTrue(String(styled.characters).hasPrefix("Readings come from "))
-        let codeRuns = styled.runs.filter { $0.inlinePresentationIntent?.contains(.code) == true }
-        XCTAssertFalse(codeRuns.isEmpty)
-        XCTAssertTrue(codeRuns.allSatisfy { styled[$0.range].backgroundColor != nil })
+        XCTAssertEqual(Self.visible(String(ChatInlineCode.joined(source).characters)), String(source.characters))
+    }
+
+    func testCodeRendersAsWideAsItsSourceText() throws {
+        for code in ["2,400 MHz", Self.command, "a/b"] {
+            let source = try AttributedString(markdown: "`\(code)`")
+            var reference = source
+            reference.font = DS.Font.literal
+            XCTAssertEqual(Self.renderedWidth(ChatInlineCode.text(source)), Self.renderedWidth(Text(reference)),
+                           accuracy: 0.01, "\(code) gains no advance")
+        }
+        let paragraph = try prose(Self.command)
+        var reference = paragraph
+        for run in paragraph.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            reference[run.range].font = DS.Font.literal
+        }
+        XCTAssertEqual(Self.renderedWidth(ChatInlineCode.text(paragraph)), Self.renderedWidth(Text(reference)), accuracy: 0.01)
+    }
+
+    func testEachLineOfASpanGetsOneBoxTrimmedToItsWords() throws {
+        let paragraph = try AttributedString(markdown: "Readings come from `\(Self.command)` on each box.")
+        let longestWord = Self.renderedWidth(Text("--query-gpu=clocks.sm,clocks.mem").font(DS.Font.literal))
+        for width in [longestWord + 10, longestWord + 60, longestWord + 200, 2_000] {
+            let drawn = Self.draw(ChatInlineCode.text(paragraph), width: width)
+            let codeLines = drawn.lines.filter { $0.contains { !$0.isSpace } }
+            XCTAssertEqual(drawn.boxes.count, codeLines.count, "one box per line the span reaches at \(width) pt")
+            for (box, line) in zip(drawn.boxes, codeLines) {
+                let words = line.filter { !$0.isSpace }.map(\.rect)
+                let start = try XCTUnwrap(words.map(\.minX).min())
+                let end = try XCTUnwrap(words.map(\.maxX).max())
+                XCTAssertEqual(box.minX, start - ChatInlineCode.boxOutset, accuracy: 0.01, "starts at its first word")
+                XCTAssertEqual(box.maxX, end + ChatInlineCode.boxOutset, accuracy: 0.01, "ends at its last word")
+                if let last = line.last, last.isSpace {
+                    XCTAssertGreaterThanOrEqual(last.rect.minX, end - 0.01, "a space ending a line stays unfilled")
+                }
+            }
+        }
+        let short = Self.draw(ChatInlineCode.text(try AttributedString(markdown: "under `2,400 MHz` for a minute")), width: 2_000)
+        XCTAssertEqual(short.boxes.count, 1)
+        XCTAssertEqual(Self.draw(Text("no code here"), width: 2_000).boxes, [])
+    }
+
+    private struct DrawnPiece {
+        let rect: CGRect
+        let isSpace: Bool
+    }
+
+    private final class Drawing: @unchecked Sendable {
+        var boxes: [CGRect] = []
+        var lines: [[DrawnPiece]] = []
+    }
+
+    private struct Recorder: TextRenderer {
+        let drawing: Drawing
+
+        func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+            drawing.boxes = ChatInlineCode.boxes(in: layout)
+            drawing.lines = layout.map { line in
+                line.compactMap { run in
+                    run[ChatCodeSpan.self].map { DrawnPiece(rect: run.typographicBounds.rect, isSpace: $0.isSpace) }
+                }
+            }
+            for line in layout { context.draw(line) }
+        }
+    }
+
+    private static func draw(_ text: Text, width: CGFloat) -> Drawing {
+        let drawing = Drawing()
+        let renderer = ImageRenderer(content: text.font(DS.Font.prose).textRenderer(Recorder(drawing: drawing))
+            .frame(width: width, alignment: .leading).fixedSize(horizontal: false, vertical: true))
+        _ = renderer.uiImage
+        return drawing
+    }
+
+    private static func renderedWidth(_ text: Text) -> CGFloat {
+        UIHostingController(rootView: text.fixedSize()).sizeThatFits(in: CGSize(width: 10_000, height: 10_000)).width
     }
 
     private static func visible(_ text: String) -> String {

@@ -279,8 +279,11 @@ Markdown tables are open grids: a separator under the header, hairlines between 
 Each column is as wide as its widest cell measures, up to the reading column, before a cell wraps
 (`ChatTableColumns`, `ChatTableGrid`); on a narrow screen the widest columns give way first, down
 to the narrowest a column may be, and only a table that still does not fit scrolls sideways, its
-cut edge faded. Inline code is SF Mono a step under the prose, on the raised fill; a word of code
-breaks only at its spaces, unless it is longer than a line. An image alone in a
+cut edge faded. Inline code is SF Mono a step under the prose, on the raised fill; a span of up
+to 24 characters never breaks and a longer one breaks only at its spaces, unless a word is longer
+than a line. The fill is drawn per line (`ChatCodeBackground`): one box with `chip` corners on
+every line the span reaches, from its first word to its last on that line, 2 pt past the glyphs,
+so no line starts or ends on filled space. An image alone in a
 paragraph with a host path, a Read of an image file and image attachments show inline in a box of
 fixed height, read with the viewer's file access and decoded no larger than shown; web images are
 never fetched.

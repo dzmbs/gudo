@@ -82,7 +82,7 @@ struct ChatRowView: View {
     @ViewBuilder private func markdown(_ block: ChatMarkdownBlock) -> some View {
         switch block.kind {
         case .paragraph:
-            Text(inlineCode(block.text)).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
+            inlineCode(block.text).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
             Text(block.text)
@@ -93,7 +93,7 @@ struct ChatRowView: View {
             HStack(alignment: .top, spacing: DS.Space.m) {
                 RoundedRectangle.rounded(DS.Radius.chip).fill(DS.Palette.border)
                     .frame(width: DS.Size.proseQuoteRule)
-                Text(inlineCode(block.text)).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
+                inlineCode(block.text).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .list:
             VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -101,7 +101,7 @@ struct ChatRowView: View {
                     HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                         Text(line.marker).foregroundStyle(DS.Palette.textSecondary)
                             .frame(minWidth: DS.Space.l, alignment: .trailing)
-                        Text(inlineCode(line.text)).frame(maxWidth: .infinity, alignment: .leading)
+                        inlineCode(line.text).frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .padding(.leading, CGFloat(min(line.depth, Self.maximumIndentationDepth)) * DS.Space.l)
                 }
@@ -112,7 +112,7 @@ struct ChatRowView: View {
             }
         case .table:
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                ChatTable(rows: block.table.map { $0.map(inlineCode) }, narrowest: tableColumnMinimum, limit: tableColumnMaximum,
+                ChatTable(rows: block.table, codeFill: chrome.color(.raised), narrowest: tableColumnMinimum, limit: tableColumnMaximum,
                           available: rowWidth > 0 ? ChatReadingColumn.textWidth(in: rowWidth) : .infinity)
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
@@ -508,8 +508,8 @@ struct ChatRowView: View {
 
     private func duration(_ milliseconds: UInt64) -> String { ChatItemPresentation.duration(milliseconds) }
 
-    private func inlineCode(_ text: AttributedString) -> AttributedString {
-        ChatInlineCode.styled(text, background: chrome.color(.raised))
+    private func inlineCode(_ text: AttributedString) -> some View {
+        ChatInlineCode.text(text).modifier(ChatCodeFill(fill: ChatInlineCode.hasCode(text) ? chrome.color(.raised) : nil))
     }
 
     private func toolGlyph(_ kind: TimelineToolKind) -> String {
@@ -548,6 +548,7 @@ extension EnvironmentValues {
 /// sideways with its cut edge faded.
 private struct ChatTable: View {
     let rows: [[AttributedString]]
+    let codeFill: Color
     let narrowest: CGFloat
     let limit: CGFloat
     let available: CGFloat
@@ -575,7 +576,8 @@ private struct ChatTable: View {
                     Hairline(style: index == 1 ? DS.Palette.separator : DS.Palette.hairline).chatTableRule()
                 }
                 ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                    Text(cell).fontWeight(index == 0 ? .semibold : .regular)
+                    ChatInlineCode.text(cell).fontWeight(index == 0 ? .semibold : .regular)
+                        .modifier(ChatCodeFill(fill: ChatInlineCode.hasCode(cell) ? codeFill : nil))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, DS.Space.s)
