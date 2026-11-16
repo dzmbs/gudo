@@ -205,6 +205,19 @@ extension Terminal {
         return text
     }
 
+    /// How many columns of a viewport row hold text: the column after its last non-blank cell.
+    public func viewportRowLength(_ row: Int) -> Int {
+        withHandle { handle in
+            var cols: UInt16 = 0
+            ghostty_terminal_get(handle, GHOSTTY_TERMINAL_DATA_COLS, &cols)
+            for x in stride(from: Int(cols) - 1, through: 0, by: -1) {
+                guard let ref = Self.gridRef(handle, GridPoint(x: x, y: row), GHOSTTY_POINT_TAG_VIEWPORT) else { continue }
+                if !Self.graphemes(ref).trimmingCharacters(in: .whitespaces).isEmpty { return x + 1 }
+            }
+            return 0
+        }
+    }
+
     /// The viewport as plain text, one line per row with trailing blanks trimmed (accessibility).
     public func visibleText() -> String {
         withHandle { handle in

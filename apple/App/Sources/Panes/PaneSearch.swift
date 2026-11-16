@@ -54,6 +54,7 @@ extension WindowModel {
         if searchPane !== pane {
             if let old = searchPane { detachSearch(old) }
             searchPane = pane
+            pane.hasFindBar = true
             pane.view.surface.onSearchStatus = { [weak self, weak pane] status in
                 guard let self, let pane, self.searchPane === pane else { return }
                 PaneSearchLog.log.debug("status total=\(status.total) sel=\(status.selected ?? -1) complete=\(status.isComplete)")
@@ -73,6 +74,7 @@ extension WindowModel {
         guard let pane else { return }
         pane.view.surface.onSearchStatus = nil
         pane.view.surface.setSearch("")
+        pane.hasFindBar = false
         guard searchPane === pane else { return }
         searchPane = nil
         searchStatus = .idle

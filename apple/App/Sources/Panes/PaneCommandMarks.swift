@@ -133,12 +133,18 @@ final class PaneCommandMarks: NSObject {
             shownResult = true
         }
         if !shownResult { resultBadge.hide() }
-        if let top = frames.first(where: { $0.mark.row < 0 && $0.rect.maxY > 24 }),
+        // At the top right, and only while the first row's text stays clear of it and no find
+        // bar sits there: it never covers output.
+        if pane?.hasFindBar != true, let top = frames.first(where: { $0.mark.row < 0 && $0.rect.maxY > 24 }),
            let block = entries.first(where: { $0.block.id == top.mark.id })?.block, let command = block.mark.command
         {
             let status = Self.result(block).map { "  \($0)" } ?? ""
             stickyHeader.show("$ \(command.prefix { !$0.isNewline })\(status)", color: palette.textSecondary, palette: palette, in: view)
-            stickyHeader.place(leading: max(surface.paddingPoints, 4) + 4, top: 2, maxWidth: view.bounds.width - 16, in: view)
+            let frame = stickyHeader.place(trailing: view.bounds.width - 8, top: 2, maxWidth: view.bounds.width / 2, in: view)
+            if let cell = surface.cellSize, cell.width > 0,
+               CGFloat(surface.terminal.viewportRowLength(0)) * cell.width + surface.paddingPoints + cell.width > frame.minX {
+                stickyHeader.hide()
+            }
         } else {
             stickyHeader.hide()
         }
@@ -596,9 +602,12 @@ final class CommandBadge {
         label.frame = CGRect(x: trailing - size.width, y: top, width: size.width, height: size.height)
     }
 
-    func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: UIView) {
+    @discardableResult
+    func place(trailing: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: UIView) -> CGRect {
         let size = label.intrinsicContentSize
-        label.frame = CGRect(x: leading, y: top, width: min(size.width, max(0, maxWidth - leading)), height: size.height)
+        let width = min(size.width, maxWidth)
+        label.frame = CGRect(x: trailing - width, y: top, width: width, height: size.height)
+        return label.frame
     }
 
     func hide() { label.isHidden = true }
@@ -645,9 +654,12 @@ final class CommandBadge {
         field.frame = CGRect(x: trailing - size.width, y: top, width: size.width, height: size.height + 2)
     }
 
-    func place(leading: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: NSView) {
+    @discardableResult
+    func place(trailing: CGFloat, top: CGFloat, maxWidth: CGFloat, in view: NSView) -> CGRect {
         let size = field.intrinsicContentSize
-        field.frame = CGRect(x: leading, y: top, width: min(size.width, max(0, maxWidth - leading)), height: size.height + 2)
+        let width = min(size.width, maxWidth)
+        field.frame = CGRect(x: trailing - width, y: top, width: width, height: size.height + 2)
+        return field.frame
     }
 
     func hide() { field.isHidden = true }

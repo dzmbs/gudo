@@ -13,6 +13,8 @@ import os
 final class Pane {
     let id: PaneId
     @ObservationIgnored let view: TerminalView
+    /// The find bar is open over this pane (its top right is taken).
+    @ObservationIgnored var hasFindBar = false
     /// SwiftUI host containers showing this pane.
     @ObservationIgnored let hosts = NSHashTable<TerminalHost.Container>.weakObjects()
 

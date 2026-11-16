@@ -26,6 +26,13 @@ import Testing
         #expect(text.substring(in: 1..<4) == "b\nc")
     }
 
+    @Test func aRowsLengthEndsAtItsLastNonBlankCell() {
+        let (terminal, _) = screen("ab  x  \r\n\r\n  y")
+        #expect(terminal.viewportRowLength(0) == 5)
+        #expect(terminal.viewportRowLength(1) == 0)
+        #expect(terminal.viewportRowLength(2) == 3)
+    }
+
     @Test func softWrappedRowsJoinWithoutALineBreak() {
         let (_, text) = screen(cols: 5, "abcdefg\r\nh")
         #expect(text.string == "abcdefg\nh")
