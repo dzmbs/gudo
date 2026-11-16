@@ -846,6 +846,11 @@ final class WindowModel {
         groups.collapsed = collapsed.intersection(Set(ids))
         restoreMixedTabs(mixedTabs, openHosts: ids)
         syncWorkspaces()
+        if mixedTabs.isEmpty, let host = Self.launchHost(restoring: groups.openHosts, saved: app.hosts.records,
+                                                         hasLocalShell: LaunchOptions.hasLocalShell) {
+            show(.host(host))
+            return
+        }
         if let ref, ref.hostId == HostGroups.mixedId {
             select(ref, pane: nil)
             return
@@ -856,6 +861,14 @@ final class WindowModel {
         }
         guard groups.group(ref.hostId) != nil else { return }
         select(ref, pane: pane)
+    }
+
+    /// The host a window opens when it has none to restore and this device has no shell of its
+    /// own: the paired host used last, rather than the first-run welcome.
+    nonisolated static func launchHost(restoring openHosts: [String], saved records: [HostRecord], hasLocalShell: Bool) -> String? {
+        guard openHosts.isEmpty, !hasLocalShell else { return nil }
+        return records.filter { $0.kind == .daemon && !$0.isGuest }
+            .max { ($0.lastConnected ?? $0.created) < ($1.lastConnected ?? $1.created) }?.id
     }
 
     /// Shows a tab (and a pane in it) as soon as its host's layout has it: at once for this
