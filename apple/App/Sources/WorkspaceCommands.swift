@@ -33,6 +33,13 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
         }
+        // In place of the system's Close, which closes nothing a tab holds and has no key.
+        CommandGroup(replacing: .saveItem) {
+            Button("Close Tab") { model?.closeCurrentTab() }
+                .keyboardShortcut("w", modifiers: [.command, .option])
+            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+        }
         CommandGroup(after: .appInfo) {
             CheckForUpdatesButton(updater: AppUpdater.shared)
         }

@@ -82,6 +82,16 @@ extension WindowModel {
         }
     }
 
+    /// File ▸ Close Tab (⌥⌘W): the tab on screen, whatever it holds, kept in Recently Closed.
+    func closeCurrentTab() {
+        guard let ref = currentTab else { return }
+        if ref.hostId == HostGroups.mixedId {
+            closeWindowTab(ref.tab, undoable: true)
+        } else {
+            closeTabs([ref], undoable: false)
+        }
+    }
+
     // MARK: Reopening
 
     /// ⇧⌘T: the last close back (every tab closed with it too).
