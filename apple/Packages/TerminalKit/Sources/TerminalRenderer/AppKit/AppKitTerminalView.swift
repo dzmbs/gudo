@@ -391,15 +391,17 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             dragOutImage = image
             return
         }
+        let px = surface.pixels(location)
+        let cell = surface.cell(at: location)
         if event.clickCount == 1, let selection = surface.terminal.selection,
-           let cell = surface.terminal.screenPoint(fromViewport: surface.cell(at: location)), selection.contains(cell)
+           let screenCell = surface.terminal.screenPoint(fromViewport: cell), selection.contains(screenCell)
         {
+            // Counted as a click all the same, so a second one on the selection is a double click.
+            selectionGesture.press(cell: cell, x: px.x, y: px.y, time: event.timestamp)
             dragOutStart = event
             return
         }
         surface.terminal.clearSelection()
-        let px = surface.pixels(location)
-        let cell = surface.cell(at: location)
         if selectionGesture.press(cell: cell, x: px.x, y: px.y, time: event.timestamp) != nil, selectionGesture.clickCount == 2 {
             surface.terminal.selectLinkOrWord(atViewport: cell)
         }
@@ -459,7 +461,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
             // A click on the selection without a drag: a plain click, which clears it.
             dragOutStart = nil
             surface.terminal.clearSelection()
-            selectionGesture.reset()
+            selectionGesture.release(cell: surface.cell(at: location))
             surface.setNeedsRender()
             return
         }
