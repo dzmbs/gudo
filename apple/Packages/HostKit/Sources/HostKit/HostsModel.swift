@@ -849,11 +849,7 @@ public final class HostsModel {
         let listener = BootstrapProgressListener { [weak self] step in
             Task { @MainActor in
                 guard self?.helperUpdates[id] != nil else { return }
-                switch step {
-                case .uploading(let size, let sent): self?.helperUpdates[id]?.step = .uploading(sent: sent, total: size)
-                case .starting: self?.helperUpdates[id]?.step = .restarting
-                case .probing, .pairing: break
-                }
+                if let step = HelperUpdateProgress.Step(bootstrap: step) { self?.helperUpdates[id]?.step = step }
             }
         }
         let report = try await session.bootstrap(
@@ -1007,7 +1003,7 @@ public struct InstallProgress: Equatable, Sendable {
         switch step {
         case .probing: "Checking the host…"
         case .uploading(let size, let sent):
-            "Uploading helper (\(ByteCountFormatter.string(fromByteCount: Int64(sent), countStyle: .file)) sent, \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)) binary)"
+            "Uploading helper (\(ByteCountFormatter.string(fromByteCount: Int64(min(sent, size)), countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)))"
         case .starting: "Starting the service…"
         case .pairing: "Pairing…"
         }
@@ -1021,6 +1017,16 @@ public struct HelperUpdateProgress: Equatable, Sendable {
         case uploading(sent: UInt64, total: UInt64)
         /// Swapped in; the helper restarts and the connection comes back.
         case restarting
+
+        /// The SSH bootstrap's step as an update's, in the binary's bytes; nil for steps the
+        /// update does not show.
+        init?(bootstrap: BootstrapStep) {
+            switch bootstrap {
+            case .uploading(let size, let sent): self = .uploading(sent: min(sent, size), total: size)
+            case .starting: self = .restarting
+            case .probing, .pairing: return nil
+            }
+        }
     }
 
     public var step: Step

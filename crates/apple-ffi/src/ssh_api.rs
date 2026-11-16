@@ -1319,7 +1319,7 @@ pub struct HostdBinaries {
 pub enum BootstrapStep {
     /// Detecting the platform and any existing install.
     Probing,
-    /// Uploading (`size` bytes of binary, `sent` on the wire so far).
+    /// Uploading: `sent` of the binary's `size` bytes so far.
     Uploading {
         size: u64,
         /// Compressed bytes sent.

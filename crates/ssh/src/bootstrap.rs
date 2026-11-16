@@ -179,7 +179,8 @@ impl HostdBinaries {
 pub enum BootstrapStep {
     /// Detecting the platform and any existing install.
     Probing,
-    /// Uploading the daemon (`size` bytes of binary, `sent` on the wire).
+    /// Uploading the daemon: `sent` of its `size` bytes so far (counted in the binary's bytes
+    /// when the wire carries it compressed).
     Uploading { size: u64, sent: u64 },
     /// Installing and starting the service.
     Starting,
@@ -353,7 +354,7 @@ async fn bootstrap_on(
             .map_err(|error| out_of_space(error, &relative_path, size))?;
         step(BootstrapStep::Uploading {
             size: report.size,
-            sent: report.sent,
+            sent: report.size,
         });
         action = install_staged(
             connection,

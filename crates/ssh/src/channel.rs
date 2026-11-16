@@ -370,8 +370,9 @@ impl Connection {
             .await
     }
 
-    /// [`upload`](Self::upload), calling `on_sent` with the bytes put on the wire so far as
-    /// they go out.
+    /// [`upload`](Self::upload), calling `on_sent` as the upload goes out with how many bytes
+    /// of `data` it has carried so far: compressed, the wire is shorter, so it counts in the
+    /// file's bytes and ends at `data.len()`.
     ///
     /// # Errors
     ///
@@ -419,7 +420,10 @@ trap - EXIT"#,
             path = remote_path(path),
         );
         let output = self
-            .exec_with_input(&sh_command(&script), Progress::new(&wire, on_sent))
+            .exec_with_input(
+                &sh_command(&script),
+                Progress::new(&wire, data.len() as u64, on_sent),
+            )
             .await?;
         let remote_hash = output
             .stdout_text()
@@ -456,9 +460,11 @@ trap - EXIT"#,
     }
 }
 
-/// Upload bytes read in slices, reporting how many have been taken.
+/// Upload bytes read in slices, reporting how much of the file the bytes taken carry.
 struct Progress<'a> {
     remaining: &'a [u8],
+    wire_size: u64,
+    file_size: u64,
     sent: u64,
     reported: u64,
     on_sent: &'a (dyn Fn(u64) + Send + Sync),
@@ -468,13 +474,26 @@ impl<'a> Progress<'a> {
     /// Often enough for a progress bar, rarely enough to cost nothing.
     const STEP: usize = 256 * 1024;
 
-    fn new(data: &'a [u8], on_sent: &'a (dyn Fn(u64) + Send + Sync)) -> Self {
+    fn new(wire: &'a [u8], file_size: u64, on_sent: &'a (dyn Fn(u64) + Send + Sync)) -> Self {
         Self {
-            remaining: data,
+            remaining: wire,
+            wire_size: wire.len() as u64,
+            file_size,
             sent: 0,
             reported: 0,
             on_sent,
         }
+    }
+}
+
+impl Progress<'_> {
+    fn file_bytes_sent(&self) -> u64 {
+        if self.remaining.is_empty() {
+            return self.file_size;
+        }
+        let carried =
+            u128::from(self.sent) * u128::from(self.file_size) / u128::from(self.wire_size);
+        u64::try_from(carried).unwrap_or(self.file_size)
     }
 }
 
@@ -493,7 +512,7 @@ impl AsyncRead for Progress<'_> {
             && (self.sent - self.reported >= Self::STEP as u64 || self.remaining.is_empty())
         {
             self.reported = self.sent;
-            (self.on_sent)(self.sent);
+            (self.on_sent)(self.file_bytes_sent());
         }
         std::task::Poll::Ready(Ok(()))
     }
@@ -551,6 +570,21 @@ mod tests {
         );
         assert_eq!(remote_path("/tmp/a b"), "'/tmp/a b'");
         assert_eq!(sh_command("echo 'hi'"), r#"sh -c 'echo '\''hi'\'''"#);
+    }
+
+    #[tokio::test]
+    async fn compressed_upload_progress_counts_file_bytes_and_ends_at_the_file_size() {
+        let file_size = 37_940_960;
+        let wire = vec![7u8; 15_500_000];
+        let reports = std::sync::Mutex::new(Vec::new());
+        let record = |sent| reports.lock().unwrap().push(sent);
+        let mut progress = Progress::new(&wire, file_size, &record);
+        tokio::io::copy(&mut progress, &mut tokio::io::sink())
+            .await
+            .unwrap();
+        let reports = reports.into_inner().unwrap();
+        assert_eq!(reports.last(), Some(&file_size));
+        assert!(reports.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]
