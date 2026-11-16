@@ -98,41 +98,6 @@ final class ChatSessionControlsTests: XCTestCase {
         XCTAssertFalse(state.detail?.contains("Claude") == true)
     }
 
-    func testTableColumnsFitTheirLongestCellUpToTheWrapLimit() {
-        let rows: [[AttributedString]] = [
-            [AttributedString("A"), AttributedString(String(repeating: "x", count: 20))],
-            [AttributedString("B"), AttributedString(String(repeating: "y", count: 400))],
-        ]
-        let widths = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth)
-        XCTAssertEqual(widths.count, 2)
-        XCTAssertEqual(widths[0], 80)
-        XCTAssertEqual(widths[1], 240)
-        let larger = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth * 2)
-        XCTAssertEqual(larger[1], 480)
-    }
-
-    func testTableColumnsShrinkTheWidestToFitThePhoneBeforeScrolling() {
-        let rows: [[AttributedString]] = [
-            [AttributedString("Reading"), AttributedString("Now"), AttributedString("Card maximum")],
-            [AttributedString("Memory"), AttributedString(String(repeating: "y", count: 40)),
-             AttributedString(String(repeating: "z", count: 30))],
-        ]
-        let spacing = DS.Space.l
-        let natural = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth)
-        XCTAssertGreaterThan(ChatTableColumns.width(of: natural, spacing: spacing), 353)
-        let fitted = ChatTableColumns.widths(rows, characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353)
-        XCTAssertEqual(ChatTableColumns.width(of: fitted, spacing: spacing), 353, accuracy: 0.5)
-        XCTAssertEqual(fitted[0], natural[0], "a column narrower than the others keeps its width")
-        XCTAssertLessThan(fitted[1], natural[1])
-        XCTAssertTrue(fitted.allSatisfy { $0 >= DS.Size.proseTableColumn })
-        let wide = Array(repeating: AttributedString(String(repeating: "w", count: 60)), count: 6)
-        let crowded = ChatTableColumns.widths([wide], characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353)
-        XCTAssertEqual(crowded, Array(repeating: DS.Size.proseTableColumn, count: 6), "past the narrowest columns it scrolls")
-        let small = [[AttributedString("a"), AttributedString("b")]]
-        XCTAssertEqual(ChatTableColumns.widths(small, characterWidth: ChatTableColumns.characterWidth, spacing: spacing, available: 353),
-                       ChatTableColumns.widths(small, characterWidth: ChatTableColumns.characterWidth))
-    }
-
     func testImagesComeOnlyFromHostPathsOfImageFiles() throws {
         XCTAssertEqual(ChatImages.hostPath("/tmp/shot.PNG"), "/tmp/shot.PNG")
         XCTAssertEqual(ChatImages.hostPath("~/Desktop/a.jpg"), "~/Desktop/a.jpg")

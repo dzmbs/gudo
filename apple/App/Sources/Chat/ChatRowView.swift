@@ -25,7 +25,8 @@ struct ChatRowView: View {
     let actions: ChatRowActions
     var topSpacing: CGFloat = 0
     private static let maximumIndentationDepth = 12
-    @ScaledMetric(relativeTo: .callout) private var tableCharacterWidth = ChatTableColumns.characterWidth
+    @ScaledMetric(relativeTo: .callout) private var tableColumnMinimum = DS.Size.proseTableColumn
+    @ScaledMetric(relativeTo: .callout) private var tableColumnMaximum = DS.Size.proseTableColumnMaximum
     @ScaledMetric(relativeTo: .caption) private var outputLineHeight = DS.Size.proseOutputLineHeight
     @ScaledMetric(relativeTo: .body) private var diffLineHeight = DS.Size.proseDiffLineHeight
     @Environment(\.terminalTheme) private var terminalTheme
@@ -111,7 +112,7 @@ struct ChatRowView: View {
             }
         case .table:
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                ChatTable(rows: block.table.map { $0.map(inlineCode) }, characterWidth: tableCharacterWidth,
+                ChatTable(rows: block.table.map { $0.map(inlineCode) }, narrowest: tableColumnMinimum, limit: tableColumnMaximum,
                           available: rowWidth > 0 ? ChatReadingColumn.textWidth(in: rowWidth) : .infinity)
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
@@ -547,14 +548,15 @@ extension EnvironmentValues {
 /// sideways with its cut edge faded.
 private struct ChatTable: View {
     let rows: [[AttributedString]]
-    let characterWidth: CGFloat
+    let narrowest: CGFloat
+    let limit: CGFloat
     let available: CGFloat
     @State private var edges = ChatScrollEdges()
 
     var body: some View {
-        let widths = ChatTableColumns.widths(rows, characterWidth: characterWidth, spacing: DS.Space.l, available: available)
-        if ChatTableColumns.width(of: widths, spacing: DS.Space.l) > available {
-            ScrollView(.horizontal) { grid(widths) }
+        ViewThatFits(in: .horizontal) {
+            grid
+            ScrollView(.horizontal) { grid }
                 .scrollIndicators(.hidden)
                 .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
                 .fixedSize(horizontal: false, vertical: true)
@@ -563,26 +565,20 @@ private struct ChatTable: View {
                                     container: geometry.containerSize.width)
                 } action: { _, edges in self.edges = edges }
                 .chatEdgeFade(edges)
-        } else {
-            grid(widths)
         }
     }
 
-    private func grid(_ widths: [CGFloat]) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: DS.Space.l, verticalSpacing: 0) {
+    private var grid: some View {
+        ChatTableGrid(narrowest: narrowest, limit: limit, spacing: DS.Space.l, available: available) {
             ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
                 if index > 0 {
-                    Hairline(style: index == 1 ? DS.Palette.separator : DS.Palette.hairline)
-                        .gridCellUnsizedAxes(.horizontal)
+                    Hairline(style: index == 1 ? DS.Palette.separator : DS.Palette.hairline).chatTableRule()
                 }
-                GridRow(alignment: .firstTextBaseline) {
-                    ForEach(Array(cells.enumerated()), id: \.offset) { column, cell in
-                        Text(cell).fontWeight(index == 0 ? .semibold : .regular)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(width: widths.indices.contains(column) ? widths[column] : DS.Size.proseTableColumn,
-                                   alignment: .leading)
-                            .padding(.vertical, DS.Space.s)
-                    }
+                ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                    Text(cell).fontWeight(index == 0 ? .semibold : .regular)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, DS.Space.s)
                 }
             }
         }

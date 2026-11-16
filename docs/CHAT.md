@@ -276,9 +276,10 @@ composer's checks) just under it, a step apart, each still a 44 pt target; attac
 at the trailing edge with the prompt.
 
 Markdown tables are open grids: a separator under the header, hairlines between rows and no box.
-Each column takes its longest cell up to a limit past which cells wrap (`ChatTableColumns`); on a
-narrow screen the widest columns give way first, down to the narrowest a column may be, and only a
-table that still does not fit scrolls sideways, its cut edge faded. Inline code is SF Mono a step
+Each column is as wide as its widest cell measures, up to the reading column, before a cell wraps
+(`ChatTableColumns`, `ChatTableGrid`); on a narrow screen the widest columns give way first, down
+to the narrowest a column may be, and only a table that still does not fit scrolls sideways, its
+cut edge faded. Inline code is SF Mono a step
 under the prose, on the raised fill. An image alone in a
 paragraph with a host path, a Read of an image file and image attachments show inline in a box of
 fixed height, read with the viewer's file access and decoded no larger than shown; web images are
