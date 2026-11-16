@@ -367,7 +367,7 @@ final class GitUI {
 
     func runDefault() {
         guard let script = defaultScript(for: worktree) else {
-            toast("No scripts yet: add one in Settings ▸ Git, or in the repository's .\(Brand.name.lowercased()).json.", "play", style: .neutral)
+            toast("No scripts yet: add one in Settings ▸ Git, or in the repository's .\(Brand.commandLineTool).json.", "play", style: .neutral)
             return
         }
         run(script)

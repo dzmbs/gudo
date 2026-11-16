@@ -326,10 +326,10 @@ enum PaletteCommands {
                 subtitle: "\(names): \(problems[0].message)", section: "Workflows", systemImage: "exclamationmark.triangle") {})
         }
         if list?.workflows.isEmpty ?? true {
-            let folder = ".\(Brand.name.lowercased())/workflows"
+            let folder = ".\(Brand.commandLineTool)/workflows"
             commands.append(PaletteCommand(
                 id: "workflow-none", title: model.workflowTarget == nil ? "Workflows come from a host running the helper" : list == nil ? "Reading workflows…" : "No workflows yet",
-                subtitle: "YAML files in the repository's \(folder) or ~/.config/\(Brand.name.lowercased())/workflows", section: "Workflows",
+                subtitle: "YAML files in the repository's \(folder) or ~/.config/\(Brand.commandLineTool)/workflows", section: "Workflows",
                 systemImage: "info.circle") {})
         }
         commands.append(PaletteCommand(

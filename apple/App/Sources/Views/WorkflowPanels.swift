@@ -263,8 +263,8 @@ struct NewWorkflowForm: View {
                 .disabled(seed.repoName == nil)
                 .accessibilityIdentifier("new-workflow-scope")
                 Text(scope == .repo
-                     ? "Saved in the repository's .\(Brand.name.lowercased())/workflows, for everyone who clones it."
-                     : "Saved in ~/.config/\(Brand.name.lowercased())/workflows on the host, for every repository.")
+                     ? "Saved in the repository's .\(Brand.commandLineTool)/workflows, for everyone who clones it."
+                     : "Saved in ~/.config/\(Brand.commandLineTool)/workflows on the host, for every repository.")
                     .font(.caption).foregroundStyle(DS.Palette.textTertiary)
             }
             .padding(DS.Space.l)

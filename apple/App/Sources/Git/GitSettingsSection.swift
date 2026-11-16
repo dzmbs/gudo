@@ -32,7 +32,7 @@ struct GitSettingsSection: View {
         } header: {
             Text("Git")
         } footer: {
-            Text("Only worktrees made from this app (New Task, Check Out PR) are deleted, and never one with uncommitted changes. Branches stay. Pull requests come from each host's own gh.")
+            Text("Only worktrees made from this app (New Agent, Check Out PR) are deleted, and never one with uncommitted changes. Branches stay. Pull requests come from each host's own gh.")
         }
         Section {
             ForEach(scripts) { script in
@@ -63,7 +63,7 @@ struct GitSettingsSection: View {
         } header: {
             Text("Scripts")
         } footer: {
-            Text("Each runs in its own tab in the focused worktree (Run ▾, ⌘R, the palette). Repositories add their own in .\(Brand.name.lowercased()).json.")
+            Text("Each runs in its own tab in the focused worktree (Run ▾, ⌘R, the palette). Repositories add their own in .\(Brand.commandLineTool).json.")
         }
         .sheet(item: $editing) { script in
             ScriptEditor(script: script) { saved in
