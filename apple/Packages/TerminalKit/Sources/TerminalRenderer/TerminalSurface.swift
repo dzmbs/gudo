@@ -909,7 +909,14 @@ public final class TerminalSurface {
             let search = self.search ?? TerminalSearch(terminal: terminal)
             search.setNeedle(needle, caseSensitive: caseSensitive)
             self.search = search
-            searchOutputPending.store(true, ordering: .releasing)
+            if search.status.isComplete {
+                searchOutputPending.store(true, ordering: .releasing)
+            } else {
+                // A frame's worth of searching now: a short scrollback is answered on the
+                // keystroke, also in a window that gets no frames.
+                searchOutputPending.store(false, ordering: .releasing)
+                search.update()
+            }
         }
         reportSearchStatus(search?.status ?? .idle)
         invalidateOverlay()

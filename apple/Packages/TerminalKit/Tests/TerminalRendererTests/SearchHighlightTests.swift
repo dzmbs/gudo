@@ -74,4 +74,17 @@ import Testing
         surface.setSearch("")
         #expect(statuses.last == .idle)
     }
+
+    /// A needle typed over a short scrollback is answered on the keystroke, before any frame:
+    /// a window that gets no frames (hidden, on no screen) still counts its matches.
+    @Test func aNewNeedleCountsAShortScrollbackBeforeAnyFrame() throws {
+        let terminal = Terminal(cols: 20, rows: 4) { _ in }
+        terminal.write(Array((0..<12).map { $0 % 5 == 0 ? "needle \($0)\r\n" : "row \($0)\r\n" }.joined().utf8))
+        let surface = try TerminalSurface(terminal: terminal, fontSize: 13)
+        surface.layout(size: CGSize(width: 200, height: 80), scale: 2)
+        var statuses: [SearchStatus] = []
+        surface.onSearchStatus = { statuses.append($0) }
+        surface.setSearch("needle")
+        #expect(statuses.last == SearchStatus(total: 3, selected: nil, isComplete: true))
+    }
 }
