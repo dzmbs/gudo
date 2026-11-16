@@ -382,9 +382,19 @@ final class LocalHelper {
             return false
         }
         noteRegistered(binary)
-        // launchd starts it again after a crash, never after it stopped cleanly (`SIGTERM`).
+        // launchd starts it again after a crash, never after it stopped cleanly (`SIGTERM`). A
+        // login item can also read as enabled while launchd has no job for it (a moved or
+        // re-signed build), and then nothing would ever start it.
         if Self.runningEndpoint(in: stateDirectory) == nil {
-            _ = try? await Self.output(URL(fileURLWithPath: "/bin/launchctl"), ["kickstart", "gui/\(getuid())/\(Self.label)"])
+            let target = "gui/\(getuid())/\(Self.label)"
+            let loaded = await Self.kickstartWhenLoaded(within: .milliseconds(1500)) {
+                (try? await Self.output(URL(fileURLWithPath: "/bin/launchctl"), ["kickstart", target])) != nil
+            }
+            if !loaded, Self.runningEndpoint(in: stateDirectory) == nil {
+                Self.log.error("login item enabled but launchd has no job for it: running as a child")
+                try? await stopLoginItem()
+                return false
+            }
         }
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
@@ -394,6 +404,17 @@ final class LocalHelper {
         Self.log.error("login item registered but not running: running as a child")
         try? await stopLoginItem()
         return false
+    }
+
+    /// Asks launchd to start the job until it knows it (a just-registered job loads a moment
+    /// later), or `within` passes.
+    static func kickstartWhenLoaded(within limit: Duration, kickstart: () async -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        while true {
+            if await kickstart() { return true }
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
     }
 
     /// Unregisters the login item and waits for its helper to let go of the state folder.

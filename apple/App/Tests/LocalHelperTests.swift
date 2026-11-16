@@ -65,6 +65,23 @@ final class LocalHelperTests: XCTestCase {
         XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted")
     }
 
+    func testALoginItemLaunchdHasNoJobForGivesUpAtOnce() async {
+        let started = ContinuousClock.now
+        let loaded = await LocalHelper.kickstartWhenLoaded(within: .seconds(1)) { false }
+        XCTAssertFalse(loaded, "nothing would start it: the app runs the helper as a child")
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3))
+    }
+
+    func testALoginItemThatLoadsAMomentLaterIsStarted() async {
+        var attempts = 0
+        let loaded = await LocalHelper.kickstartWhenLoaded(within: .seconds(2)) {
+            attempts += 1
+            return attempts >= 3
+        }
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(attempts, 3)
+    }
+
     func testAHelperThatEndsStartsAgainOnceAfterAPause() {
         var respawn = HelperRespawn()
         XCTAssertEqual(respawn.delay(afterRunning: .seconds(3600), jitter: 0), .milliseconds(500))
