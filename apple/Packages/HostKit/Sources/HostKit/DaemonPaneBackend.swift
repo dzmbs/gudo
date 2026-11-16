@@ -786,6 +786,13 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
         var bytes = 0
         var overflowed = false
 
+        /// Inputs the user typed or pasted, not reports the terminal made (focus, mouse).
+        var typedCount: Int { inputs.count { if case .generated = $0 { false } else { true } } }
+
+        /// Worth telling the user about: something typed, or too much. Reports alone come and
+        /// go quietly.
+        var isNoticed: Bool { overflowed || typedCount > 0 }
+
         /// The pane shows the screen typed at: the same run, the same text, or nothing then
         /// (typing ahead into a blank pane).
         func matches(epoch now: UInt64?) -> Bool {
@@ -820,7 +827,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
 
     /// Keeps `input` while holding; false when it should be sent now.
     private func hold(_ input: Held) -> Bool {
-        let update = held.withLock { held -> (@Sendable (HeldInputState) -> Void, Int, ContinuousClock.Instant?)? in
+        let update = held.withLock { held -> ((@Sendable (HeldInputState) -> Void)?, Int, ContinuousClock.Instant?)? in
             if held == nil {
                 guard router.isDown, let follower = follower.withLock({ $0 }) else { return nil }
                 held = HeldInput(screen: follower.screen(), current: follower.screen, onChange: follower.onChange, epoch: router.epoch)
@@ -842,11 +849,11 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 current.since = started
             }
             held = current
-            return (current.onChange, current.inputs.count, started)
+            return (current.isNoticed ? current.onChange : nil, current.typedCount, started)
         }
         guard let (onChange, count, started) = update else { return false }
         if let started { expireHeldInput(typedAt: started) }
-        onChange(.holding(count))
+        onChange?(.holding(count))
         return true
     }
 
@@ -858,12 +865,13 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
             guard let self else { return }
             let onChange = held.withLock { held -> (@Sendable (HeldInputState) -> Void)? in
                 guard var current = held, current.since == started else { return nil }
+                let isNoticed = current.isNoticed
                 current.inputs = []
                 current.bytes = 0
                 current.overflowed = false
                 current.since = nil
                 held = current
-                return current.onChange
+                return isNoticed ? current.onChange : nil
             }
             onChange?(.dropped(.tookTooLong))
         }
@@ -892,7 +900,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 nil
             }
             if let drop {
-                current.onChange(.dropped(drop))
+                if current.isNoticed { current.onChange(.dropped(drop)) }
                 return
             }
             let claimsSize = current.inputs.contains { input in
@@ -911,7 +919,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 case .generated(let data): sendGenerated(data)
                 }
             }
-            current.onChange(.sent)
+            if current.isNoticed { current.onChange(.sent) }
         }
     }
 

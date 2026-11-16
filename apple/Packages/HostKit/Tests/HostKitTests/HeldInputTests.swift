@@ -143,6 +143,18 @@ struct HeldInputTests {
         #expect(inputs(client(), pane: 1) == ["one"])
     }
 
+    @Test func focusReportsAloneComeAndGoQuietly() async throws {
+        let (connection, client) = try connection()
+        let (backend, states) = pane(1, on: connection, client: client())
+        try goLive(client(), epoch: 1, resumed: false, panes: [1: ["$ "]])
+        client().send(.disconnected(reason: "helper stopped"))
+        Array("\u{1b}[O".utf8).withUnsafeBytes { backend.writeGenerated($0) }
+        try goLive(client(), epoch: 2, resumed: false, panes: [1: ["$ ", "started again"]])
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(states.all.isEmpty, "no \"Sends when connected\", no toast for what nobody typed")
+        #expect(!client().calls.contains { if case .generatedInput = $0 { true } else { false } })
+    }
+
     @Test func tooMuchTypedWhileDownIsDroppedNotCut() async throws {
         let (connection, client) = try connection()
         let (backend, states) = pane(1, on: connection, client: client())
