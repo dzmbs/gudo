@@ -27,9 +27,41 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::SshError;
 use crate::channel::{UploadEncoding, sh_command, sha256_hex, shell_quote};
 use crate::client::Connection;
+use crate::{ExecOutput, SshError, UploadReport};
+
+/// The host as the bootstrap uses it: each call is one round trip, which pays for the login
+/// shell's startup files once more.
+trait Remote: Sync {
+    fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
+
+    fn upload_reporting(
+        &self,
+        path: &str,
+        data: &[u8],
+        mode: u32,
+        encoding: UploadEncoding,
+        on_sent: &(dyn Fn(u64) + Send + Sync),
+    ) -> impl Future<Output = Result<UploadReport, SshError>> + Send;
+}
+
+impl Remote for Connection {
+    fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
+        Connection::exec(self, command)
+    }
+
+    fn upload_reporting(
+        &self,
+        path: &str,
+        data: &[u8],
+        mode: u32,
+        encoding: UploadEncoding,
+        on_sent: &(dyn Fn(u64) + Send + Sync),
+    ) -> impl Future<Output = Result<UploadReport, SshError>> + Send {
+        Connection::upload_reporting(self, path, data, mode, encoding, on_sent)
+    }
+}
 
 /// An OS and CPU the daemon is built for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -265,6 +297,14 @@ pub async fn bootstrap(
     binaries: &HostdBinaries,
     options: &BootstrapOptions,
 ) -> Result<BootstrapReport, SshError> {
+    bootstrap_on(connection, binaries, options).await
+}
+
+async fn bootstrap_on(
+    connection: &impl Remote,
+    binaries: &HostdBinaries,
+    options: &BootstrapOptions,
+) -> Result<BootstrapReport, SshError> {
     let step = |step: BootstrapStep| {
         if let Some(listener) = &options.listener {
             listener.on_step(step);
@@ -432,7 +472,7 @@ fn staged_path(relative_path: &str) -> String {
 /// installed one (and no downgrade was asked for): then it is deleted, the installed build
 /// stays and the answer is [`InstallAction::KeptNewer`]. `None` means it was installed.
 async fn install_staged(
-    connection: &Connection,
+    connection: &impl Remote,
     staged: &str,
     relative_path: &str,
     installed: Option<&proto::DaemonInfo>,
@@ -525,7 +565,7 @@ pub async fn detect_platform(connection: &Connection) -> Result<HostPlatform, Ss
     probe(connection).await?.platform()
 }
 
-async fn probe(connection: &Connection) -> Result<Probe, SshError> {
+async fn probe(connection: &impl Remote) -> Result<Probe, SshError> {
     let script = format!(
         r#"echo "os=$(uname -s)"
 echo "arch=$(uname -m)"
@@ -577,7 +617,7 @@ fn parse_probe(text: &str) -> Probe {
 /// ends, which is the SSH session that installed it. Most distributions' polkit rules let a
 /// user enable lingering for themselves without a password, so try that before falling back
 /// to a note (`--no-ask-password`: never prompt). Returns whether lingering is now on.
-async fn enable_linger(connection: &Connection) -> Result<bool, SshError> {
+async fn enable_linger(connection: &impl Remote) -> Result<bool, SshError> {
     let output = connection
         .exec(&sh_command(
             "loginctl --no-ask-password enable-linger \"$(id -un)\" >/dev/null 2>&1; \
@@ -591,7 +631,137 @@ async fn enable_linger(connection: &Connection) -> Result<bool, SshError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    const NEW_BUILD: &[u8] = b"new build";
+    const OLD_BUILD: &[u8] = b"old build";
+
+    fn build_info_json(build: &str, built_unix: u64) -> String {
+        format!(
+            r#"{{"version":"0.1.0","build":"{build}","built_unix":{built_unix},"protocol":1,"min_client_protocol":0,"features":0,"hostname":"h","os":"linux","os_name":"","arch":"x86_64"}}"#
+        )
+    }
+
+    /// A Linux host answering the bootstrap's scripts, counting the round trips.
+    #[derive(Default)]
+    struct ScriptedHost {
+        installed: Option<&'static [u8]>,
+        running: bool,
+        has_systemd: bool,
+        commands: Mutex<Vec<String>>,
+    }
+
+    impl ScriptedHost {
+        fn answer(&self, command: &str) -> ExecOutput {
+            let mut output = ExecOutput {
+                exit_status: Some(0),
+                ..ExecOutput::default()
+            };
+            let stdout = if command.contains("uname -s") {
+                let mut lines =
+                    String::from("os=Linux\narch=x86_64\nhome=/home/u\ngzip=1\nlinger=yes\n");
+                if let Some(installed) = self.installed {
+                    lines += &format!("sha256={}\n", sha256_hex(installed));
+                    lines += &format!("info={}\n", build_info_json("old", 1));
+                    if self.running {
+                        lines += "status=running (pid 9)\n";
+                    }
+                }
+                lines
+            } else if command.contains("build-info --json") {
+                build_info_json("new", 2)
+            } else if command.contains("service install") {
+                if !self.has_systemd {
+                    output.exit_status = Some(1);
+                }
+                String::new()
+            } else if command.contains("pair --json") {
+                r#"{"ticket":"gudo://pair/t","daemon_id":"ab"}"#.to_owned()
+            } else if command.contains(" restart") {
+                if !self.running {
+                    output.exit_status = Some(1);
+                }
+                String::new()
+            } else {
+                String::new()
+            };
+            output.stdout = stdout.into_bytes();
+            output
+        }
+
+        fn round_trips(&self) -> usize {
+            self.commands.lock().unwrap().len()
+        }
+    }
+
+    impl Remote for ScriptedHost {
+        fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
+            self.commands.lock().unwrap().push(command.to_owned());
+            std::future::ready(Ok(self.answer(command)))
+        }
+
+        fn upload_reporting(
+            &self,
+            path: &str,
+            data: &[u8],
+            _mode: u32,
+            _encoding: UploadEncoding,
+            _on_sent: &(dyn Fn(u64) + Send + Sync),
+        ) -> impl Future<Output = Result<UploadReport, SshError>> + Send {
+            self.commands.lock().unwrap().push(format!("upload {path}"));
+            std::future::ready(Ok(UploadReport {
+                path: path.to_owned(),
+                size: data.len() as u64,
+                sha256: sha256_hex(data),
+                sent: data.len() as u64,
+            }))
+        }
+    }
+
+    async fn round_trips(host: ScriptedHost) -> (usize, BootstrapReport) {
+        let binaries = HostdBinaries {
+            linux_x86_64: Some(BinarySource::Bytes(Arc::new(NEW_BUILD.to_vec()))),
+            ..HostdBinaries::default()
+        };
+        let report = bootstrap_on(&host, &binaries, &BootstrapOptions::default())
+            .await
+            .unwrap();
+        (host.round_trips(), report)
+    }
+
+    #[tokio::test]
+    async fn each_kind_of_bootstrap_makes_few_round_trips() {
+        let (fresh, report) = round_trips(ScriptedHost {
+            has_systemd: true,
+            ..ScriptedHost::default()
+        })
+        .await;
+        assert_eq!(report.service, ServiceMode::Service);
+        let (detached, report) = round_trips(ScriptedHost::default()).await;
+        assert_eq!(report.service, ServiceMode::Detached);
+        let (upgrade, report) = round_trips(ScriptedHost {
+            installed: Some(OLD_BUILD),
+            running: true,
+            has_systemd: true,
+            ..ScriptedHost::default()
+        })
+        .await;
+        assert_eq!(
+            (report.action, report.service),
+            (InstallAction::Upgraded, ServiceMode::AlreadyRunning)
+        );
+        let (reuse, report) = round_trips(ScriptedHost {
+            installed: Some(NEW_BUILD),
+            running: true,
+            has_systemd: true,
+            ..ScriptedHost::default()
+        })
+        .await;
+        assert_eq!(report.action, InstallAction::Reused);
+        assert_eq!((fresh, detached, upgrade, reuse), (6, 7, 6, 2));
+    }
 
     #[test]
     fn probe_parsing() {
