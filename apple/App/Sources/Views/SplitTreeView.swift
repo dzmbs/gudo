@@ -849,4 +849,16 @@ extension Node {
             splitAxis == axis ? second.trailingPane(along: axis) : first.trailingPane(along: axis)
         }
     }
+
+    /// The width this subtree needs with every pane at least `pane` wide and `gap` between
+    /// panes side by side.
+    func minimumWidth(pane: CGFloat, gap: CGFloat) -> CGFloat {
+        switch self {
+        case .leaf: pane
+        case .split(.horizontal, _, let first, let second):
+            first.minimumWidth(pane: pane, gap: gap) + gap + second.minimumWidth(pane: pane, gap: gap)
+        case .split(_, _, let first, let second):
+            max(first.minimumWidth(pane: pane, gap: gap), second.minimumWidth(pane: pane, gap: gap))
+        }
+    }
 }

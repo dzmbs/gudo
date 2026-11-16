@@ -229,7 +229,7 @@ struct WorkspaceView: View {
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { newFrame in
             frame = newFrame
             #if os(macOS)
-            model.windowWidthChanged(to: newFrame.width)
+            model.windowWidthChanged(to: newFrame.width, sidebar: width + (page != nil ? layout.gutter : 0))
             #endif
         }
         .animation(DS.Motion.structural, value: model.isSidebarShown)
@@ -314,15 +314,18 @@ struct SidebarWidthFit {
     private var isNarrow = false
     private var userChoseWhileNarrow = false
 
-    /// Whether the sidebar should show now, or nil to leave it as it is.
-    mutating func widthChanged(to width: CGFloat, isShown: Bool) -> Bool? {
-        if width < Self.hideBelow {
+    /// Whether the sidebar should show now, or nil to leave it as it is. `room` is the sidebar
+    /// and the panes at their smallest: narrower than that, the sidebar goes even where the user
+    /// showed it, so no pane is squeezed out of sight.
+    mutating func widthChanged(to width: CGFloat, isShown: Bool, room: CGFloat = 0) -> Bool? {
+        let crowded = width < room
+        if width < Self.hideBelow || crowded {
             isNarrow = true
-            guard isShown, !userChoseWhileNarrow else { return nil }
+            guard isShown, crowded || !userChoseWhileNarrow else { return nil }
             hidForWidth = true
             return false
         }
-        guard width >= Self.showFrom else { return nil }
+        guard width >= max(Self.showFrom, room + Self.showFrom - Self.hideBelow) else { return nil }
         isNarrow = false
         userChoseWhileNarrow = false
         guard hidForWidth else { return nil }

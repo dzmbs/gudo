@@ -166,9 +166,10 @@ final class WindowModel {
 
     /// Hides the sidebar while the window is too narrow for it (`SidebarWidthFit`); the next
     /// window still starts with the user's own choice.
-    func windowWidthChanged(to width: CGFloat) {
+    func windowWidthChanged(to width: CGFloat, sidebar: CGFloat) {
         if windowWidth != width { windowWidth = width }
-        guard let shown = sidebarWidthFit.widthChanged(to: width, isShown: isSidebarShown) else { return }
+        let room = sidebar + (workspace?.minimumPanesWidth ?? 0)
+        guard let shown = sidebarWidthFit.widthChanged(to: width, isShown: isSidebarShown, room: room) else { return }
         isFittingSidebar = true
         isSidebarShown = shown
         isFittingSidebar = false

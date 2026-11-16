@@ -319,6 +319,14 @@ final class Workspace {
     /// The smallest pane a split leaves: a prompt and a short command.
     static let smallestSplitGrid = (cols: 20, rows: 4)
 
+    /// The narrowest the active tab's panes go side by side, each at `smallestSplitGrid`.
+    var minimumPanesWidth: CGFloat {
+        guard let tab = session.activeTab, let cell = cellSize else { return 0 }
+        let pane = CGFloat(Self.smallestSplitGrid.cols) * cell.width + 2 * appearance.padding
+        let shown: Node = tab.zoomed.map { .leaf($0) } ?? session.tiledRoot(of: tab) ?? tab.root
+        return shown.minimumWidth(pane: pane, gap: 1)
+    }
+
     /// Whether both halves of `pane` split along `axis` keep `smallestSplitGrid`; the new pane's
     /// header takes a row in a vertical split.
     func hasRoomToSplit(_ pane: PaneId, _ axis: Axis) -> Bool {
