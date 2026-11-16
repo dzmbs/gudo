@@ -68,10 +68,13 @@ fn is_minted(id: &str) -> bool {
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+const NO_PI_ACCOUNTS: &str = "pi runs under the host's own setup and has no accounts";
+
 fn agent_dir_name(agent: AgentKind) -> &'static str {
     match agent {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
+        AgentKind::Pi => "pi",
     }
 }
 
@@ -252,6 +255,9 @@ impl Accounts {
     ///
     /// An invalid label or colour, too many accounts, or the directory cannot be made.
     pub fn add(&self, add: &proto::AccountAdd) -> Result<AgentAccount, String> {
+        if add.agent == AgentKind::Pi {
+            return Err(NO_PI_ACCOUNTS.into());
+        }
         if !proto::is_valid_account_label(&add.label) || add.color > proto::MAX_ACCOUNT_COLOR {
             return Err("an account needs a name of up to 64 bytes and a palette colour".into());
         }
@@ -278,7 +284,7 @@ impl Accounts {
                 AgentKind::Codex => {
                     std::fs::write(dir.join("config.toml"), agents::Codex::ACCOUNT_CONFIG)
                 }
-                AgentKind::Claude => Ok(()),
+                AgentKind::Claude | AgentKind::Pi => Ok(()),
             });
         if let Err(error) = made {
             let _ = std::fs::remove_dir_all(&dir);
@@ -474,6 +480,7 @@ impl Tools {
         let own = match agent {
             AgentKind::Claude => agents::CLAUDE_DIR_VAR,
             AgentKind::Codex => agents::CODEX_DIR_VAR,
+            AgentKind::Pi => agents::PI_DIR_VAR,
         };
         let (remove, set) = agents::account_env(account, own);
         let mut vars = self.vars.clone();
@@ -521,6 +528,7 @@ impl Accounts {
                         Err(error) => AccountStatus::Failed(error),
                     }
                 }
+                AgentKind::Pi => AccountStatus::Failed(NO_PI_ACCOUNTS.into()),
             },
         };
         let changed = self.set_status(agent, id, status);
@@ -542,6 +550,7 @@ impl Accounts {
         let args = match agent {
             AgentKind::Claude => agents::ClaudeCode::SIGN_OUT,
             AgentKind::Codex => agents::Codex::SIGN_OUT,
+            AgentKind::Pi => return Err(NO_PI_ACCOUNTS.into()),
         };
         let signed_out = matches!(self.status_of(agent, id), AccountStatus::SignedOut);
         match tools.env(agent, &account) {

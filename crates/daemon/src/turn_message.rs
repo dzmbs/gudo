@@ -104,6 +104,7 @@ pub(crate) fn last_message(kind: AgentKind, transcript: &Path, after: u64) -> Op
         let step = match kind {
             AgentKind::Codex => codex_step(&entry),
             AgentKind::Claude => claude_step(&entry),
+            AgentKind::Pi => return None,
         };
         match step {
             Step::Message(message) => {

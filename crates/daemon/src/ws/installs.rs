@@ -86,6 +86,7 @@ pub(crate) fn mcp_commands(
                 .pane_var(match agent {
                     AgentKind::Claude => agents::CLAUDE_DIR_VAR,
                     AgentKind::Codex => agents::CODEX_DIR_VAR,
+                    AgentKind::Pi => return Vec::new(),
                 })
                 .map(PathBuf::from);
             let dirs = std::iter::once(None).chain(
@@ -132,12 +133,14 @@ pub(crate) fn mcp_commands(
                                 .collect::<Vec<_>>(),
                         )
                     }
+                    AgentKind::Pi => return Vec::new(),
                 };
                 let prefix: Vec<String> = dir
                     .map(|dir| {
                         let var = match agent {
                             AgentKind::Claude => agents::CLAUDE_DIR_VAR,
                             AgentKind::Codex => agents::CODEX_DIR_VAR,
+                            AgentKind::Pi => agents::PI_DIR_VAR,
                         };
                         vec!["env".into(), format!("{var}={}", dir.display())]
                     })

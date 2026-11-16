@@ -1,5 +1,6 @@
 mod claude;
 pub(crate) mod codex;
+mod pi;
 mod terminal;
 
 use std::future::Future;
@@ -230,7 +231,21 @@ pub(crate) fn driver(kind: AgentKind) -> &'static dyn AgentDriver {
     match kind {
         AgentKind::Claude => &claude::ClaudeDriver,
         AgentKind::Codex => &terminal::TerminalDriver,
+        AgentKind::Pi => &pi::PiDriver,
     }
+}
+
+/// The agent whose conversation Chat shows in a pane: the one the daemon tracks, else a pi
+/// the pane runs.
+pub(crate) fn chat_agent(entry: &crate::core::PaneEntry) -> Option<AgentKind> {
+    if let Some(agent) = crate::core::lock(&entry.record).agent.as_ref() {
+        return Some(agent.kind);
+    }
+    crate::core::lock(&entry.record)
+        .resumable
+        .as_ref()
+        .is_some_and(|agent| agent.program == crate::resumable::ResumableProgram::Pi)
+        .then_some(AgentKind::Pi)
 }
 
 #[cfg(test)]

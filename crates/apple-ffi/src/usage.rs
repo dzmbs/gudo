@@ -64,6 +64,7 @@ impl From<proto::AgentKind> for AgentKind {
         match agent_kind {
             proto::AgentKind::Claude => Self::Claude,
             proto::AgentKind::Codex => Self::Codex,
+            proto::AgentKind::Pi => Self::Pi,
         }
     }
 }

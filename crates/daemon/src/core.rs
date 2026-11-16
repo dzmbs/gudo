@@ -288,7 +288,7 @@ pub(crate) struct PaneEntry {
     created_at: proto::UnixMillis,
     /// The pane's resumable agent's process and when it was first seen, for matching its
     /// session to it.
-    resumable_process: Mutex<Option<(u32, SystemTime)>>,
+    pub(crate) resumable_process: Mutex<Option<(u32, SystemTime)>>,
     /// The shell reports its commands (OSC 133), so the foreground process is not read for
     /// them.
     reports_commands: AtomicBool,
@@ -937,12 +937,12 @@ impl Core {
     /// someone who may not drive the pane, since an agent can exit at any moment and the pane
     /// is marked a shell again only on the next tick.
     pub fn agent_has_terminal(&self, pane: PaneId) -> bool {
-        if !self.is_agent_pane(pane) {
-            return false;
-        }
         let Some(entry) = self.pane(pane) else {
             return false;
         };
+        if !self.is_agent_pane(pane) {
+            return runs_pi(&entry);
+        }
         let pty = entry.pane.pty();
         let Some(foreground) = pty.foreground_pgid() else {
             return false;
@@ -971,7 +971,10 @@ impl Core {
     pub fn pane_meta(&self, id: PaneId) -> Option<PaneMeta> {
         let entry = self.pane(id)?;
         let meta = lock(&entry.meta);
-        let mut agent = lock(&entry.agent).as_mut().map(AgentRuntime::wire_status);
+        let mut agent = lock(&entry.agent)
+            .as_mut()
+            .map(AgentRuntime::wire_status)
+            .or_else(|| pi_status(&entry, meta.program.as_ref()));
         // Waiting on the owner to let it drive a pane is a block like any approval.
         if let Some(blocker) = self.term.asks.blocker(id) {
             let kind = agent.map_or_else(|| "program".to_owned(), |status| status.kind);
@@ -1795,6 +1798,38 @@ impl Core {
             } => (PaneLaunch::Agent { agent, resume, cwd }, account),
             launch => (launch, None),
         };
+        // A launched pi is recorded as a shell resuming it, as a pi started by hand is, so no
+        // saved layout names it for an older helper.
+        let (launch, resumable, launches_pi) = match launch {
+            PaneLaunch::Agent {
+                agent: AgentKind::Pi,
+                resume,
+                cwd,
+            } => {
+                if resume
+                    .as_deref()
+                    .is_some_and(|id| !crate::resumable::is_session_id(id))
+                {
+                    return Err((OpError::Invalid, "not a session id".to_owned()));
+                }
+                if asked_account
+                    .as_deref()
+                    .is_some_and(|account| account != proto::SYSTEM_ACCOUNT)
+                {
+                    return Err((
+                        OpError::Invalid,
+                        "pi runs under the system account".to_owned(),
+                    ));
+                }
+                let agent = ResumableAgent {
+                    program: ResumableProgram::Pi,
+                    session_id: resume,
+                    cwd: None,
+                };
+                (PaneLaunch::Shell { cwd }, Some(agent), true)
+            }
+            launch => (launch, resumable, false),
+        };
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_owned());
         let launch_cwd = match &launch {
             PaneLaunch::Shell { cwd }
@@ -1892,10 +1927,46 @@ impl Core {
             .map(|script| format!("{script}\n"));
         match &launch {
             PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => {
-                let resume_line = resumable
-                    .as_ref()
-                    .map(|agent| agent.program.resume_line(agent.session_id.as_deref()));
+                let resume_line = resumable.as_ref().map(|agent| {
+                    if launches_pi {
+                        agent.program.launch_line(agent.session_id.as_deref())
+                    } else {
+                        agent.program.resume_line(agent.session_id.as_deref())
+                    }
+                });
                 match (&resume_line, &pre_command) {
+                    (Some(resume_line), pre_command)
+                        if self.cfg.hook_bin_runs()
+                            && resumable
+                                .as_ref()
+                                .is_some_and(|agent| agent.program == ResumableProgram::Pi) =>
+                    {
+                        let pre_command = pre_command.as_deref().unwrap_or_default();
+                        // The daemon starts this pi, so it fences it like an agent it
+                        // launches: Chat may send to it, and never to the shell after it.
+                        let context = self.hooks.launch_context(
+                            id,
+                            PathBuf::from(&cwd),
+                            agents::AccountContext::system(),
+                        );
+                        let launch_id = crate::agent::new_uuid();
+                        native_input_launch =
+                            crate::agent_input::AgentInputGate::pending(launch_id.clone());
+                        let shim = shell_quote(&context.hook_bin.to_string_lossy());
+                        let launch_id = shell_quote(&launch_id);
+                        command.args([
+                            "-i",
+                            "-l",
+                            "-c",
+                            &format!(
+                                "{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {resume_line}; {shim} agent-exit-fence {launch_id} && {}",
+                                then_shell()
+                            ),
+                        ]);
+                        for (key, value) in agents::pane_env(&context) {
+                            command.env(key, value);
+                        }
+                    }
                     (Some(resume_line), pre_command) => {
                         let pre_command = pre_command.as_deref().unwrap_or_default();
                         // Interactive, so rc files set `PATH` as in any pane.
@@ -1944,6 +2015,9 @@ impl Core {
                 let spec = match agent {
                     AgentKind::Claude => agents::ClaudeCode::sign_in(&context),
                     AgentKind::Codex => agents::Codex::sign_in(&context, *device_code),
+                    AgentKind::Pi => {
+                        return Err((OpError::Invalid, "pi has no accounts to sign in to".into()));
+                    }
                 };
                 // The shim tells the daemon the sign-in ended, so it checks the account.
                 let done = format!(
@@ -2005,7 +2079,7 @@ impl Core {
                     // Claude accepts a pinned id, which makes resume work without waiting
                     // for its SessionStart hook.
                     AgentKind::Claude => Some(crate::agent::new_uuid()),
-                    AgentKind::Codex => None,
+                    AgentKind::Codex | AgentKind::Pi => None,
                 });
                 let mode = match (resume, &session_id) {
                     (Some(resume_id), _) => LaunchMode::Resume {
@@ -3217,6 +3291,7 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
             AgentKind::Claude => agent_dir.and_then(|dir| {
                 crate::claude_session::from_transcripts(&dir, &cwd, since, &claimed)
             }),
+            AgentKind::Pi => None,
         };
         if let Some(session_id) = found {
             let mut record = lock(&entry.record);
@@ -3261,6 +3336,7 @@ fn account_dir(core: &Core, kind: AgentKind, account: &str) -> Option<PathBuf> {
     let (directory_var, default_directory) = match kind {
         AgentKind::Codex => (agents::CODEX_DIR_VAR, ".codex"),
         AgentKind::Claude => (agents::CLAUDE_DIR_VAR, ".claude"),
+        AgentKind::Pi => (agents::PI_DIR_VAR, ".pi/agent"),
     };
     core.ws
         .accounts
@@ -3284,22 +3360,59 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
     track_foreground_command(core, entry, &foreground);
 }
 
+/// A pi the pane runs, as clients see an agent: its state as its own reports give it.
+fn pi_status(entry: &PaneEntry, report: Option<&agents::ProgramStatus>) -> Option<proto::AgentStatus> {
+    let runs_pi = lock(&entry.record)
+        .resumable
+        .as_ref()
+        .is_some_and(|agent| agent.program == ResumableProgram::Pi);
+    let state = match report.map(|report| report.state) {
+        Some(agents::ProgramState::Working) => proto::AgentState::Running,
+        Some(agents::ProgramState::Done) => proto::AgentState::Done,
+        _ => proto::AgentState::Idle,
+    };
+    runs_pi.then(|| proto::AgentStatus {
+        kind: crate::agent::PI_PROGRAM.into(),
+        state,
+    })
+}
+
+/// Whether the pane's foreground program is the pi it is known to run.
+fn runs_pi(entry: &PaneEntry) -> bool {
+    let known = lock(&entry.record)
+        .resumable
+        .as_ref()
+        .is_some_and(|agent| agent.program == ResumableProgram::Pi);
+    known
+        && entry
+            .pane
+            .pty()
+            .foreground_process()
+            .is_some_and(|process| ResumableProgram::of(&process) == Some(ResumableProgram::Pi))
+}
+
 /// Records the pi or Kimi agent a pane runs, and forgets it once the agent ended.
 fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
     let running = ResumableProgram::of(foreground);
     let mut record = lock(&entry.record);
     match (running, record.resumable.as_mut()) {
         (Some(program), Some(agent)) if agent.program == program => {
+            lock(&entry.resumable_process).get_or_insert((foreground.pid, SystemTime::now()));
+            if agent.cwd.is_none() {
+                agent.cwd = crate::procinfo::process_cwd(foreground.pid)
+                    .map(|cwd| cwd.to_string_lossy().into_owned());
+            }
             if agent.session_id.is_some() {
                 return;
             }
             if let Some(session_id) = program.session_from_argv(&foreground.argv) {
                 agent.session_id = Some(session_id);
+                drop(record);
                 core.mark_dirty();
+                core.emit(Event::PaneMeta(entry.pane.id));
                 return;
             }
             // A pane restored with `--continue`: its session file says which session it is.
-            lock(&entry.resumable_process).get_or_insert((foreground.pid, SystemTime::now()));
         }
         (Some(program), _) => {
             record.resumable = Some(ResumableAgent {
@@ -3309,14 +3422,19 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
                     .map(|cwd| cwd.to_string_lossy().into_owned()),
             });
             *lock(&entry.resumable_process) = Some((foreground.pid, SystemTime::now()));
+            drop(record);
             core.mark_dirty();
+            core.emit(Event::PaneMeta(entry.pane.id));
         }
+        // A pi the daemon starts is recorded before it runs: the shell starting it is no end.
+        (None, Some(_)) if lock(&entry.resumable_process).is_none() => {}
         (None, Some(_)) => {
             drop(record);
             core.note_program_ending();
             lock(&entry.record).resumable = None;
             lock(&entry.resumable_process).take();
             core.mark_dirty();
+            core.emit(Event::PaneMeta(entry.pane.id));
         }
         (None, None) => {}
     }
@@ -3363,7 +3481,9 @@ fn capture_resumable_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Ar
             {
                 tracing::info!(pane = %entry.pane.id, %session_id, ?program, "agent session found");
                 agent.session_id = Some(session_id);
+                drop(record);
                 core.mark_dirty();
+                core.emit(Event::PaneMeta(entry.pane.id));
             }
         }
         busy.store(false, Ordering::Release);
@@ -3380,7 +3500,7 @@ fn track_foreground_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Fore
     *lock(&entry.agent) = Some(runtime);
     let session_id = match kind {
         AgentKind::Claude => crate::claude_session::from_argv(&foreground.argv),
-        AgentKind::Codex => None,
+        AgentKind::Codex | AgentKind::Pi => None,
     };
     record_agent_started_by_hand(core, entry, kind, session_id);
     core.emit(Event::PaneMeta(entry.pane.id));

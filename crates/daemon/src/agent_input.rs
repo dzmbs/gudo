@@ -256,6 +256,13 @@ pub(crate) async fn serve(core: &Arc<Core>, call: AgentInputCall) -> AgentInputR
 }
 
 #[cfg(test)]
+pub(crate) fn armed_for_tests(launch: &str) -> AgentInputGate {
+    let mut gate = AgentInputGate::pending(launch.to_owned());
+    assert!(gate.arm(launch));
+    gate
+}
+
+#[cfg(test)]
 pub(crate) fn submitted(pane: &crate::pane::Pane, session: &str, prompt: &str, seq: u64) {
     submitted_locked(&mut lock(&pane.agent_input_gate), session, prompt, seq);
 }

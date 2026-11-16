@@ -249,6 +249,8 @@ impl From<proto::SessionSummary> for SessionSummary {
 pub enum AgentKind {
     Claude,
     Codex,
+    /// Launch only where `Client::starts_pi` says the helper can.
+    Pi,
 }
 
 impl From<AgentKind> for proto::AgentKind {
@@ -256,6 +258,7 @@ impl From<AgentKind> for proto::AgentKind {
         match agent_kind {
             AgentKind::Claude => Self::Claude,
             AgentKind::Codex => Self::Codex,
+            AgentKind::Pi => Self::Pi,
         }
     }
 }

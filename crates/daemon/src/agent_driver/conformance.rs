@@ -51,6 +51,7 @@ async fn every_adapter_conforms_with_its_recorded_fixture() {
         let fixture: Box<dyn AdapterFixture> = match kind {
             AgentKind::Claude => Box::new(super::claude::fixtures::Fixture::new().await),
             AgentKind::Codex => Box::new(super::terminal::fixtures::Fixture::new().await),
+            AgentKind::Pi => unreachable!("pi is not in this list"),
         };
         let (wake, _wakes) = tokio::sync::mpsc::channel(1);
         if !adapter.capabilities().contains(AgentCapabilities::READ) {

@@ -1,11 +1,12 @@
 mod claude;
-mod claude_diff;
+pub(crate) mod claude_diff;
 mod claude_record;
 pub(crate) mod claude_source;
 mod commands;
 mod complete_diff;
 mod display_index;
 mod display_overlay;
+pub(crate) mod jsonl_file;
 pub(crate) mod native_watch;
 pub(crate) mod record_stream;
 mod text;
@@ -331,10 +332,7 @@ impl Timelines {
             let entry = source_core
                 .pane(pane)
                 .ok_or_else(|| WsError::NotFound("agent pane".into()))?;
-            let kind = lock(&entry.record)
-                .agent
-                .as_ref()
-                .map(|agent| agent.kind)
+            let kind = crate::agent_driver::chat_agent(&entry)
                 .ok_or_else(|| WsError::Unavailable("Chat is available for agent panes".into()))?;
             crate::agent_driver::driver(kind).open(&source_core, pane, epoch, wake)
         })
@@ -522,6 +520,14 @@ pub(crate) async fn handle(
                 if watches.len() >= MAX_WATCHES && !watches.contains_key(&pane_id) {
                     return Err(WsError::Denied("too many Chat panes are open".into()));
                 }
+            }
+            let agent = core
+                .pane(pane_id)
+                .and_then(|entry| crate::agent_driver::chat_agent(&entry));
+            if agent.is_some_and(|agent| !version.names(agent)) {
+                return Err(WsError::Unavailable(
+                    "Update the app to use Chat with pi.".into(),
+                ));
             }
             let timeline = core.ws.timelines.open(core, pane_id).await?;
             let updates = timeline.updates.subscribe();

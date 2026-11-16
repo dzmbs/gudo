@@ -85,6 +85,7 @@ pub(crate) fn adapter(kind: AgentKind) -> Box<dyn AgentAdapter + Send + Sync> {
     match kind {
         AgentKind::Claude => Box::new(ClaudeCode::new()),
         AgentKind::Codex => Box::new(Codex::new()),
+        AgentKind::Pi => Box::new(agents::Pi::new()),
     }
 }
 
@@ -117,10 +118,14 @@ pub(crate) fn shown_summary(kind: AgentKind, blocker: &agents::Blocker) -> Strin
 const SUMMARY_CHARS: usize = 512;
 
 /// The command that runs `kind`, looked up on `PATH`.
+/// How clients name a pi pane's agent.
+pub(crate) const PI_PROGRAM: &str = "pi";
+
 pub(crate) fn program(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
+        AgentKind::Pi => PI_PROGRAM,
     }
 }
 

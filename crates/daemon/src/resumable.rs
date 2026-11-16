@@ -82,6 +82,14 @@ impl ResumableProgram {
             .filter(|id| is_session_id(id))
     }
 
+    /// The shell line that starts the agent fresh, or in `session_id`.
+    pub fn launch_line(self, session_id: Option<&str>) -> String {
+        match session_id.filter(|id| is_session_id(id)) {
+            Some(id) => format!("{} --session {}", self.executable(), shell_quote(id)),
+            None => self.executable().to_owned(),
+        }
+    }
+
     /// The shell line that resumes `session_id`, or the newest session in the directory.
     /// Nothing else from the first run comes back: a prompt in its arguments would be sent
     /// again.
@@ -126,25 +134,60 @@ fn pi_sessions(
     home: &Path,
     cwd: &Path,
 ) -> Vec<(String, SystemTime)> {
-    let directory = match env("PI_CODING_AGENT_SESSION_DIR") {
-        Some(directory) => PathBuf::from(directory),
-        None => {
-            let agent_dir =
-                env("PI_CODING_AGENT_DIR").map_or_else(|| home.join(".pi/agent"), PathBuf::from);
-            let cwd = cwd.to_string_lossy();
-            let encoded = cwd
-                .trim_start_matches(['/', '\\'])
-                .replace(['/', '\\', ':'], "-");
-            agent_dir.join("sessions").join(format!("--{encoded}--"))
-        }
-    };
-    entries(&directory)
+    entries(&pi_session_dir(env, home, cwd).folder)
         .filter_map(|(path, modified)| {
             let name = path.file_name()?.to_str()?.strip_suffix(".jsonl")?;
             let (_, id) = name.split_once('_')?;
             is_session_id(id).then(|| (id.to_owned(), modified))
         })
         .collect()
+}
+
+/// Where pi keeps its sessions for one working directory.
+pub(crate) struct PiSessionDir {
+    /// The folder every pi session lives under: no session file is read outside it.
+    pub root: PathBuf,
+    pub folder: PathBuf,
+}
+
+/// pi's session folder for `cwd`, as pi chooses it.
+pub(crate) fn pi_session_dir(
+    env: &impl Fn(&str) -> Option<String>,
+    home: &Path,
+    cwd: &Path,
+) -> PiSessionDir {
+    if let Some(directory) = env("PI_CODING_AGENT_SESSION_DIR") {
+        let folder = PathBuf::from(directory);
+        return PiSessionDir {
+            root: folder.clone(),
+            folder,
+        };
+    }
+    let agent_dir = env(agents::PI_DIR_VAR).map_or_else(|| home.join(".pi/agent"), PathBuf::from);
+    let cwd = cwd.to_string_lossy();
+    let encoded = cwd
+        .trim_start_matches(['/', '\\'])
+        .replace(['/', '\\', ':'], "-");
+    let root = agent_dir.join("sessions");
+    PiSessionDir {
+        folder: root.join(format!("--{encoded}--")),
+        root,
+    }
+}
+
+/// The file of pi session `id` in `folder`.
+pub(crate) fn pi_session_file(folder: &Path, id: &str) -> Option<PathBuf> {
+    if !is_session_id(id) {
+        return None;
+    }
+    let suffix = format!("_{id}.jsonl");
+    entries(folder)
+        .map(|(path, _)| path)
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&suffix))
+        })
 }
 
 /// Kimi Code's sessions for `cwd`: (id, last written).

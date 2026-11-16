@@ -781,6 +781,7 @@ pub(crate) fn agent_notice(core: &Core, pane: PaneId, agent: AgentKind, notice: 
     let name = match agent {
         AgentKind::Claude => "claude",
         AgentKind::Codex => "codex",
+        AgentKind::Pi => crate::agent::PI_PROGRAM,
     }
     .to_owned();
     let (kind, title, body) = match notice {

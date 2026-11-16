@@ -791,6 +791,11 @@ impl DaemonClient {
             .daemon_offers(proto::MoreDaemonFeatures::SPLIT_RATIOS)
     }
 
+    /// Whether the helper launches pi, reports pi panes as agents and serves their Chat.
+    pub fn starts_pi(&self) -> bool {
+        self.inner.daemon_offers(proto::MoreDaemonFeatures::PI_AGENT)
+    }
+
     /// Starts following a pane's output. Kept across reconnects.
     pub fn subscribe(&self, pane_id: u64) {
         self.inner.subscribe(PaneId(pane_id));

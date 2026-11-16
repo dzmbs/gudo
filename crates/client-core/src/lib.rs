@@ -883,6 +883,18 @@ impl Client {
     /// returned id.
     pub fn op(&self, op: LayoutOp) -> u64 {
         let op_id = self.inner.next_op.fetch_add(1, Ordering::Relaxed);
+        let launches_pi = op.launch().and_then(proto::PaneLaunch::agent) == Some(AgentKind::Pi);
+        // An older daemon cannot decode the variant and would drop the connection.
+        if launches_pi && !self.daemon_offers(proto::MoreDaemonFeatures::PI_AGENT) {
+            self.inner.emit(ClientEvent::OpResult {
+                op_id,
+                outcome: OpOutcome::Failed {
+                    code: proto::OpError::Invalid,
+                    message: "Update the helper on this host to start pi.".into(),
+                },
+            });
+            return op_id;
+        }
         self.inner.send(ClientCtl::Op { op_id, op });
         op_id
     }

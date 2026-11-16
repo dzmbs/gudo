@@ -29,20 +29,25 @@ pub(crate) async fn request(
         let mut gate = lock(&entry.pane.agent_input_gate);
         // Same input -> runtime order as hook admission. A known question must use its signed
         // decision route, not a pasted prompt interpreted by the dialog as an approval key.
-        let (kind, session) = {
-            let agent = lock(&entry.agent);
-            let agent = agent.as_ref().ok_or_else(unavailable)?;
-            if agent.is_blocked() {
-                return Err(unavailable());
-            }
-            (
+        let (kind, session) = match lock(&entry.agent).as_ref() {
+            Some(agent) if agent.is_blocked() => return Err(unavailable()),
+            Some(agent) => (
                 agent.kind(),
                 agent
                     .session()
                     .native_id
                     .as_ref()
                     .map(|id| id.as_str().to_owned()),
-            )
+            ),
+            None => (
+                crate::agent_driver::chat_agent(&entry)
+                    .filter(|kind| *kind == proto::AgentKind::Pi)
+                    .ok_or_else(unavailable)?,
+                lock(&entry.record)
+                    .resumable
+                    .as_ref()
+                    .and_then(|agent| agent.session_id.clone()),
+            ),
         };
         if !driver(kind)
             .current_capabilities(core, pane)

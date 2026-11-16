@@ -101,6 +101,7 @@ impl Paths {
         let dir = match agent {
             AgentKind::Claude => &self.claude_dir,
             AgentKind::Codex => &self.codex_home,
+            AgentKind::Pi => return false,
         };
         dir.is_dir() || self.which(crate::agent::program(agent)).is_some()
     }
@@ -357,6 +358,7 @@ impl Usage {
             let local_usage = match agent {
                 AgentKind::Claude => claude_lines.get(&id).cloned(),
                 AgentKind::Codex => local.codex.get(&key).cloned().flatten(),
+                AgentKind::Pi => None,
             };
             if system && !installed && local_usage.is_none() {
                 continue;
@@ -466,6 +468,7 @@ impl Usage {
                 Ok(env) => match agent {
                     AgentKind::Claude => cli::claude(&env).await,
                     AgentKind::Codex => cli::codex(&env).await,
+                    AgentKind::Pi => Err("pi reports no plan usage".to_owned()),
                 },
             },
         };
@@ -584,6 +587,7 @@ fn unknown(agent: AgentKind, errors: &[String], pending: bool) -> AgentUsage {
     let mut note = match agent {
         AgentKind::Claude => "Claude Code reports its limits for Pro and Max plans.".to_owned(),
         AgentKind::Codex => "Codex reports its limits when signed in with ChatGPT.".to_owned(),
+        AgentKind::Pi => "pi reports no plan limits.".to_owned(),
     };
     for error in errors {
         note.push(' ');
@@ -617,6 +621,7 @@ fn agent_order(agent: AgentKind) -> u8 {
     match agent {
         AgentKind::Claude => 0,
         AgentKind::Codex => 1,
+        AgentKind::Pi => 2,
     }
 }
 
