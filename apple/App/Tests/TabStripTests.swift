@@ -214,6 +214,17 @@ final class TabStripTests: XCTestCase {
         XCTAssertLessThan(fill(before: quarterChip / 2), whole * 0.6, "half way into the fade the chip is half gone")
         XCTAssertLessThan(fill(before: DS.Space.xs), whole * 0.2, "by the edge it has all but gone")
         XCTAssertGreaterThan(fill(before: quarterChip + 2), whole * 0.9, "the fade is no longer than it needs to be")
+
+        // The + stands clear of the strip's edge, with a gap of its own after the fade.
+        let middle = Int((cut.midY) * scale)
+        let gapBackground = try XCTUnwrap(bitmap.colorAt(x: Int((shown.maxX + 1) * scale), y: middle))
+        let plusInk = stride(from: shown.maxX + 1, to: shown.maxX + 40, by: 0.5).first { x in
+            guard let color = bitmap.colorAt(x: Int(x * scale), y: middle) else { return false }
+            return abs(color.redComponent - gapBackground.redComponent) + abs(color.greenComponent - gapBackground.greenComponent)
+                + abs(color.blueComponent - gapBackground.blueComponent) > 0.15
+        }
+        let gap = try XCTUnwrap(plusInk, "the + after the strip") - shown.maxX
+        XCTAssertGreaterThanOrEqual(gap, DS.Space.l, "the + keeps its own gap after the strip's edge")
     }
 
     /// A chip cut by the leading edge leaves clear space next to what stands before the strip
@@ -255,6 +266,9 @@ final class TabStripTests: XCTestCase {
         XCTAssertGreaterThan(whole, 0.02, "the selected chip's fill shows after the fade")
         XCTAssertLessThan(fill(after: DS.Space.xs), whole * 0.05, "nothing of the chip right after the edge")
         XCTAssertLessThan(fill(after: DS.Space.s - 1), whole * 0.05, "nothing of the chip right after the edge")
+        let rampStart = DS.Space.s
+        let ramp = DS.Size.tabStripFade - rampStart
+        XCTAssertLessThan(fill(after: rampStart + ramp / 4), whole * 0.15, "a quarter into the fade a glyph is all but gone, not a sliver")
         XCTAssertGreaterThan(fill(after: DS.Size.tabMinWidth / 4 + 2), whole * 0.9, "the fade is no longer than it needs to be")
     }
 

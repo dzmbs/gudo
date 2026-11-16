@@ -514,7 +514,9 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
 - Tab strip: one scrolling row of chips, leading-aligned, each as wide as its title between
   120 and 240 pt, so a few tabs leave the rest of the strip empty and adding a tab never moves
   the chips already there. The selected chip is always scrolled whole into view by the least
-  travel; an edge with chips running past it fades over 16 pt. The selected chip has its own
+  travel; an edge with chips running past it fades over a quarter of the narrowest chip, clear
+  for 8 pt at the edge and easing in, so a cut chip never leaves a sliver of a glyph; the +
+  keeps an 8 pt gap of its own after the strip. The selected chip has its own
   fill (no sliding pill) and is the only marker: no project colour under chips (the tooltip
   names the project). A tab's terminal replaces the shown one once it has drawn its screen at
   its own grid (at most 300 ms), never a blank terminal, a grid at the size it started at or

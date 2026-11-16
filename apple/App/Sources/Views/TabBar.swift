@@ -50,8 +50,9 @@ struct TabBar: View {
                 }
                 .onChange(of: active, initial: true) { _, ref in reveal(ref, with: scroller) }
             }
+            // Its own gap after the strip's clear edge, so a cut chip never runs up to it.
             NewTabButton(workspace: workspace)
-                .padding(.leading, DS.Space.xs)
+                .padding(.leading, DS.Space.s)
         }
         .buttonStyle(.bar)
         .padding(.horizontal, inTitleBar ? 0 : DS.Space.row)
@@ -208,24 +209,35 @@ private extension View {
     }
 }
 
-/// One edge of the strip's mask: opaque, or clear for `DS.Space.s` at the edge, then fading in.
+/// One edge of the strip's mask: opaque, or clear for `DS.Space.s` at the edge, then fading in
+/// along an ease-in curve: a cut chip's glyphs near the edge are all but gone, not a faint sliver.
 private struct StripEdgeFade: View {
     let isFading: Bool
     let towards: HorizontalEdge
 
+    /// Steps of the fade: enough that the curve reads smooth.
+    private static let steps = 6
+
     var body: some View {
-        // style-exempt: a mask, only its alpha counts
-        let opaque = Color.black
-        let edge = isFading ? Color.clear : opaque
         LinearGradient(
-            stops: [
-                .init(color: edge, location: 0),
-                .init(color: edge, location: DS.Space.s / DS.Size.tabStripFade),
-                .init(color: opaque, location: 1),
-            ],
+            stops: Self.stops(fading: isFading),
             startPoint: towards == .leading ? .leading : .trailing,
             endPoint: towards == .leading ? .trailing : .leading)
             .frame(width: DS.Size.tabStripFade)
+    }
+
+    /// The same stops either way, so the mask eases between opaque and faded.
+    private static func stops(fading: Bool) -> [Gradient.Stop] {
+        let clear = DS.Space.s / DS.Size.tabStripFade
+        let ramp = (0...steps).map { step -> Gradient.Stop in
+            let progress = Double(step) / Double(steps)
+            return .init(color: ink(fading ? progress * progress : 1), location: clear + (1 - clear) * progress)
+        }
+        return [.init(color: ink(fading ? 0 : 1), location: 0)] + ramp
+    }
+
+    private static func ink(_ alpha: Double) -> Color {
+        Color.black.opacity(alpha) // style-exempt: a mask, only its alpha counts
     }
 }
 
