@@ -197,6 +197,16 @@ extension AgentKind {
         default: self = .other
         }
     }
+
+    /// What the helper starts for it; nil for an agent it does not launch.
+    var launched: GudoCore.AgentKind? {
+        switch self {
+        case .claude: .claude
+        case .codex: .codex
+        case .pi: .pi
+        case .other: nil
+        }
+    }
 }
 
 /// Status glyphs for the panes of the window's daemon (`PaneReport`: agent integrations, else

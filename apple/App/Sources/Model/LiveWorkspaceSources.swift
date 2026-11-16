@@ -600,7 +600,7 @@ final class LiveAgentFeed: AgentFeed {
             let made = try await repoAPI.taskCreate(task: TaskCreate(
                 repo: repo, sessionId: session, name: request.name?.nonEmpty ?? FriendlyName.make(avoiding: used),
                 branch: request.branch?.nonEmpty, base: nil,
-                agent: request.shell ? nil : (request.agent == .codex ? .codex : .claude), prompt: nil))
+                agent: request.shell ? nil : request.agent.launched, prompt: nil))
             window?.reveal(host: request.hostId, pane: made.paneId)
             if !request.shell, let prompt = request.prompt.nonEmpty {
                 let pane = made.paneId
@@ -632,7 +632,7 @@ final class LiveAgentFeed: AgentFeed {
         // typed through the composer path once the agent reports it is ready. A tab of its own,
         // in the focused pane's directory.
         let launched = try await api.launchAgentPane(launch: AgentLaunch(
-            splitFrom: splitFrom.rawValue, agent: request.agent == .codex ? .codex : .claude, axis: .horizontal,
+            splitFrom: splitFrom.rawValue, agent: request.agent.launched ?? .claude, axis: .horizontal,
             worktree: worktree, cwd: worktree == nil ? directory : nil, resume: nil,
             prompt: nil, submit: true, readyTimeoutMs: 30_000,
             newTabIn: daemon.layout.sessionId, account: request.account))

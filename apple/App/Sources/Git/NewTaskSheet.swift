@@ -9,12 +9,13 @@ struct NewTaskSheet: View {
     let feed: any AgentFeed
 
     enum Runner: String, CaseIterable, Identifiable {
-        case claude, codex, shell
+        case claude, codex, pi, shell
         var id: String { rawValue }
         var title: String {
             switch self {
             case .claude: "Claude Code"
             case .codex: "Codex"
+            case .pi: "pi"
             case .shell: "Shell"
             }
         }
@@ -22,6 +23,7 @@ struct NewTaskSheet: View {
             switch self {
             case .claude: AgentKind.claude.systemImage
             case .codex: AgentKind.codex.systemImage
+            case .pi: AgentKind.pi.systemImage
             case .shell: "terminal"
             }
         }
@@ -29,8 +31,15 @@ struct NewTaskSheet: View {
             switch self {
             case .claude: .claude
             case .codex: .codex
+            case .pi: .pi
             case .shell: nil
             }
+        }
+
+        /// What a host can start: pi only where its helper launches it
+        /// (`MoreDaemonFeatures::PI_AGENT`); an older one could not read the request.
+        static func offered(startsPi: Bool) -> [Runner] {
+            allCases.filter { $0 != .pi || startsPi }
         }
     }
 
@@ -54,11 +63,13 @@ struct NewTaskSheet: View {
     private var hosts: [LaunchHost] { feed.launchHosts }
     private var host: LaunchHost? { hosts.first { $0.id == hostID } }
     private var daemon: DaemonConnection? { hostID.flatMap { model.app.hosts.connection($0) as? DaemonConnection } }
+    private var runners: [Runner] { Runner.offered(startsPi: daemon?.workspace.startsPi == true) }
+    /// pi runs under the host's own account only.
     private var accountAgent: AccountAgent? {
         switch runner {
         case .claude: .claude
         case .codex: .codex
-        case .shell: nil
+        case .pi, .shell: nil
         }
     }
     private var accountBook: AccountBook? { hostID.flatMap { model.accountBook(onGroup: $0) } }
@@ -138,7 +149,7 @@ struct NewTaskSheet: View {
                 // On the page, not in a card: a segmented control is a control, not a row.
                 #if os(iOS)
                 Section {
-                    RunnerPicker(selection: $runner, missing: missingRunners)
+                    RunnerPicker(selection: $runner, runners: runners, missing: missingRunners)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets())
                 }
@@ -268,7 +279,7 @@ struct NewTaskSheet: View {
             #if os(macOS)
             // A Mac form draws a card behind every section: the picker sits on the page above it.
             .safeAreaInset(edge: .top, spacing: 0) {
-                RunnerPicker(selection: $runner, missing: missingRunners)
+                RunnerPicker(selection: $runner, runners: runners, missing: missingRunners)
                     .padding(.horizontal, DS.Space.xl)
                     .padding(.top, DS.Space.m)
             }
@@ -297,6 +308,9 @@ struct NewTaskSheet: View {
                 worktree = repo != nil
             }
             .task(id: hostID) { await checkInstalls() }
+            .onChange(of: runners) { _, offered in
+                if !offered.contains(runner) { runner = .claude }
+            }
             // The host's repositories can arrive after the sheet opened: one is picked, but
             // New Worktree stays as it opened rather than adding a section under the pointer.
             .onChange(of: repos.map(\.path)) { previousPaths, paths in
@@ -341,7 +355,7 @@ struct NewTaskSheet: View {
         isStarting = true
         failure = nil
         let request = AgentLaunchRequest(
-            agent: runner == .codex ? .codex : .claude, hostId: host.id,
+            agent: runner.agent ?? .claude, hostId: host.id,
             prompt: runner == .shell ? "" : prompt.trimmingCharacters(in: .whitespacesAndNewlines),
             worktree: worktree, branch: branch.trimmingCharacters(in: .whitespaces).nonEmpty,
             name: worktree ? name.trimmingCharacters(in: .whitespaces) : nil,
@@ -371,12 +385,13 @@ struct NewTaskSheet: View {
 /// sheet presents and the keyboard rises.
 private struct RunnerPicker: View {
     @Binding var selection: NewTaskSheet.Runner
+    var runners: [NewTaskSheet.Runner]
     var missing: Set<NewTaskSheet.Runner> = []
     @Namespace private var pill
 
     var body: some View {
         HStack(spacing: 0) {
-            ForEach(NewTaskSheet.Runner.allCases) { runner in
+            ForEach(runners) { runner in
                 let selected = runner == selection
                 Button {
                     withAnimation(DS.Motion.standard) { selection = runner }
