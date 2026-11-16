@@ -92,9 +92,17 @@ extension WindowModel {
     }
 
     /// Tiled panes in reading order, then each window's front to back; a minimized window comes
-    /// out when reached.
+    /// out when reached. A tab with pages, editors or tools beside its terminals visits every
+    /// leaf in reading order.
     func focusPane(offset: Int) {
-        guard activeMixedTab == nil, let workspace, let tab = workspace.session.activeTab else { return }
+        if let mixed = activeMixed {
+            let leaves = mixed.visibleLeaves
+            guard let index = leaves.firstIndex(of: mixed.focusedLeaf), leaves.count > 1 else { return }
+            let next = leaves[(index + offset + leaves.count) % leaves.count]
+            withAnimation(DS.Motion.standard) { focusLeaf(next, inMixedTab: mixed.id) }
+            return
+        }
+        guard let workspace, let tab = workspace.session.activeTab else { return }
         let tiled = workspace.session.tiledRoot(of: tab)?.panes ?? []
         let floating = floatsHidden ? [] : visibleWindows(in: workspace).flatMap(\.panes)
         let order = tiled + floating

@@ -52,6 +52,28 @@ final class ToolLeavesTests: XCTestCase {
         XCTAssertEqual(model.activeMixed?.leaves.count, 3)
     }
 
+    func testFocusNextPaneVisitsEveryLeafOfAMixedTab() throws {
+        let model = WindowModel(app: .shared)
+        model.startMixedTabs()
+        var session = Session()
+        session.apply(.split(PaneId(1), .horizontal))
+        let id = model.composites.make(fromHost: "h1", tab: session.tabs[0])
+        model.activeMixedTab = id
+        _ = model.composites.addTool(ToolMember(hostId: "h1", tool: .files), to: id)
+        let leaves = try XCTUnwrap(model.activeMixed?.leaves)
+        XCTAssertEqual(leaves.count, 3)
+        model.focusLeaf(leaves[0], inMixedTab: id)
+
+        var visited: [PaneId] = []
+        for _ in leaves {
+            model.focusPane(offset: 1)
+            visited.append(try XCTUnwrap(model.activeMixed?.focusedLeaf))
+        }
+        XCTAssertEqual(visited, [leaves[1], leaves[2], leaves[0]], "⌘] reaches the tool leaf and wraps")
+        model.focusPane(offset: -1)
+        XCTAssertEqual(model.activeMixed?.focusedLeaf, leaves[2], "⌘[ goes back")
+    }
+
     /// Errors become calm states; the host's own words are a detail, never the message.
     func testProblemsAreClassifiedNotEchoed() {
         let git = "fatal: not a git repository (or any of the parent directories): .git"
