@@ -105,8 +105,8 @@ final class HostSignIn: NSObject, ASWebAuthenticationPresentationContextProvidin
                     Task { @MainActor [weak self] in self?.callbackArrived() }
                 })
         } catch {
-            // Taken here (a simulator shares the host's loopback): the browser reaches that
-            // port directly; the watch below still sees the sign-in end.
+            // Taken here (a simulator shares the host's loopback) or the host is This Mac: the
+            // browser reaches that port directly; the watch below still sees the sign-in end.
             AppModel.log.info("sign-in port \(self.port) not claimed: \(String(describing: error), privacy: .public)")
         }
         let session = ASWebAuthenticationSession(url: url, callback: .customScheme("gudo-signin")) { [weak self] _, _ in

@@ -17,6 +17,8 @@ import WebKit
 /// - Only ports opened for the browser reach the host: dev servers opened from the app, pages
 ///   the browser navigated to, sign-in callbacks, the host's forwards and ports its panes
 ///   listen on. A page cannot reach the host's other loopback services.
+/// - This Mac's helper shares this device's loopback, so the router never serves it: its
+///   listener would be the host's own port, and each request would be forwarded back into it.
 ///
 /// When the port is in use here or the proxy cannot start, `page` returns nil and the caller
 /// forwards to another port instead. `-browserProxy NO` forces that.
@@ -25,6 +27,7 @@ final class DevServerRouting {
     static let shared = DevServerRouting()
 
     var isEnabled = LaunchArguments().string(forKey: "browserProxy") != "NO"
+    var isThisDevice: (_ hostId: String) -> Bool = { AppModel.shared.hosts.record($0)?.isThisDevice == true }
 
     private let router = LoopbackRouter()
     private var hosts: [String: HostRoute] = [:]
@@ -89,7 +92,7 @@ final class DevServerRouting {
         guard isEnabled, let route = await route(hostId, client: client) else { return nil }
         let url = Self.pageURL(for: port)
         route.openedPorts.insert(port.port)
-        if let host = url.host(), DevServerNames.isLoopbackLiteral(host) {
+        if let host = url.host(), DevServerNames.isLoopbackLiteral(host), !isThisDevice(hostId) {
             // TLS carries no route cookie the router could read.
             if url.scheme == "https", !Self.webKitProxies(host) { return nil }
             do {
@@ -131,6 +134,7 @@ final class DevServerRouting {
     ) async throws -> String {
         guard let route = await route(hostId, client: client) else { throw HostError.notConnected }
         route.openedPorts.insert(port)
+        guard !isThisDevice(hostId) else { throw DevServerProxyError.portInUse(port) }
         let token = "signin-" + UUID().uuidString.lowercased()
         try await router.claim(port: port, token: token, forward: { [weak self] hostPort in
             guard let self else { throw HostError.notConnected }
