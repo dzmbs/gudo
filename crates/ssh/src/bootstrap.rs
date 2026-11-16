@@ -309,7 +309,8 @@ pub async fn bootstrap(
             .upload_reporting(&format!("~/{staged}"), &binary, 0o755, encoding, &|sent| {
                 step(BootstrapStep::Uploading { size, sent });
             })
-            .await?;
+            .await
+            .map_err(|error| out_of_space(error, &relative_path, size))?;
         step(BootstrapStep::Uploading {
             size: report.size,
             sent: report.sent,
@@ -476,6 +477,22 @@ async fn install_staged(
     Ok(None)
 }
 
+/// A full disk under the install, said as such rather than as the failed command's words.
+fn out_of_space(error: SshError, relative_path: &str, size: u64) -> SshError {
+    match &error {
+        SshError::Remote { stderr, .. } if stderr.contains("No space left on device") => {
+            let folder = relative_path
+                .rsplit_once('/')
+                .map_or("", |(folder, _)| folder);
+            SshError::Bootstrap(format!(
+                "the host has no room for the helper: it needs about {} MB free in ~/{folder}",
+                size.div_ceil(1_000_000)
+            ))
+        }
+        _ => error,
+    }
+}
+
 fn cannot_run_message(relative_path: &str, output: &str) -> String {
     let folder = relative_path
         .rsplit_once('/')
@@ -618,6 +635,28 @@ mod tests {
             error.to_string().contains("unsupported platform FreeBSD"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_full_disk_is_named_with_the_room_needed() {
+        let full = SshError::Remote {
+            status: "exit 1".into(),
+            stderr: "gzip: stdout: No space left on device".into(),
+        };
+        let error = out_of_space(full, ".local/bin/gudo-hostd", 37_940_960);
+        assert_eq!(
+            error.to_string(),
+            "bootstrap: the host has no room for the helper: it needs about 38 MB free in \
+             ~/.local/bin"
+        );
+        let other = SshError::Remote {
+            status: "exit 1".into(),
+            stderr: "mkdir: Permission denied".into(),
+        };
+        assert!(matches!(
+            out_of_space(other, ".local/bin/gudo-hostd", 1),
+            SshError::Remote { .. }
+        ));
     }
 
     #[test]
