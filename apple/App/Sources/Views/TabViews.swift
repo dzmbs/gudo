@@ -222,6 +222,13 @@ extension View {
         modifier(SidebarRowStyle(selected: selected))
     }
 
+    /// A line that comes and goes inside a sidebar row. The native list sets the row's new height
+    /// at once, so the line lands with it: it fades in where it will rest and leaves at once,
+    /// never left half drawn at the row's new edge.
+    func sidebarRowLine() -> some View {
+        transition(.asymmetric(insertion: .opacity.animation(DS.Motion.standard), removal: .identity))
+    }
+
     /// A section title in the sidebar, aligned with the rows' text.
     func sidebarHeader() -> some View {
         padding(.horizontal, DS.Space.l + DS.Space.xs)
@@ -934,6 +941,7 @@ struct TabRow: View {
             since: model.agentSince(ofPane: tab.focused, onGroup: group.id))
         let informative = status == nil ? context.flatMap { Self.isInformative($0, title: title) ? $0 : nil } : nil
         let host = showsHost ? group.name : nil
+        let hasSubtitle = status != nil || informative != nil || running != nil || worktree != nil || host != nil
         let trailing = TabRowAccessory.pick(
             isSelecting: model.isSelectingTabs, isSelected: model.tabSelection.contains(ref),
             shortcut: CommandKeyState.shared.held ? model.groups.shortcutNumber(of: ref) : nil, state: state,
@@ -967,14 +975,15 @@ struct TabRow: View {
                     }
                     // Nothing to say under the title: one line, centred on the icon, not a
                     // blank second line that pushes the title up.
-                    if status != nil || informative != nil || running != nil || worktree != nil || host != nil {
+                    if hasSubtitle {
                         // In a project it leads with the host, which the section header doesn't name.
                         TabSubtitle(context: informative, running: running, worktree: worktree, host: host, status: status,
                                     program: program.isShell ? nil : program.displayName)
-                            .motionTransition(.fade)
+                            .sidebarRowLine()
                     }
                 }
-                .animation(DS.Motion.standard, value: status != nil || informative != nil || running != nil)
+                // The row's height changes at once; the title moves with it, never after it.
+                .animation(nil, value: hasSubtitle)
                 Spacer(minLength: DS.Space.xs)
                 accessory(trailing, worktree: worktree, workspace: workspace, isActive: isActive)
             }

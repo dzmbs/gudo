@@ -199,6 +199,7 @@ struct WorktreeRow: View {
     var body: some View {
         let pr = worktree.visiblePR
         let port = model.git.port(of: worktree, host: host)
+        let hasSubtitle = worktree.subtitle != nil || port != nil
         Button {
             model.git.openTab(in: worktree.path, name: worktree.name, host: host)
         } label: {
@@ -211,7 +212,7 @@ struct WorktreeRow: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if worktree.subtitle != nil || port != nil {
+                    if hasSubtitle {
                         HStack(spacing: DS.Space.xs) {
                             if let subtitle = worktree.subtitle {
                                 Text(subtitle).truncationMode(.middle)
@@ -226,8 +227,10 @@ struct WorktreeRow: View {
                         .font(SidebarFont.subtitle)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .lineLimit(1)
+                        .sidebarRowLine()
                     }
                 }
+                .animation(nil, value: hasSubtitle)
                 Spacer(minLength: DS.Space.xs)
                 TabGitBadges(worktree: worktree, selected: false)
             }
