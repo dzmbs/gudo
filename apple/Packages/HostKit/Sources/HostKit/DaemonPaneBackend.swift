@@ -924,6 +924,9 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
     }
 
     public func terminate() {
+        if let client = client as? any AssistClient {
+            AssistRouter.shared(for: client).followForeground(pane.rawValue, tap: tap, nil)
+        }
         let (last, handover) = router.remove(pane.rawValue, tap: tap)
         if last {
             client.unsubscribe(paneId: pane.rawValue)

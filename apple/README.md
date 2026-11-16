@@ -147,8 +147,8 @@ when a hardware keyboard is attached (`-keyBar.fullWithHardwareKeyboard YES` kee
 visuals come from `KeyBarStyle`.
 
 Backend hooks (additive, in `App/Sources/Panes/PaneBackend.swift`): `PredictionFeed` and
-`ForegroundProgramReporting` (picks the key bar profile; the title stands in until the daemon reports
-the program).
+`ForegroundProgramReporting` (the daemon's foreground program with its argv, for the pane's mark
+and key bar profile; the title stands in until the daemon reports the program).
 
 Bench (`swift run -c release TerminalBench`, 112×35 at 2x, M-series Mac): typing 0.03 ms/frame build;
 sprite screen full redraw 0.61 ms avg / 0.66 ms p99; selection drag (whole viewport dirty every frame)

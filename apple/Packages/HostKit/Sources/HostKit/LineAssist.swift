@@ -22,12 +22,25 @@ public protocol LineAssist: AnyObject, Sendable {
     func decide(requestId: UInt64, optionId: UInt32)
 }
 
+/// A client that pushes assist events (one listener) and keeps each pane's last foreground
+/// program.
+nonisolated public protocol AssistClient: AnyObject, Sendable {
+    func setAssistListener(listener: any AssistListener)
+    func foreground(paneId: UInt64) -> Foreground?
+    /// Asks the daemon for the pane's foreground program and prompt state now.
+    func paneAssist(paneId: UInt64) async throws -> PaneAssist
+}
+
+extension DaemonClient: AssistClient {}
+
 /// Routes one client's assist pushes to the panes watching them (a client has one listener).
 nonisolated final class AssistRouter: AssistListener {
     private let sinks = Mutex<[UInt64: @Sendable (PromptState) -> Void]>([:])
+    /// Per pane, each tap following its foreground program.
+    private let foregroundSinks = Mutex<[UInt64: [UInt64: @Sendable (ForegroundProgram?) -> Void]]>([:])
 
     /// The router installed on `client`, created on first use.
-    static func shared(for client: DaemonClient) -> AssistRouter {
+    static func shared(for client: any AssistClient) -> AssistRouter {
         registry.withLock { routers in
             let key = ObjectIdentifier(client)
             routers = routers.filter { $0.value.client != nil }
@@ -40,7 +53,7 @@ nonisolated final class AssistRouter: AssistListener {
     }
 
     private struct Entry {
-        weak var client: DaemonClient?
+        weak var client: (any AssistClient)?
         let router: AssistRouter
     }
 
@@ -50,10 +63,47 @@ nonisolated final class AssistRouter: AssistListener {
         sinks.withLock { $0[pane] = sink }
     }
 
+    func followForeground(_ pane: UInt64, tap: UInt64, _ sink: (@Sendable (ForegroundProgram?) -> Void)?) {
+        foregroundSinks.withLock { $0[pane, default: [:]][tap] = sink }
+    }
+
     func onAssistEvent(event: AssistEvent) {
-        guard case .prompt(let state) = event else { return }
-        let sink = sinks.withLock { $0[state.paneId] }
-        sink?(state)
+        switch event {
+        case .prompt(let state):
+            let sink = sinks.withLock { $0[state.paneId] }
+            sink?(state)
+        case .foreground(let foreground):
+            let followers = foregroundSinks.withLock { $0[foreground.paneId].map { Array($0.values) } ?? [] }
+            for follower in followers { follower(ForegroundProgram(foreground)) }
+        }
+    }
+}
+
+nonisolated extension ForegroundProgram {
+    init(_ foreground: Foreground) {
+        self.init(name: foreground.name, arguments: foreground.argv)
+    }
+}
+
+/// The daemon samples each pane's foreground process group and pushes a change once it held
+/// for a moment, so a prompt's brief `git` never reaches the marks. Pushes only say what
+/// changed: a pane this connection has not heard about yet asks once.
+extension DaemonPaneBackend: ForegroundProgramReporting {
+    public func onForegroundProgramChange(_ onChange: @escaping @Sendable (ForegroundProgram?) -> Void) {
+        guard let client = client as? any AssistClient else { return }
+        let pane = pane.rawValue
+        AssistRouter.shared(for: client).followForeground(pane, tap: tap, onChange)
+        if let known = client.foreground(paneId: pane) {
+            onChange(ForegroundProgram(known))
+            return
+        }
+        Task {
+            // A push that came in meanwhile is newer than the answer.
+            guard let asked = try? await client.paneAssist(paneId: pane).foreground,
+                  client.foreground(paneId: pane).map({ $0 == asked }) ?? true
+            else { return }
+            onChange(ForegroundProgram(asked))
+        }
     }
 }
 

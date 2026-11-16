@@ -22,6 +22,8 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
     }
 
     let listener: any ClientEventListener
+    /// As client-core keeps them: the assist listener, each pane's last foreground, the panes asked about.
+    let assist = Mutex<(listener: (any AssistListener)?, known: [UInt64: Foreground], asked: [UInt64])>((nil, [:], []))
     private let recorded = Mutex<[Call]>([])
     private let nextOp = Atomic<UInt64>(1)
 
@@ -59,6 +61,24 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
     func reconnect() { record(.reconnect) }
     func suspend() { record(.suspend) }
     func paneText(paneId: UInt64) -> String? { nil }
+}
+
+extension FakeClient: AssistClient {
+    func setAssistListener(listener: any AssistListener) { assist.withLock { $0.listener = listener } }
+    func foreground(paneId: UInt64) -> Foreground? { assist.withLock { $0.known[paneId] } }
+    func paneAssist(paneId: UInt64) async throws -> PaneAssist {
+        assist.withLock { $0.asked.append(paneId) }
+        throw TestError("not answered")
+    }
+
+    /// The daemon pushes a pane's new foreground program.
+    func push(_ foreground: Foreground) {
+        let listener = assist.withLock { assist in
+            assist.known[foreground.paneId] = foreground
+            return assist.listener
+        }
+        listener?.onAssistEvent(event: .foreground(foreground: foreground))
+    }
 }
 
 extension FakeClient: LivenessClient {

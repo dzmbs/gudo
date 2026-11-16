@@ -29,6 +29,8 @@ final class Pane {
     private(set) var workingDirectory = ""
     /// The foreground program as the daemon reports it; nil when the backend cannot tell, and the title stands in.
     private(set) var foregroundProgram: String?
+    /// Its argument vector, argv0 first (`node …/pi`); empty when unknown.
+    private(set) var foregroundArguments: [String] = []
     /// Live, or showing stale content (dimmed, never blank) while its host reconnects.
     private(set) var connection = PaneConnection.live
     #if os(iOS)
@@ -229,10 +231,12 @@ final class Pane {
             _ = backend.requestHistory()
         }
         if let reporter = backend as? any ForegroundProgramReporting {
-            reporter.onForegroundProgramChange { [weak self] name in
+            reporter.onForegroundProgramChange { [weak self] program in
                 Task { @MainActor in
-                    self?.foregroundProgram = name
-                    self?.onContextChange?()
+                    guard let self, self.foregroundProgram != program?.name || self.foregroundArguments != program?.arguments ?? [] else { return }
+                    self.foregroundProgram = program?.name
+                    self.foregroundArguments = program?.arguments ?? []
+                    self.onContextChange?()
                 }
             }
         }

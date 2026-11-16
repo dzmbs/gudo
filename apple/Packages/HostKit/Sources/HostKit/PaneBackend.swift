@@ -155,11 +155,25 @@ nonisolated public protocol PredictionFeed: PaneBackend {
     func writeInput(_ bytes: UnsafeRawBufferPointer, inputSeq: UInt64)
 }
 
+/// The program in front of a pane's terminal, as its host reports it.
+nonisolated public struct ForegroundProgram: Hashable, Sendable {
+    /// "vim", "node", "claude".
+    public var name: String
+    /// Its argument vector, argv0 first; empty when the host could not read it.
+    public var arguments: [String]
+
+    public init(name: String, arguments: [String] = []) {
+        self.name = name
+        self.arguments = arguments
+    }
+}
+
 /// A backend that knows the pane's foreground program (the daemon's foreground process group on
-/// the PTY master), which picks the key bar profile. Without it the terminal title stands in.
+/// the PTY master), which picks the pane's mark and key bar profile. Without it the terminal
+/// title stands in.
 nonisolated public protocol ForegroundProgramReporting: PaneBackend {
-    /// `onChange` receives the program name (e.g. "vim", "claude"), or nil when unknown; any thread.
-    func onForegroundProgramChange(_ onChange: @escaping @Sendable (String?) -> Void)
+    /// `onChange` receives the program, or nil when unknown; any thread.
+    func onForegroundProgramChange(_ onChange: @escaping @Sendable (ForegroundProgram?) -> Void)
 }
 
 /// A backend one pane shares between windows (docs/APP-ARCHITECTURE.md "Windows"): each window's
