@@ -48,8 +48,8 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `sidebar` / `raised` / `overlay` | background + foreground at 5 / 10 / 15 % | sidebar; cards, popovers, palette glass tint, command blocks, fields; menus |
 | `groupedPage` / `groupedRow` | dark: base / raised; light: sidebar / base (iOS convention) | Settings, sheets' forms |
 | `text`, `textSecondary`, `textTertiary`, `textQuaternary` | foreground at 90 / 60 / 40 / 20 % | the hierarchical styles under `chromeContent()` (`.primary`, `.secondary`, `.tertiary` are these) |
-| `hoverFill` / `selectedFill` / `pressedFill` | foreground at 5 / 10 / 15 % | every interaction state through `ControlState` (below): rows, tabs, the selected tab pill, bar, quiet and form buttons, lit toggles |
-| `tile` | the ink at the selected level (10 %) over the row under it | a program mark's tile (`ProgramTile`); a selected row keeps its tile, its mark in full colour |
+| `hoverFill` / `selectedFill` / `pressedFill` | foreground at 4 / 12 / 16 % (hover a third of selection, so a row under the pointer never reads as a second selection) | every interaction state through `ControlState` (below): rows, tabs, the selected tab pill, bar, quiet and form buttons, lit toggles |
+| `tile` | the ink at the selected level (12 %) over the row under it | a program mark's tile (`ProgramTile`); a selected row keeps its tile, its mark in full colour |
 | `hairline` / `separator` / `border` | foreground at 10 / 15 / 20 % | one-physical-pixel lines (`Hairline`, `hairlineBorder`), the sidebar edge, tab strip rule |
 | `accent` | the cursor colour when it is a real colour (chroma ≥ 20, not the foreground, not a red/green/yellow); else the theme's blue (bright, or normal where the bright is grey) when it stands clear of both inks; else the blue/magenta/cyan farthest (CIEDE2000) from background and foreground. Then refined in OKLCH: chroma ≤ 0.13, lightness 0.48-0.62 (light chrome) / 0.68-0.86 (dark), hue kept, so a raw `#0000FF` never reaches the chrome | focus, toggles, links, the selected theme card |
 | `selection` / `onSelection` | the accent at 14 % (light) / 24 % (dark), translucent, under the normal text (≥ 4.5:1) | the selected row in the palette and lists (as in Spotlight) |
@@ -65,6 +65,7 @@ stay monochrome and keep their disabled look). UIKit/AppKit views read
 | `veil` | the terminal background at 40 % | over a saved screen, a pane being moved, a pane shielded while sketching |
 | `done` / `error` / `attention` / `working` / `info` | the theme's ANSI green / red / yellow / magenta / blue mixed 35 % toward the foreground (50 % would turn a dark theme's amber into cream); a slot that is grey or off-hue keeps Ghostty's hue. Where that falls short of 4.5:1, its OKLab lightness moves away from the surfaces with the hue kept | state glyphs and words, status chips (on their container, radius `chip`), diff counts, PR states |
 | `terminal`, `ansi(n)` | the theme itself | the grid, presence avatars |
+| `attentionMark` | the theme's own ANSI yellow (Ghostty's amber where the slot is grey or off-hue), unsoftened, its OKLab lightness moved only until it reads at 3:1 on every surface under every control state | the dot on a tab that called for you (`AttentionDot`, 8 pt): on its row, its chip and the sidebar toggle |
 | `bell` | `attention` at 50 % | bell border (Ghostty `BellBorderOverlay`, in the theme's own amber) |
 | split divider | background × 0.6 brightness (dark) / × 0.92 (light) | splits only (Ghostty `splitDividerColor`) |
 | unfocused dim | background at 30 % | over unfocused panes (`unfocused-split-opacity` 0.7) |
@@ -104,7 +105,7 @@ terminal background.
 Every number that changes (counts, countdowns, progress, ages, PR numbers, ⌘N, cols × rows) uses
 monospaced digits, through `meta`, `badge`, `overlay` or `.monospacedDigit()`.
 | `literal` / `literalSmall` | SF Mono callout / caption | paths, commands, hosts, code |
-| `sidebar(_:)` | Mac: the system sidebar's 11 / 13 / 15 pt rows (small, medium, large); touch: subheadline / body / title3 titles over footnote / subheadline / body | sidebar rows, at `sidebar-text-size` (Settings › Appearance: System, the default, follows System Settings › Appearance › Sidebar icon size on the Mac and is medium on touch; small, medium or large otherwise), applied live; the column widens or narrows with it (`widthExtra`) |
+| `sidebar(_:)` | Mac: the system sidebar's 11 / 13 / 15 pt rows (small, medium, large); touch: subheadline / body / title3 titles over footnote / subheadline / body. One scale: Agents and Hosts, tab rows and the project and host headers share the title size (headers in semibold, secondary ink), second lines a step under | sidebar rows, at `sidebar-text-size` (Settings › Appearance: System, the default, follows System Settings › Appearance › Sidebar icon size on the Mac and is medium on touch; small, medium or large otherwise), applied live; the column widens or narrows with it (`widthExtra`) |
 | `tabTitle` | callout (Mac), subheadline (touch) | tab strip |
 | `paletteQuery` | title3 light | command palette field (Ghostty 20 pt light on touch, 15 on the Mac) |
 | `keyCap` | 12 pt medium rounded | shortcut key caps (Ghostty `KeyCap`) |
@@ -313,10 +314,10 @@ own stroke or shadow (`StyleLintTests`).
 | `ListRow`, `SectionTitle`, `EmptyState`, `Hairline` | `Components/Rows.swift` | dense rows with fixed leading slot; empty states (glyph `title` large, 12, `title3` semibold + `subheadline` 4 apart, then the next step); one-physical-pixel lines |
 | `.rounded(_:)`, `hairlineBorder(_:style:)` | `Tokens/Shapes.swift` | the one continuous rounded rectangle; a one-physical-pixel edge inside any shape |
 | `HoverPopover`, `hoverPopoverFrame()` | `Components/HoverPopover.swift` | opens on pointer hover, closes 150 ms after the pointer leaves anchor and popover, tap toggles, a medium sheet on iPhone; system padding, 260-480 × ≤ 400 |
-| `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the selected state (the ink at 10 %) behind the glyph |
+| `.lit(_:)` | `Components/Glass.swift` | a toolbar toggle that is on: the selected state (the ink at 12 %) behind the glyph |
 | `BarButtonStyle` (`.bar`), `RowButtonStyle` (`.row`) | `Components/Glass.swift` | hover/press fills from `ControlState` (rows in its accent variant); iPad pointer highlight |
 | `QuietButtonStyle` (`.quiet`, `.quietProminent`) | `Components/Glass.swift` | verbs inside rows, banners and cards: no chrome, secondary ink (accent for `.quietProminent`), hover and press from `ControlState`, radius `field`. Glass stays on bars and floating surfaces |
-| `ControlState`, `controlFill(_:in:)`, `ControlFillShape`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | the one interaction scale every button style and hand-drawn control uses: rest clear, hover / selected / pressed the ink at 5 / 10 / 15 % easing with `micro`. The accent variant (`tint: .accent`) keeps hover neutral, presses with `accentDim` and selects with `selection`. A push button's bezel is its selected state. Disabled drops the fill (keeping a selection) and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why. No component has its own alphas |
+| `ControlState`, `controlFill(_:in:)`, `ControlFillShape`, `ChromeStyle.disabled` | `Components/ControlStates.swift` | the one interaction scale every button style and hand-drawn control uses: rest clear, hover / selected / pressed the ink at 4 / 12 / 16 % easing with `micro`. The accent variant (`tint: .accent`) keeps hover neutral, presses with `accentDim` and selects with `selection`. A push button's bezel is its selected state. Disabled drops the fill (keeping a selection) and steps the ink down once (never below `textTertiary`, never by opacity) and its tooltip says why. No component has its own alphas |
 | `fieldSurface(isFocused:)` | `Components/Fields.swift` | a text field on a page (Hosts quick connect): the raised surface, a hairline edge, the accent's edge and the `accentRing` halo while focused; typed literals in SF Mono, the prompt in prose |
 | `Surface`, `.surface(_:in:fill:interactive:)` | `Tokens/Surface.swift` | the one recipe for depth; see Surfaces |
 | `SwipeAction`, `SwipeActionTray` | `Components/SwipeActions.swift` | swipe actions beside hand-drawn rows, as `List` draws its own since iOS 26: a tinted circle per action (28-48 pt, as the row allows) with the symbol in the label that reads on it (`on(_:)`), the word under it on tall rows, the theme's signals in Mail's vocabulary (red ends, amber stops, blue goes, green completes, violet edits, bright yellow pins; never grey), scaling in with the reveal; armed, the outermost stretches into a capsule |
@@ -444,7 +445,7 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   the Mac, 0.6 on touch).
 - Projects first (like Safari's tab groups; docs/APP-ARCHITECTURE.md
   §23): a header with the project's colour dot (`ProjectColor`, the theme's ANSI hue softened like
-  the states), its name as a quiet section label (the section font in the secondary ink) and
+  the states), its name as a quiet section label (the sidebar's section font, the rows' size in semibold, in the secondary ink: a header is never smaller than the rows under it) and
   + New Terminal; its tabs under it, each naming its host on the second line. The colour stays in
   the dot: rows carry no stripe of it. Drop a tab
   on another to group them (the row lights in the colour), between rows to place it (the rows
@@ -489,8 +490,8 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   pressing of: the Select-mode check; ⌘N while ⌘ is held (1-8 by position, 9 for the last tab;
   numbers never show otherwise); "Needs you" or "Failed" as a pill; the panes chevron, on hover
   or while open (always on touch); the attention dot; the diff counts; presence avatars. Every
-  row has the slot so titles align. Selection is a 10 % fill of the theme's ink with radius 8
-  (hover 5 %), never the accent. Drag to reorder or group; context menu Rename / Close / New
+  row has the slot so titles align. Selection is a 12 % fill of the theme's ink with radius 8
+  (hover 4 %), never the accent; the selected row's title is the full ink, the others the main text level. Drag to reorder or group; context menu Rename / Close / New
   Project from Tab / Move to Project ▸. Under a group's tabs, its agents. Rows touch (no gap);
   the host's agent glyph opens its agents on hover (`HoverPopover`). On iPad the sidebar's bar
   holds Settings (⌘,) and New Tab only: no app name.
@@ -918,7 +919,7 @@ The daemon's repository snapshot (docs/DAEMON.md §5.12) drives four surfaces.
   6 pt apart: `+N −M` (caption, monospaced digits, palette green/red), `#PR` (caption
   `.secondary`), the agent glyph (none on the focused tab). Holding ⌘
   cross-fades the cluster to the row's ⌘N (0.15 s, no reflow). Rows: 6 pt vertical insets, title
-  and subtitle touching, selection a neutral 10 % fill at radius 8, and on the selected row every
+  and subtitle touching, selection a neutral 12 % fill at radius 8, and on the selected row every
   coloured glyph and count drops to `.secondary`. A worktree with one tab is that tab's row; with
   several, the tabs follow one level in (14 pt); with none it is quiet and a click opens a tab
   there. Context menu: New Tab Here, Open on GitHub, Run ▸, Copy Path, Copy Branch Name,

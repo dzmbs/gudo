@@ -59,6 +59,8 @@ public extension DS {
         /// Your turn: an agent waiting for input, a slow or reconnecting link (the theme's
         /// yellow). Amber, not red: red means broken.
         public static let attention = ChromeStyle(.attention)
+        /// A tab that called for you, as a dot: the theme's own amber, ≥ 3:1 on every row.
+        public static let attentionMark = ChromeStyle(.attentionMark)
         /// The theme's magenta. In rows a working agent is a neutral spinner.
         public static let working = ChromeStyle(.working)
         public static let blocked = attention
@@ -146,6 +148,7 @@ nonisolated public struct ChromeStyle: ShapeStyle, Hashable, Sendable {
         indirect case container(Token)
         indirect case on(Token)
         case done, error, attention, working, info
+        case attentionMark
         case text, textSecondary, textTertiary, textQuaternary
         case hoverFill, selectedFill, pressedFill
         case hairline, separator, border
@@ -224,6 +227,7 @@ nonisolated public extension ChromePalette {
         case .done: ChromeLayer(done)
         case .error: ChromeLayer(error)
         case .attention: ChromeLayer(attention)
+        case .attentionMark: ChromeLayer(attentionMark)
         case .working: ChromeLayer(working)
         case .info: ChromeLayer(info)
         case .text: ChromeLayer(foreground, Self.textLevels.primary)

@@ -45,6 +45,9 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public let attention: ThemeColor
     public let working: ThemeColor
     public let info: ThemeColor
+    /// A tab that called for you, as a dot: the theme's own amber, unsoftened, moved only as far as
+    /// it needs to stand off every row it sits on at 3:1.
+    public let attentionMark: ThemeColor
     /// The secondary and tertiary text strengths: 60 % and 40 %, raised (up to a cap that keeps
     /// them below the level above) where a mid-tone ink would leave them unreadable, as on most
     /// light themes: secondary toward 4.5:1, tertiary toward 3:1.
@@ -66,7 +69,8 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
     public static let levelCaps = (secondary: 0.78, tertiary: 0.62)
     /// A program's symbol dims the style it inherits, so it sits no heavier than the words beside it.
     public static let markStrength = 0.6
-    public static let fillLevels = (hover: 0.05, selected: 0.10, pressed: 0.15)
+    /// Hover a third of selection, so a row under the pointer never reads as a second selection.
+    public static let fillLevels = (hover: 0.04, selected: 0.12, pressed: 0.16)
     public static let lineLevels = (hairline: 0.10, separator: 0.15, border: 0.20)
     /// How far a state hue is mixed toward the foreground. At 50 % a dark theme's amber "needs
     /// you" is a cream barely apart from the text beside it (#F0C674 becomes #F8E3BA), so states
@@ -200,6 +204,7 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         attention = state(.attention)
         working = state(.working)
         info = state(.info)
+        attentionMark = Self.legible(Self.signalHue(.attention, of: theme), on: controlSurfaces, minimum: Self.minimumGlyphContrast)
     }
 
     public static let standard = ChromePalette(theme: .ghosttyDefault)
@@ -221,15 +226,18 @@ nonisolated public struct ChromePalette: Hashable, Sendable {
         }
     }
 
+    /// The theme's own colour for `signal`. A theme whose "green" is grey or not green (monochrome
+    /// themes) keeps the meaning with the default hue.
+    static func signalHue(_ signal: StateSignal, of theme: TerminalTheme) -> ThemeColor {
+        let hue = theme.ansiRGB(signal.slot.index)
+        let referenceHue = ThemeColor(hex: signal.slot.reference) ?? hue
+        return hue.chroma < 12 || hueDistance(hue.hue, referenceHue.hue) > 60 ? referenceHue : hue
+    }
+
     /// The theme's hue for `signal` softened toward the ink, then moved just far enough to read
     /// at 4.5:1 on every surface and, with a `tint`, on its own container over each.
     static func state(_ signal: StateSignal, of theme: TerminalTheme, ink: ThemeColor, on surfaces: [ThemeColor], tint: Double?) -> ThemeColor {
-        var hue = theme.ansiRGB(signal.slot.index)
-        let referenceHue = ThemeColor(hex: signal.slot.reference) ?? hue
-        // A theme whose "green" is grey or not green (monochrome themes) keeps the meaning
-        // with the default hue.
-        if hue.chroma < 12 || hueDistance(hue.hue, referenceHue.hue) > 60 { hue = referenceHue }
-        let mixed = ink.blended(with: hue, 1 - stateMix)
+        let mixed = ink.blended(with: signalHue(signal, of: theme), 1 - stateMix)
         return legible(mixed, on: surfaces, minimum: minimumTextContrast, tints: tint.map { [$0] } ?? [])
     }
 

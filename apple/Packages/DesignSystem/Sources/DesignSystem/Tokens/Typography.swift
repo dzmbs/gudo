@@ -81,7 +81,7 @@ public extension DS.Font {
 
         public var title: SwiftUI.Font { .system(size: points.title) }
         public var subtitle: SwiftUI.Font { .system(size: points.subtitle) }
-        public var section: SwiftUI.Font { .system(size: points.subtitle, weight: .semibold) }
+        public var section: SwiftUI.Font { .system(size: points.title, weight: .semibold) }
         public var project: SwiftUI.Font { .system(size: points.title, weight: .semibold) }
         public var number: SwiftUI.Font { .system(size: points.subtitle).monospacedDigit() }
         /// The program glyph's slot leading each tab row.
@@ -97,7 +97,7 @@ public extension DS.Font {
 
         public var title: SwiftUI.Font { .system(styles.title) }
         public var subtitle: SwiftUI.Font { .system(styles.subtitle) }
-        public var section: SwiftUI.Font { .system(styles.subtitle).weight(.semibold) }
+        public var section: SwiftUI.Font { .system(styles.title).weight(.semibold) }
         public var project: SwiftUI.Font { .system(styles.project).weight(.semibold) }
         public var number: SwiftUI.Font { .system(styles.subtitle).monospacedDigit() }
         public var icon: CGFloat { styles.icon }

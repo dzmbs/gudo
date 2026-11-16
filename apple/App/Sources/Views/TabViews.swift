@@ -127,12 +127,23 @@ struct WorkspaceSidebar: View {
         return Button {
             withAnimation(DS.Motion.standard) { model.destination = destination }
         } label: {
-            ListRow(Text(destination.title), titleFont: SidebarFont.title) {
+            // The tab rows' own measure: the glyph in their program slot, the title where theirs start.
+            HStack(spacing: DS.Space.gap10) {
                 Image(systemName: destination.systemImage)
+                    .font(SidebarFont.title)
                     .foregroundStyle(selected ? DS.Palette.text : DS.Palette.textSecondary)
-            } trailing: {
+                    .frame(width: SidebarFont.icon, height: SidebarFont.icon)
+                Text(destination.title)
+                    .font(SidebarFont.title)
+                    .foregroundStyle(SidebarRowInk.title(selected: selected))
+                    .lineLimit(1)
+                Spacer(minLength: DS.Space.xs)
                 trailing()
+                    .font(SidebarFont.number)
+                    .foregroundStyle(DS.Palette.textSecondary)
             }
+            .padding(.leading, DS.Space.xs)
+            .accessibilityElement(children: .combine)
             .sidebarRow(selected: selected)
         }
         .buttonStyle(.plain)
@@ -316,6 +327,12 @@ final class SidebarSize {
         #endif
         return DS.Font.SidebarSize(preference, systemMode: systemMode)
     }
+}
+
+/// A sidebar row's title: the full ink on the selected row, so selection reads in the words as
+/// well as the fill; the main text level elsewhere.
+enum SidebarRowInk {
+    static func title(selected: Bool) -> ChromeStyle { selected ? DS.Palette.ink : DS.Palette.text }
 }
 
 /// The highlight behind a selected sidebar row.
@@ -732,7 +749,9 @@ struct TabShortcut: View {
 /// A tab that called for the user out of sight, until it is shown.
 struct AttentionDot: View {
     var body: some View {
-        StateDot(.blocked, diameter: DS.Size.attentionDot)
+        Circle()
+            .fill(DS.Palette.attentionMark)
+            .frame(width: DS.Size.attentionDot, height: DS.Size.attentionDot)
             .accessibilityLabel("Wants attention")
     }
 }
@@ -916,7 +935,7 @@ struct TabRow: View {
                             // A path keeps its end: the directory you are in.
                             .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .tail)
                             .shimmering(state == .working, text: title)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(SidebarRowInk.title(selected: isActive && !model.isSelectingTabs))
                         if tab.zoomed != nil {
                             Image(systemName: "arrow.up.left.and.arrow.down.right")
                                 .font(.caption2)
@@ -1458,7 +1477,7 @@ struct SidebarToggle: View {
                 Image(systemName: "sidebar.leading")
                     .overlay(alignment: .topTrailing) {
                         if calls {
-                            StateDot(.blocked, diameter: DS.Size.attentionDot)
+                            AttentionDot()
                                 .offset(x: DS.Size.attentionDot / 2, y: -DS.Size.attentionDot / 2)
                                 .motionTransition(.pill())
                         }
