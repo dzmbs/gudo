@@ -713,9 +713,11 @@ private struct TerminalToolbar: ToolbarContent {
         }
         if showsStrip {
             ToolbarItem(placement: .navigation) {
-                TabBar(workspace: workspace, inTitleBar: true)
-                    .chromeContent()
-                    .frame(width: fit.room)
+                TitleBarHosted {
+                    TabBar(workspace: workspace, inTitleBar: true)
+                        .chromeContent()
+                }
+                .frame(width: fit.room, height: DS.Size.tab)
             }
             .sharedBackgroundVisibility(.hidden)
         } else {
@@ -893,6 +895,32 @@ struct TitleBarFit {
 }
 
 #if os(macOS)
+/// Content in a hosting view of its own inside a title bar item. The bar mirrors the controls of an
+/// item's SwiftUI content as menu items, context menus and symbol images included, and rebuilds
+/// them on every update of the item: for the tab strip, every chip and its menu naming every other
+/// tab, a second of main thread as the sidebar hides. Its own host's updates stay its own.
+struct TitleBarHosted<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> NSHostingView<AnyView> {
+        let host = NSHostingView(rootView: rooted(in: context.environment))
+        host.sizingOptions = []
+        return host
+    }
+
+    func updateNSView(_ host: NSHostingView<AnyView>, context: Context) {
+        host.rootView = rooted(in: context.environment)
+    }
+
+    private func rooted(in environment: EnvironmentValues) -> AnyView {
+        AnyView(content.environment(\.self, environment))
+    }
+}
+
 /// The trailing controls folded into one menu for a narrow window: the hosts, Split and the
 /// command palette.
 private struct TitleBarOverflowMenu: View {
