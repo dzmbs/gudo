@@ -312,6 +312,19 @@ final class MacSnapshotTests: XCTestCase {
             model.isSidebarShown = false
             for _ in 0..<9 { model.newTab() }
         }
+        try await window("tab-strip-overflow", screen: "single", size: CGSize(width: 1260, height: 520)) { model in
+            model.isSidebarShown = false
+            for _ in 0..<11 { model.newTab() }
+            let names = ["sage-glacier", "humble-quartz", "nimble-valley", "brisk-lynx", "hazel-tiger", "amber-finch",
+                         "misty-lagoon", "clear-koala", "build", "docs", "logs", "release"]
+            if let workspace = model.workspace {
+                for (tab, name) in zip(workspace.session.tabs, names) { workspace.apply(.rename(tab.id, name)) }
+            }
+            await self.pump(1)
+            model.focus(model.groups.tabs[0])
+            await self.pump(1)
+            model.focus(model.groups.tabs[4])
+        }
     }
 
     /// Projects across hosts in the sidebar, then a reorder recorded frame by frame: the rows

@@ -36,6 +36,24 @@ final class TabStripTests: XCTestCase {
         XCTAssertEqual(StripSpans.anchor(chip: 700...860, visible: visible), .trailing)
     }
 
+    /// A selected chip comes to rest clear of the fade at the edge it was brought in by, so the
+    /// fade never eats into a chip shown whole.
+    func testTheSelectedChipLandsClearOfTheEdgesFade() throws {
+        let visible: ClosedRange<CGFloat> = 300...800
+        let fade = DS.Size.tabStripFade
+        /// Where a chip `width` wide starts once scrolled to `anchor`.
+        func landing(_ anchor: UnitPoint, width: CGFloat) -> CGFloat {
+            visible.lowerBound + anchor.x * (visible.upperBound - visible.lowerBound - width)
+        }
+        let underTrailingFade = try XCTUnwrap(StripSpans.anchor(chip: 640...790, visible: visible, clear: fade))
+        XCTAssertEqual(landing(underTrailingFade, width: 150) + 150, visible.upperBound - fade, accuracy: 0.01)
+        let pastLeadingEdge = try XCTUnwrap(StripSpans.anchor(chip: 250...400, visible: visible, clear: fade))
+        XCTAssertEqual(landing(pastLeadingEdge, width: 150), visible.lowerBound + fade, accuracy: 0.01)
+        XCTAssertNil(StripSpans.anchor(chip: 400...560, visible: visible, clear: fade), "clear of both fades: stays")
+        let tooWide = try XCTUnwrap(StripSpans.anchor(chip: 700...1180, visible: visible, clear: fade))
+        XCTAssertEqual(tooWide, .trailing, "no room for the fade: to the edge")
+    }
+
     func testOnlyAResizeReScrolls() {
         XCTAssertFalse(StripSpans.isResize(from: 0...500, to: 120...620), "a scroll")
         XCTAssertTrue(StripSpans.isResize(from: 0...1300, to: 0...520))
@@ -151,6 +169,51 @@ final class TabStripTests: XCTestCase {
         let chip = try XCTUnwrap(frames.byTab[last])
         XCTAssertGreaterThanOrEqual(chip.minX, shown.minX - 1, "cut at the leading edge")
         XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "cut at the trailing edge")
+    }
+
+    /// A chip cut by the strip's trailing edge dissolves into it, over a quarter of the narrowest
+    /// chip, rather than ending in a hard line by the + button. Measured on the selected chip,
+    /// whose fill is solid where the title's glyphs come and go.
+    func testAChipCutByTheTrailingEdgeFadesOutOverAQuarterChip() async throws {
+        MockPaneStatus.fixture = [:]
+        defer { MockPaneStatus.fixture = nil }
+        let (model, workspace) = try await stripModel(tabs: 8)
+        defer { model.close() }
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 700, frames: frames)
+        defer { window.close() }
+        let selected = try XCTUnwrap(model.groups.tabs.last)
+        model.focus(selected)
+        _ = try await settled(frames, count: 8)
+        let host = try XCTUnwrap(window.contentView)
+        let scrollView = try XCTUnwrap(Self.scrollView(in: host))
+        let shown = scrollView.convert(scrollView.bounds, to: nil)
+        // The selected chip cut through its middle by the trailing edge.
+        let chip = try XCTUnwrap(frames.byTab[selected])
+        let clip = scrollView.contentView
+        clip.scroll(to: NSPoint(x: clip.bounds.minX + chip.midX - shown.maxX, y: clip.bounds.minY))
+        scrollView.reflectScrolledClipView(clip)
+        try await Task.sleep(for: .milliseconds(600))
+        let cut = try XCTUnwrap(frames.byTab[selected])
+        XCTAssertEqual(cut.midX, shown.maxX, accuracy: 1)
+
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+        let row = Int((cut.minY + 6) * scale)
+        let background = try XCTUnwrap(bitmap.colorAt(x: Int((shown.maxX + 1) * scale), y: row))
+        /// How far the fill stands out from the background `distance` points before the edge.
+        func fill(before distance: CGFloat) -> CGFloat {
+            guard let color = bitmap.colorAt(x: Int((shown.maxX - distance) * scale), y: row) else { return 0 }
+            return abs(color.redComponent - background.redComponent) + abs(color.greenComponent - background.greenComponent)
+                + abs(color.blueComponent - background.blueComponent)
+        }
+        let whole = fill(before: cut.width / 2 - 12)
+        XCTAssertGreaterThan(whole, 0.02, "the selected chip's fill shows before the fade")
+        let quarterChip = DS.Size.tabMinWidth / 4
+        XCTAssertLessThan(fill(before: quarterChip / 2), whole * 0.6, "half way into the fade the chip is half gone")
+        XCTAssertLessThan(fill(before: DS.Space.xs), whole * 0.2, "by the edge it has all but gone")
+        XCTAssertGreaterThan(fill(before: quarterChip + 2), whole * 0.9, "the fade is no longer than it needs to be")
     }
 
     /// The strip lists tabs in the order the sidebar and ⌘1…⌘9 do: a project's tabs first.

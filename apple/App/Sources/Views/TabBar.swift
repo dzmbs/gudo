@@ -139,10 +139,11 @@ final class StripSpans {
     var chips: [TabRef: ClosedRange<CGFloat>] = [:]
     var visible: ClosedRange<CGFloat> = 0...0
 
-    /// The edge to scroll `ref` to, the nearer one; nil while it shows whole or is not measured.
+    /// Where to scroll `ref` to: by the nearer edge, clear of its fade; nil while it shows whole
+    /// or is not measured.
     func anchor(revealing ref: TabRef) -> UnitPoint? {
         guard let chip = chips[ref] else { return nil }
-        return Self.anchor(chip: chip, visible: visible)
+        return Self.anchor(chip: chip, visible: visible, clear: DS.Size.tabStripFade)
     }
 
     /// The strip's own width changed (the window was resized), not only where it is scrolled.
@@ -150,9 +151,14 @@ final class StripSpans {
         abs((old.upperBound - old.lowerBound) - (new.upperBound - new.lowerBound)) > 0.5
     }
 
-    static func anchor(chip: ClosedRange<CGFloat>, visible: ClosedRange<CGFloat>) -> UnitPoint? {
-        if chip.lowerBound < visible.lowerBound - 0.5 { return .leading }
-        if chip.upperBound > visible.upperBound + 0.5 { return .trailing }
+    /// The anchor that brings `chip` `clear` inside the nearer edge of `visible`, or to the edge
+    /// itself where the strip has no room for that. A scroll anchor lines up the same unit point
+    /// of the chip and of the strip, so the chip lands `x` of the way across the room it leaves.
+    static func anchor(chip: ClosedRange<CGFloat>, visible: ClosedRange<CGFloat>, clear: CGFloat = 0) -> UnitPoint? {
+        let room = (visible.upperBound - visible.lowerBound) - (chip.upperBound - chip.lowerBound)
+        let inset = room > 2 * clear ? clear : 0
+        if chip.lowerBound < visible.lowerBound + inset - 0.5 { return UnitPoint(x: room > 0 ? inset / room : 0, y: 0.5) }
+        if chip.upperBound > visible.upperBound - inset + 0.5 { return UnitPoint(x: room > 0 ? 1 - inset / room : 1, y: 0.5) }
         return nil
     }
 }
@@ -191,11 +197,11 @@ private extension View {
             HStack(spacing: 0) {
                 // style-exempt: a mask, only its alpha counts
                 LinearGradient(colors: [edges.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.stripFade)
+                    .frame(width: DS.Size.tabStripFade)
                 Rectangle()
                 // style-exempt: a mask, only its alpha counts
                 LinearGradient(colors: [.black, edges.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.stripFade)
+                    .frame(width: DS.Size.tabStripFade)
             }
         }
     }

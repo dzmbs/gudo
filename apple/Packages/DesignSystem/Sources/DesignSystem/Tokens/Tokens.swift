@@ -96,6 +96,9 @@ public extension DS {
         public static let tabMaxWidth: CGFloat = 240
         /// The fade where strip chips run past an edge.
         public static let stripFade: CGFloat = 16
+        /// The fade where tab chips run past the tab strip's edge: a quarter of the narrowest
+        /// chip, so a cut chip dissolves into the edge rather than ending in a line.
+        public static let tabStripFade: CGFloat = tabMinWidth / 4
         /// How far a finger travels along the iPhone terminal bar before the swipe changes tabs.
         public static let swipeTabDistance: CGFloat = 24
         public static let avatar: CGFloat = 22
