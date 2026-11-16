@@ -718,7 +718,7 @@ private struct ConnectFailure: View {
         }
         .font(DS.Font.rowSubtitle)
         .padding(DS.Space.m)
-        .background(DS.Palette.groupedRow, in: .rect(cornerRadius: DS.Radius.control))
+        .background(DS.Palette.groupedRow, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
         .padding(.horizontal, DS.Space.l)
         .padding(.vertical, DS.Space.s)
         .background(DS.Palette.groupedPage)
