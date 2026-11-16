@@ -28,8 +28,9 @@ export them as async functions and callback interfaces without wrappers.
 | `HostKeyPolicy::{Strict, AcceptNew, Ask(prompt)}` | `Ask` calls `HostKeyPrompt::trust_new_host(HostKeyInfo)` after the key exchange and before any credential is sent; for a changed (unpinned) key it calls `trust_changed_host(info, expected)` (default: refuse, i.e. `HostKeyMismatch`; `true` replaces the record) |
 | `Connection::connect(&Target, &ConnectOptions)` | one live, authenticated connection; clones share it |
 | `conn.exec / exec_with_input` → `ExecOutput` | stdout, stderr, exit status or signal; `check()` turns failure into `SshError::Remote` |
+| `conn.run_script(script)` | a POSIX sh script sent on stdin to `sh -s`, whatever the login shell |
 | `conn.open_shell(&PtyRequest)` → `(Shell, ShellOutput)` | PTY (`TERM`, size, `IUTF8`), env, optional command; `Shell::{write, resize, close}`, `ShellOutput::next()` → `Data`/`Stderr`/`Exit` |
-| `conn.upload(path, bytes, mode, Raw\|Gzip)` (`upload_reporting` adds progress) / `download` | exec-based, no SFTP: temp file, SHA-256 checked on the remote, `chmod`, atomic `mv`; `~/` paths, spaces fine |
+| `conn.upload(path, bytes, mode, Raw\|Gzip)` (`upload_reporting` adds progress) / `download` | exec-based, no SFTP: the script on stdin, then the bytes once it says it has been read; temp file, SHA-256 checked on the remote, `chmod`, atomic `mv`; `~/` paths, spaces fine |
 | `conn.{ping, probe, note_input, rtt, closed, is_dead}` | liveness (§2) |
 | `Session::start(target, options, ReconnectPolicy, listener)` | the self-healing handle views keep (04 R7): `state()`, `subscribe()`, `connected()`, `connection()`, `set_foreground`, `network_changed`, `reconnect_now`, `close` |
 | `bootstrap(&conn, &HostdBinaries, &BootstrapOptions)` → `BootstrapReport` | §3 |
@@ -84,8 +85,11 @@ the app probes (foreground, path change, typing).
 ## 3. Daemon bootstrap (`ssh::bootstrap`)
 
 The client
-holds the binaries, checks SHA-256, uploads; the remote never downloads. Each step is one
-`exec` round trip under `sh -c` (works whatever the login shell is):
+holds the binaries, checks SHA-256, uploads; the remote never downloads. Every script goes
+to `sh -s` on stdin, so the login shell (fish, nushell, csh) only runs the words `sh -s`
+and never parses a script. Each round trip pays for the login shell's startup files, so a
+fresh install takes five (probe, upload, check the staged build, install and start, pair)
+and a reused one two (probe, pair):
 
 1. **Probe**: `uname -s`/`-m`, `$HOME`, gzip present, SHA-256 of an installed
    `gudo-hostd`, `gudo-hostd status`, `loginctl` linger.

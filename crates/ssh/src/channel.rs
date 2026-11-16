@@ -148,20 +148,55 @@ impl Connection {
     where
         R: AsyncRead + Unpin,
     {
-        self.guard(self.exec_inner(command, input)).await
+        self.exec_inner(command, input).await
+    }
+
+    /// Runs the POSIX sh `script` and collects its output. The script goes on `sh`'s stdin,
+    /// so the login shell only runs [`SCRIPT_COMMAND`]: whatever its syntax (fish, nushell,
+    /// csh), it never parses the script or its quoting.
+    ///
+    /// # Errors
+    ///
+    /// As [`exec`](Self::exec).
+    pub async fn run_script(&self, script: &str) -> Result<ExecOutput, SshError> {
+        self.exec_with_input(SCRIPT_COMMAND, script.as_bytes())
+            .await
     }
 
     async fn exec_inner<R>(&self, command: &str, input: R) -> Result<ExecOutput, SshError>
     where
         R: AsyncRead + Unpin,
     {
+        self.guard(self.exec_staged(command, &[], None, input))
+            .await
+    }
+
+    /// Runs `command`, writes `head` to its stdin, then, once `ready` shows on its stdout
+    /// (at once without one), streams `body` and EOF.
+    async fn exec_staged<R>(
+        &self,
+        command: &str,
+        head: &[u8],
+        ready: Option<&[u8]>,
+        body: R,
+    ) -> Result<ExecOutput, SshError>
+    where
+        R: AsyncRead + Unpin,
+    {
         let channel = self.handle().channel_open_session().await?;
         channel.exec(true, command).await?;
         let (mut read, write) = channel.split();
+        let is_ready = tokio::sync::Notify::new();
         // Write and read concurrently so a chatty command cannot fill its window and stall
         // the upload.
         let writer = async {
-            write.data(input).await?;
+            if !head.is_empty() {
+                write.data(head).await?;
+            }
+            if ready.is_some() {
+                is_ready.notified().await;
+            }
+            write.data(body).await?;
             write.eof().await?;
             Ok::<_, SshError>(())
         };
@@ -169,6 +204,7 @@ impl Connection {
         let mut written = None;
         let mut output = ExecOutput::default();
         let mut closed = false;
+        let mut waits_for_ready = ready.is_some();
         while !closed {
             tokio::select! {
                 result = &mut writer, if written.is_none() => written = Some(result),
@@ -176,6 +212,16 @@ impl Connection {
                     Some(message) => closed = output.record(message),
                     None => break,
                 },
+            }
+            if waits_for_ready
+                && let Some(marker) = ready
+                && output
+                    .stdout
+                    .windows(marker.len())
+                    .any(|window| window == marker)
+            {
+                waits_for_ready = false;
+                is_ready.notify_one();
             }
             // A command that exits without reading all of its input stops the server from
             // taking more, and the server closes the channel only after our EOF.
@@ -403,27 +449,14 @@ impl Connection {
             UploadEncoding::Raw => "cat",
             UploadEncoding::Gzip => "gzip -dc",
         };
-        let script = format!(
-            r#"set -e
-f={path}
-t="$f.tmp.$$"
-mkdir -p "$(dirname "$f")"
-trap 'rm -f "$t"' EXIT
-umask 077
-{decode} > "$t"
-h=$( (sha256sum "$t" 2>/dev/null || shasum -a 256 "$t" 2>/dev/null || openssl dgst -sha256 -r "$t") | cut -d' ' -f1)
-echo "sha256=$h"
-[ "$h" = "{sha256}" ] || exit 3
-chmod {mode:o} "$t"
-mv -f "$t" "$f"
-trap - EXIT"#,
-            path = remote_path(path),
-        );
+        let script = upload_script(&remote_path(path), decode, &sha256, mode);
         let output = self
-            .exec_with_input(
-                &sh_command(&script),
+            .guard(self.exec_staged(
+                SCRIPT_COMMAND,
+                script.as_bytes(),
+                Some(UPLOAD_READY.as_bytes()),
                 Progress::new(&wire, data.len() as u64, on_sent),
-            )
+            ))
             .await?;
         let remote_hash = output
             .stdout_text()
@@ -453,7 +486,7 @@ trap - EXIT"#,
     /// [`SshError::Remote`] if it cannot be read.
     pub async fn download(&self, path: &str) -> Result<Vec<u8>, SshError> {
         let output = self
-            .exec(&sh_command(&format!("cat {}", remote_path(path))))
+            .run_script(&format!("cat {}", remote_path(path)))
             .await?
             .check()?;
         Ok(output.stdout)
@@ -549,15 +582,148 @@ pub(crate) fn remote_path(path: &str) -> String {
     }
 }
 
-/// Wraps a POSIX script so it runs under `sh` whatever the user's login shell is (fish,
-/// nushell, …).
-pub(crate) fn sh_command(script: &str) -> String {
-    format!("sh -c {}", shell_quote(script))
+/// What the login shell runs for a script: plain words that every shell parses alike.
+/// `sh` reads the script itself from stdin.
+pub const SCRIPT_COMMAND: &str = "sh -s";
+
+/// The line an upload script prints once `sh` has read all of it: the upload's bytes go
+/// on the same stdin only after it, as some `sh`s (dash, busybox) read their script ahead.
+const UPLOAD_READY: &str = "upload-ready\n";
+
+/// One brace group, so `sh` has parsed all of it before its decoder reads the rest of stdin.
+fn upload_script(quoted_path: &str, decode: &str, sha256: &str, mode: u32) -> String {
+    format!(
+        r#"{{
+set -e
+f={quoted_path}
+t="$f.tmp.$$"
+mkdir -p "$(dirname "$f")"
+trap 'rm -f "$t"' EXIT
+umask 077
+printf '{ready}'
+{decode} > "$t"
+h=$( (sha256sum "$t" 2>/dev/null || shasum -a 256 "$t" 2>/dev/null || openssl dgst -sha256 -r "$t") | cut -d' ' -f1)
+echo "sha256=$h"
+[ "$h" = "{sha256}" ] || exit 3
+chmod {mode:o} "$t"
+mv -f "$t" "$f"
+trap - EXIT
+}}
+"#,
+        ready = UPLOAD_READY.escape_default(),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Login shells sshd may run a command with; each that is installed here is tried.
+    const LOGIN_SHELLS: &[&str] = &[
+        "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "nu",
+    ];
+    /// The `sh`s scripts run under.
+    const POSIX_SHELLS: &[&str] = &["sh", "bash", "dash", "ksh", "zsh"];
+
+    fn installed(shells: &[&'static str]) -> Vec<std::path::PathBuf> {
+        shells
+            .iter()
+            .flat_map(|shell| {
+                ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+                    .map(|dir| std::path::Path::new(dir).join(shell))
+            })
+            .filter(|path| path.exists())
+            .collect()
+    }
+
+    #[test]
+    fn the_login_shell_only_runs_plain_words() {
+        assert!(
+            SCRIPT_COMMAND
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || " -".contains(character))
+        );
+    }
+
+    /// Quotes, `$`, newlines and `!` in a script mean different things to fish, nushell or
+    /// csh; on stdin only `sh` reads them.
+    #[tokio::test]
+    async fn a_script_reaches_sh_intact_under_every_login_shell() {
+        use tokio::io::AsyncWriteExt as _;
+        let script = r#"x='it'\''s $HOME' && printf '%s!\n' "$x" "$((1 + 1))"
+"#;
+        let shells = installed(LOGIN_SHELLS);
+        assert!(!shells.is_empty());
+        for shell in shells {
+            let mut child = tokio::process::Command::new(&shell)
+                .args(["-c", SCRIPT_COMMAND])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            stdin.write_all(script.as_bytes()).await.unwrap();
+            drop(stdin);
+            let output = child.wait_with_output().await.unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "it's $HOME!\n2!\n",
+                "{}",
+                shell.display()
+            );
+        }
+    }
+
+    /// The upload's bytes follow its script on the same stdin, sent once the script says
+    /// `sh` has read it all, whichever `sh` the host has.
+    #[tokio::test]
+    async fn an_upload_script_takes_its_bytes_after_it_says_ready() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let payload = (0..300_000u32).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+        for shell in installed(POSIX_SHELLS) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("a b/it's");
+            let script = upload_script(
+                &shell_quote(path.to_str().unwrap()),
+                "cat",
+                &sha256_hex(&payload),
+                0o750,
+            );
+            let mut child = tokio::process::Command::new(&shell)
+                .arg("-s")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            let mut stdout = child.stdout.take().unwrap();
+            stdin.write_all(script.as_bytes()).await.unwrap();
+            let mut said = Vec::new();
+            while !said.ends_with(UPLOAD_READY.as_bytes()) {
+                let mut byte = [0u8];
+                assert_eq!(
+                    stdout.read(&mut byte).await.unwrap(),
+                    1,
+                    "{}",
+                    shell.display()
+                );
+                said.push(byte[0]);
+            }
+            stdin.write_all(&payload).await.unwrap();
+            drop(stdin);
+            let mut rest = String::new();
+            stdout.read_to_string(&mut rest).await.unwrap();
+            let status = child.wait().await.unwrap();
+            assert!(status.success(), "{}: {status} {rest}", shell.display());
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                payload,
+                "{}",
+                shell.display()
+            );
+            assert!(rest.contains(&sha256_hex(&payload)));
+        }
+    }
 
     #[test]
     fn quoting() {
@@ -569,7 +735,6 @@ mod tests {
             r#""$HOME"/'Library/Application Support/u'"#
         );
         assert_eq!(remote_path("/tmp/a b"), "'/tmp/a b'");
-        assert_eq!(sh_command("echo 'hi'"), r#"sh -c 'echo '\''hi'\'''"#);
     }
 
     #[tokio::test]

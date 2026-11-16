@@ -1,24 +1,26 @@
 //! Installing the host daemon over SSH and getting a pairing ticket from it, so the client
 //! can move to iroh without the user scanning anything.
 //!
-//! The client picks the binary for the host's platform, verifies its SHA-256 and uploads it; the remote never
-//! downloads anything. Steps, each one `exec` round trip:
+//! The client picks the binary for the host's platform, verifies its SHA-256 and uploads it;
+//! the remote never downloads anything. Each script goes to `sh -s` on stdin, and each round
+//! trip pays for the login shell's startup files once more, so the steps share as few as they
+//! can:
 //!
 //! 1. **Probe**: `uname -sm`, `gzip` presence, the SHA-256 and build of an installed binary
 //!    and whether its daemon runs.
 //! 2. **Upload** (only if the installed binary differs): gzip-compressed when possible,
-//!    written to a temp file, SHA-256-checked on the remote, staged next to the install. It
-//!    is installed only once it runs there, and over an installed build that reports its
-//!    version only if it is not older (rollback protection: an older app on another device
-//!    must not quietly reinstate an older helper), unless
-//!    [`BootstrapOptions::allow_downgrade`].
-//! 3. **Service** (if uploaded or not running): a running daemon is first asked to restart
-//!    into the new build in place (`gudo-hostd restart`), keeping its sessions; else
-//!    `gudo-hostd service install` (systemd `--user` / LaunchAgent, restarting an older
-//!    daemon). Without a service manager
-//!    (containers, macOS without a GUI login) the daemon is started detached instead.
-//! 4. **Pair**: `gudo-hostd pair --json --wait 30` mints a one-time ticket once the
-//!    daemon has recorded its endpoint.
+//!    written to a temp file, SHA-256-checked on the remote, staged next to the install. A
+//!    second round trip runs it there. It is installed only once it ran, and over an
+//!    installed build that reports its version only if it is not older (rollback
+//!    protection: an older app on another device must not quietly reinstate an older
+//!    helper), unless [`BootstrapOptions::allow_downgrade`].
+//! 3. **Service** (if uploaded or not running), in one round trip with the install: a
+//!    running daemon is first asked to restart into the new build in place (`gudo-hostd
+//!    restart`), keeping its sessions; else `gudo-hostd service install` (systemd `--user` /
+//!    LaunchAgent, restarting an older daemon). Without a service manager (containers, macOS
+//!    without a GUI login) the daemon is started detached instead.
+//! 4. **Pair**: `gudo-hostd pair --json --wait 30` mints a one-time ticket once the daemon
+//!    has recorded its endpoint (after turning lingering on, when it is off).
 //!
 //! Re-running is cheap and safe: a matching, running install is reused as is.
 
@@ -27,14 +29,15 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use crate::channel::{UploadEncoding, sh_command, sha256_hex, shell_quote};
+use crate::channel::{UploadEncoding, sha256_hex, shell_quote};
 use crate::client::Connection;
 use crate::{ExecOutput, SshError, UploadReport};
 
 /// The host as the bootstrap uses it: each call is one round trip, which pays for the login
 /// shell's startup files once more.
 trait Remote: Sync {
-    fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
+    fn run_script(&self, script: &str)
+    -> impl Future<Output = Result<ExecOutput, SshError>> + Send;
 
     fn upload_reporting(
         &self,
@@ -47,8 +50,11 @@ trait Remote: Sync {
 }
 
 impl Remote for Connection {
-    fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
-        Connection::exec(self, command)
+    fn run_script(
+        &self,
+        script: &str,
+    ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
+        Connection::run_script(self, script)
     }
 
     fn upload_reporting(
@@ -325,13 +331,14 @@ async fn bootstrap_on(
     let sha256 = sha256_hex(&binary);
     let relative_path = platform.install_path();
     let install_path = format!("{}/{relative_path}", probe.home);
-    let hostd = format!("\"$HOME\"/{}", shell_quote(&relative_path));
+    let hostd = home_path(&relative_path);
 
     let mut action = match &probe.sha256 {
         Some(installed_sha256) if *installed_sha256 == sha256 => InstallAction::Reused,
         Some(_) => InstallAction::Upgraded,
         None => InstallAction::Installed,
     };
+    let staged = staged_path(&relative_path);
     if action != InstallAction::Reused {
         let encoding = if probe.gzip {
             UploadEncoding::Gzip
@@ -340,7 +347,6 @@ async fn bootstrap_on(
         };
         // Staged next to the install first: it must run here, and must not be older than a
         // build that reports its version.
-        let staged = staged_path(&relative_path);
         step(BootstrapStep::Uploading {
             size: binary.len() as u64,
             sent: 0,
@@ -356,7 +362,7 @@ async fn bootstrap_on(
             size: report.size,
             sent: report.size,
         });
-        action = install_staged(
+        if check_staged(
             connection,
             &staged,
             &relative_path,
@@ -364,7 +370,10 @@ async fn bootstrap_on(
             options,
         )
         .await?
-        .unwrap_or(action);
+            == StagedBuild::Older
+        {
+            action = InstallAction::KeptNewer;
+        }
     }
 
     let mut notes = Vec::new();
@@ -376,47 +385,58 @@ async fn bootstrap_on(
         );
     }
     let kept = matches!(action, InstallAction::Reused | InstallAction::KeptNewer);
-    // A running daemon that can restart in place hands its sessions to the new build;
-    // otherwise (it predates that, or the new build cannot take them over) the service
-    // restarts it below, ending them.
-    let restarted_in_place = action == InstallAction::Upgraded
-        && probe.running
-        && connection
-            .exec(&sh_command(&format!("{hostd} restart 2>&1")))
-            .await?
-            .success();
-    let service = if (kept || restarted_in_place) && probe.running {
+    let start = if kept && probe.running {
+        None
+    } else if action == InstallAction::Upgraded && probe.running {
+        // A running daemon that can restart in place hands its sessions to the new build;
+        // otherwise (it predates that, or the new build cannot take them over) the service
+        // restarts it, ending them.
+        Some(Start::RestartInPlace)
+    } else {
+        Some(Start::Service)
+    };
+    if start.is_some() {
+        step(BootstrapStep::Starting);
+    }
+    let service = if start.is_none() && action == InstallAction::Reused {
         ServiceMode::AlreadyRunning
     } else {
-        step(BootstrapStep::Starting);
-        let output = connection
-            .exec(&sh_command(&format!("{hostd} service install 2>&1")))
-            .await?;
-        if output.success() {
-            ServiceMode::Service
-        } else {
-            tracing::info!(
-                "service install failed, starting detached: {}",
-                output.stdout_text().trim()
-            );
-            notes.push(format!(
-                "No usable service manager ({}); the daemon was started in the background and \
-                 will not restart after a reboot.",
-                output.stdout_text().lines().last().unwrap_or("").trim()
-            ));
-            let start = format!(
-                "cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {hostd} run || exec {hostd} run) \
-                 </dev/null >>\"$(dirname {hostd})/hostd.log\" 2>&1 &"
-            );
-            connection.exec(&sh_command(&start)).await?.check()?;
-            ServiceMode::Detached
+        let script = activation_script(&hostd, &staged, &relative_path, action, start);
+        let output = connection.run_script(&script).await?.check()?;
+        let started = Started::parse(&output.stdout_text());
+        match started {
+            Started::Detached { service_output } => {
+                tracing::info!("service install failed, starting detached: {service_output}");
+                notes.push(format!(
+                    "No usable service manager ({}); the daemon was started in the background \
+                     and will not restart after a reboot.",
+                    service_output.lines().last().unwrap_or("").trim()
+                ));
+                ServiceMode::Detached
+            }
+            Started::Service => ServiceMode::Service,
+            Started::InPlace | Started::Untouched => ServiceMode::AlreadyRunning,
         }
     };
     let user_service = matches!(service, ServiceMode::Service | ServiceMode::AlreadyRunning);
-    if !platform.is_macos()
-        && user_service
-        && probe.linger == Some(false)
-        && !enable_linger(connection).await?
+    let enables_linger = !platform.is_macos() && user_service && probe.linger == Some(false);
+
+    step(BootstrapStep::Pairing);
+    let minutes = options.ticket_minutes.unwrap_or(10);
+    let wait = options.wait_secs.unwrap_or(30);
+    let mut script = String::new();
+    if enables_linger {
+        script.push_str(ENABLE_LINGER);
+    }
+    script.push_str(&format!(
+        "{hostd} pair --json --wait {wait} --minutes {minutes}\n"
+    ));
+    let output = connection.run_script(&script).await?.check()?;
+    if enables_linger
+        && !output
+            .stdout_text()
+            .lines()
+            .any(|line| line == "linger=yes")
     {
         notes.push(
             "Lingering is off, so the daemon stops when you log out. Run once: \
@@ -424,16 +444,6 @@ async fn bootstrap_on(
                 .into(),
         );
     }
-
-    step(BootstrapStep::Pairing);
-    let minutes = options.ticket_minutes.unwrap_or(10);
-    let wait = options.wait_secs.unwrap_or(30);
-    let output = connection
-        .exec(&sh_command(&format!(
-            "{hostd} pair --json --wait {wait} --minutes {minutes}"
-        )))
-        .await?
-        .check()?;
     let json = output
         .stdout_text()
         .lines()
@@ -469,30 +479,34 @@ fn staged_path(relative_path: &str) -> String {
     }
 }
 
-/// Moves the staged build into place once it ran here, unless it is older than the
-/// installed one (and no downgrade was asked for): then it is deleted, the installed build
-/// stays and the answer is [`InstallAction::KeptNewer`]. `None` means it was installed.
-async fn install_staged(
+/// Whether the staged build may replace the installed one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StagedBuild {
+    Install,
+    /// Older than the installed build, and no downgrade was asked for: the installed build
+    /// stays ([`InstallAction::KeptNewer`]).
+    Older,
+}
+
+/// Runs the staged build once here (`build-info`). A build that cannot run is deleted.
+async fn check_staged(
     connection: &impl Remote,
     staged: &str,
     relative_path: &str,
     installed: Option<&proto::DaemonInfo>,
     options: &BootstrapOptions,
-) -> Result<Option<InstallAction>, SshError> {
-    let staged_quoted = format!("\"$HOME\"/{}", shell_quote(staged));
+) -> Result<StagedBuild, SshError> {
+    let staged_quoted = home_path(staged);
     let output = connection
-        .exec(&sh_command(&format!(
-            "{staged_quoted} build-info --json 2>&1"
-        )))
+        .run_script(&format!(
+            "{staged_quoted} build-info --json 2>&1 || {{ status=$?; rm -f {staged_quoted}; exit $status; }}\n"
+        ))
         .await?;
     let supplied = output
         .success()
         .then(|| build_info(&output.stdout_text()))
         .flatten();
     let Some(supplied) = supplied else {
-        connection
-            .exec(&sh_command(&format!("rm -f {staged_quoted}")))
-            .await?;
         return Err(SshError::Bootstrap(cannot_run_message(
             relative_path,
             output.stdout_text().trim(),
@@ -503,19 +517,89 @@ async fn install_staged(
         && !options.allow_downgrade
     {
         tracing::info!(installed = %installed.build, supplied = %supplied.build, "keeping the newer installed daemon");
-        connection
-            .exec(&sh_command(&format!("rm -f {staged_quoted}")))
-            .await?;
-        return Ok(Some(InstallAction::KeptNewer));
+        return Ok(StagedBuild::Older);
     }
-    connection
-        .exec(&sh_command(&format!(
-            "mv -f {staged_quoted} \"$HOME\"/{}",
-            shell_quote(relative_path)
-        )))
-        .await?
-        .check()?;
-    Ok(None)
+    Ok(StagedBuild::Install)
+}
+
+/// `~/relative_path` quoted for sh.
+fn home_path(relative_path: &str) -> String {
+    format!("\"$HOME\"/{}", shell_quote(relative_path))
+}
+
+/// How the daemon is (re)started after an install.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Start {
+    /// Ask the running daemon to restart into the new build, else as [`Start::Service`].
+    RestartInPlace,
+    /// Install the service (which restarts a running daemon), else start it detached.
+    Service,
+}
+
+/// What [`activation_script`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Started {
+    Untouched,
+    InPlace,
+    Service,
+    Detached { service_output: String },
+}
+
+impl Started {
+    fn parse(text: &str) -> Self {
+        let service_output = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("service-output="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        match text
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix("started="))
+        {
+            Some("in-place") => Self::InPlace,
+            Some("service") => Self::Service,
+            Some("detached") => Self::Detached { service_output },
+            _ => Self::Untouched,
+        }
+    }
+}
+
+/// One round trip after the upload: moves the staged build into place (or deletes it when
+/// the installed one is kept), then starts the daemon as `start` says.
+fn activation_script(
+    hostd: &str,
+    staged: &str,
+    relative_path: &str,
+    action: InstallAction,
+    start: Option<Start>,
+) -> String {
+    let staged = home_path(staged);
+    let mut script = match action {
+        InstallAction::Installed | InstallAction::Upgraded => {
+            format!("mv -f {staged} {} || exit 1\n", home_path(relative_path))
+        }
+        InstallAction::KeptNewer => format!("rm -f {staged}\n"),
+        InstallAction::Reused => String::new(),
+    };
+    if start == Some(Start::RestartInPlace) {
+        script.push_str(&format!(
+            "if {hostd} restart >/dev/null 2>&1; then echo started=in-place; exit 0; fi\n"
+        ));
+    }
+    if start.is_some() {
+        script.push_str(&format!(
+            r#"if output=$({hostd} service install 2>&1); then
+  echo started=service
+else
+  printf '%s\n' "$output" | sed 's/^/service-output=/'
+  cd ~ && (command -v setsid >/dev/null 2>&1 && exec setsid {hostd} run || exec {hostd} run) </dev/null >>"$(dirname {hostd})/hostd.log" 2>&1 &
+  echo started=detached
+fi
+"#
+        ));
+    }
+    script
 }
 
 /// A full disk under the install, said as such rather than as the failed command's words.
@@ -588,7 +672,7 @@ true"#,
         mac = HostPlatform::MacosAarch64.install_path(),
         linux = HostPlatform::LinuxAarch64.install_path(),
     );
-    let output = connection.exec(&sh_command(&script)).await?.check()?;
+    let output = connection.run_script(&script).await?.check()?;
     Ok(parse_probe(&output.stdout_text()))
 }
 
@@ -617,18 +701,10 @@ fn parse_probe(text: &str) -> Probe {
 /// Without lingering, systemd stops a user's services (the daemon) when their last session
 /// ends, which is the SSH session that installed it. Most distributions' polkit rules let a
 /// user enable lingering for themselves without a password, so try that before falling back
-/// to a note (`--no-ask-password`: never prompt). Returns whether lingering is now on.
-async fn enable_linger(connection: &impl Remote) -> Result<bool, SshError> {
-    let output = connection
-        .exec(&sh_command(
-            "loginctl --no-ask-password enable-linger \"$(id -un)\" >/dev/null 2>&1; \
-             loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null",
-        ))
-        .await?;
-    let enabled = output.stdout_text().trim() == "yes";
-    tracing::info!(enabled, "enabling lingering");
-    Ok(enabled)
-}
+/// to a note (`--no-ask-password`: never prompt). Prints `linger=yes` once it is on.
+const ENABLE_LINGER: &str = "loginctl --no-ask-password enable-linger \"$(id -un)\" >/dev/null 2>&1
+echo \"linger=$(loginctl show-user \"$(id -un)\" -p Linger --value 2>/dev/null)\"
+";
 
 #[cfg(test)]
 mod tests {
@@ -655,12 +731,12 @@ mod tests {
     }
 
     impl ScriptedHost {
-        fn answer(&self, command: &str) -> ExecOutput {
+        fn answer(&self, script: &str) -> ExecOutput {
             let mut output = ExecOutput {
                 exit_status: Some(0),
                 ..ExecOutput::default()
             };
-            let stdout = if command.contains("uname -s") {
+            let stdout = if script.contains("uname -s") {
                 let mut lines =
                     String::from("os=Linux\narch=x86_64\nhome=/home/u\ngzip=1\nlinger=yes\n");
                 if let Some(installed) = self.installed {
@@ -671,20 +747,18 @@ mod tests {
                     }
                 }
                 lines
-            } else if command.contains("build-info --json") {
+            } else if script.contains("build-info --json") {
                 build_info_json("new", 2)
-            } else if command.contains("service install") {
-                if !self.has_systemd {
-                    output.exit_status = Some(1);
-                }
-                String::new()
-            } else if command.contains("pair --json") {
+            } else if script.contains("pair --json") {
                 r#"{"ticket":"gudo://pair/t","daemon_id":"ab"}"#.to_owned()
-            } else if command.contains(" restart") {
-                if !self.running {
-                    output.exit_status = Some(1);
+            } else if script.contains("started=") {
+                if script.contains(" restart") && self.running {
+                    "started=in-place\n".to_owned()
+                } else if self.has_systemd {
+                    "started=service\n".to_owned()
+                } else {
+                    "service-output=Error: no systemd here\nstarted=detached\n".to_owned()
                 }
-                String::new()
             } else {
                 String::new()
             };
@@ -698,9 +772,12 @@ mod tests {
     }
 
     impl Remote for ScriptedHost {
-        fn exec(&self, command: &str) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
-            self.commands.lock().unwrap().push(command.to_owned());
-            std::future::ready(Ok(self.answer(command)))
+        fn run_script(
+            &self,
+            script: &str,
+        ) -> impl Future<Output = Result<ExecOutput, SshError>> + Send {
+            self.commands.lock().unwrap().push(script.to_owned());
+            std::future::ready(Ok(self.answer(script)))
         }
 
         fn upload_reporting(
@@ -761,7 +838,7 @@ mod tests {
         })
         .await;
         assert_eq!(report.action, InstallAction::Reused);
-        assert_eq!((fresh, detached, upgrade, reuse), (6, 7, 6, 2));
+        assert_eq!((fresh, detached, upgrade, reuse), (5, 5, 5, 2));
     }
 
     #[test]
@@ -828,6 +905,82 @@ mod tests {
             out_of_space(other, ".local/bin/gudo-hostd", 1),
             SshError::Remote { .. }
         ));
+    }
+
+    /// Runs [`activation_script`] under `sh` in a home whose helper answers `service`
+    /// and `restart` as told, and parses what it did.
+    fn activate(
+        start: Option<Start>,
+        service_works: bool,
+        restart_works: bool,
+    ) -> (Started, tempfile::TempDir) {
+        let home = tempfile::tempdir().unwrap();
+        let bin = home.path().join("bin dir");
+        std::fs::create_dir_all(&bin).unwrap();
+        let helper = format!(
+            "#!/bin/sh\ncase \"$1\" in\n  service) {service} ;;\n  restart) {restart} ;;\n  run) echo running ;;\nesac\n",
+            service = if service_works {
+                "exit 0"
+            } else {
+                "echo 'Error: no systemd here'; exit 1"
+            },
+            restart = if restart_works { "exit 0" } else { "exit 1" },
+        );
+        let staged = bin.join(".hostd.new");
+        std::fs::write(&staged, helper).unwrap();
+        std::fs::set_permissions(&staged, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let script = activation_script(
+            &home_path("bin dir/hostd"),
+            "bin dir/.hostd.new",
+            "bin dir/hostd",
+            InstallAction::Upgraded,
+            start,
+        );
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&script)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(bin.join("hostd").exists() && !staged.exists());
+        (
+            Started::parse(&String::from_utf8_lossy(&output.stdout)),
+            home,
+        )
+    }
+
+    #[test]
+    fn activation_installs_then_starts_the_daemon_the_best_way_it_can() {
+        assert_eq!(
+            activate(Some(Start::RestartInPlace), false, true).0,
+            Started::InPlace
+        );
+        assert_eq!(
+            activate(Some(Start::RestartInPlace), true, false).0,
+            Started::Service
+        );
+        assert_eq!(
+            activate(Some(Start::Service), true, true).0,
+            Started::Service
+        );
+        assert_eq!(activate(None, false, false).0, Started::Untouched);
+        let (started, home) = activate(Some(Start::Service), false, false);
+        assert_eq!(
+            started,
+            Started::Detached {
+                service_output: "Error: no systemd here".into()
+            }
+        );
+        let log = home.path().join("bin dir/hostd.log");
+        for _ in 0..50 {
+            if std::fs::read_to_string(&log).is_ok_and(|text| text.contains("running")) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("the detached daemon never wrote to {}", log.display());
     }
 
     #[test]
