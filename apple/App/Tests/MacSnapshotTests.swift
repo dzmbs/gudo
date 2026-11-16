@@ -1168,6 +1168,47 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// The layout motions as the window draws them, in real time, on a display (under the
+    /// desktop picture, where no one sees it): split, close, zoom, float, dock and the sidebar
+    /// going and coming, each as the frames it shows (`<name>-<index>-<ms>`). Nothing off a
+    /// display (a locked Mac), where animations get no frames.
+    func testMotionInRealTime() async throws {
+        try await window("realtime-columns", screen: "transitions-columns") { model in
+            guard let window = self.current else { return }
+            self.animating(window)
+            guard window.level.rawValue < 0 else { return }
+            await self.pump(1)
+            guard let workspace = model.workspace, let (_, second) = TransitionFixtures.last else { return XCTFail("no panes") }
+            workspace.apply(.focus(second))
+            await self.pump(0.5)
+            await self.realTime("rt-split-right") { WorkspaceAction.splitRight.perform(on: workspace, window: model) }
+            await self.realTime("rt-close") { WorkspaceAction.closePane.perform(on: workspace, window: model) }
+            await self.realTime("rt-zoom-in") { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+            await self.realTime("rt-zoom-out") { WorkspaceAction.toggleZoom.perform(on: workspace, window: model) }
+            await self.realTime("rt-split-down") { WorkspaceAction.splitDown.perform(on: workspace, window: model) }
+            guard let floating = workspace.focusedPane else { return XCTFail("no pane") }
+            await self.realTime("rt-float") { model.toggleFloat(floating, in: workspace) }
+            await self.realTime("rt-dock") { model.toggleFloat(floating, in: workspace) }
+            await self.realTime("rt-sidebar-hide") { WorkspaceAction.toggleSidebar.perform(window: model) }
+            await self.realTime("rt-sidebar-show") { WorkspaceAction.toggleSidebar.perform(window: model) }
+        }
+    }
+
+    /// Captures the window as fast as it can for 700 ms after `change`, then lets it rest.
+    private func realTime(_ name: String, _ change: () -> Void) async {
+        guard let window = current else { return }
+        change()
+        let start = ContinuousClock.now
+        var index = 0
+        while ContinuousClock.now - start < .milliseconds(700) {
+            let elapsed = Int(((ContinuousClock.now - start) / .milliseconds(1)).rounded())
+            try? capture(window, "\(name)-\(String(format: "%02d", index))-\(elapsed)ms")
+            index += 1
+            await pump(0.001)
+        }
+        await pump(0.6)
+    }
+
     /// Two panes stacked, the bottom one dragged by its header over the left
     /// part of the top one. The preview shows the panes as the drop leaves them (the dragged
     /// one the tab's whole left half), and the drop settles exactly there.
