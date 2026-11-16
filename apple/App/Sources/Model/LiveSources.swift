@@ -85,8 +85,10 @@ final class LiveHostDirectory: HostDirectory {
         case .suspended: "Paused while in the background"
         default: nil
         }
+        // A host paired by ticket has no address to show, only its key's id.
+        let address = entry.kind == .daemon && app.hosts.record(entry.id)?.ssh == nil ? "" : entry.address
         return HostSummary(
-            id: entry.id, name: entry.name, address: entry.address,
+            id: entry.id, name: entry.name, address: address,
             kind: entry.kind == .daemon ? .daemon : .ssh,
             connection: ConnectionState(listing: entry.status),
             sessionCount: sessions, agentCounts: counts, needsYou: needsYou,

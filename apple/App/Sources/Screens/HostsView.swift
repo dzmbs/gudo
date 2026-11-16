@@ -38,6 +38,8 @@ struct HostsView: View {
     @State private var importingFile = false
     @State private var editing: HostRecord?
     @FocusState private var isQuickConnectFocused: Bool
+    /// The quick-connect glyph's slot grows with the text, so the placeholder never runs under it.
+    @ScaledMetric(relativeTo: .subheadline) private var quickConnectGlyph: CGFloat = 16
 
     var body: some View {
         let hosts = directory.hosts
@@ -67,14 +69,22 @@ struct HostsView: View {
         .toolbar {
             if let live {
                 ToolbarItem(placement: .primaryAction) {
-                    Menu("Import", systemImage: "square.and.arrow.down") {
+                    Menu {
                         #if os(macOS)
                         Button("Read ~/.ssh/config", systemImage: "doc.text") { run { try live.loadUserSSHConfig() } }
                         #endif
                         Button("Choose ssh_config File…", systemImage: "folder") { importingFile = true }
                         Button("Paste ssh_config", systemImage: "doc.on.clipboard") { run { try live.loadSSHConfig(pasteboardText()) } }
+                    } label: {
+                        // A tray with an arrow says nothing on its own: on touch, the word.
+                        #if os(iOS)
+                        Text("Import")
+                        #else
+                        Label("Import", systemImage: "square.and.arrow.down")
+                        #endif
                     }
                     .menuIndicator(.hidden)
+                    .accessibilityIdentifier("hosts-import")
                     .help("Import hosts from an ssh_config")
                 }
             }
@@ -160,7 +170,11 @@ struct HostsView: View {
 
     @ViewBuilder
     private func menu(_ host: HostSummary) -> some View {
-        Button("Connect", systemImage: "bolt.horizontal") { open(host) }
+        if host.connection.isLive {
+            Button("Open", systemImage: "macwindow") { open(host) }
+        } else {
+            Button("Connect", systemImage: "bolt.horizontal") { open(host) }
+        }
         if !host.isLocal {
             if !host.connection.isLive {
                 Button("Retry Now", systemImage: "arrow.clockwise") { directory.retry(host.id) }
@@ -187,7 +201,9 @@ struct HostsView: View {
         if host.isTailscale, TailscaleApp.isInstalled {
             Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)
         }
-        Button("Copy Address", systemImage: "doc.on.doc") { copy(host.address) }
+        if !host.address.isEmpty {
+            Button("Copy Address", systemImage: "doc.on.doc") { copy(host.address) }
+        }
     }
 
     private func perform(_ action: RowAction, on host: HostSummary) {
@@ -204,7 +220,7 @@ struct HostsView: View {
             Image(systemName: "terminal")
                 .font(.subheadline)
                 .foregroundStyle(DS.Palette.textSecondary)
-                .frame(width: 16)
+                .frame(width: quickConnectGlyph)
             TextField("Connect", text: $destination, prompt: Text("Connect to user@host or an ssh alias").font(.body))
                 .font(DS.Font.literal)
                 .textFieldStyle(.plain)
@@ -225,7 +241,8 @@ struct HostsView: View {
             }
         }
         .padding(.horizontal, DS.Space.gap10)
-        .frame(height: Self.fieldHeight)
+        .padding(.vertical, DS.Space.xs)
+        .frame(minHeight: Self.fieldHeight)
         .fieldSurface(isFocused: isQuickConnectFocused)
         .contentShape(.rect)
         .onTapGesture { isQuickConnectFocused = true }
@@ -358,11 +375,13 @@ private struct HostRow: View {
                     Spacer(minLength: DS.Space.s)
                     trailing
                 }
-                Text(host.address)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(DS.Palette.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if !host.address.isEmpty {
+                    Text(host.address)
+                        .font(.system(.footnote, design: .monospaced))
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 detail
                 if let sharing = host.sharing {
                     Button { model.sheet = .sharing } label: {
@@ -479,16 +498,18 @@ private struct HostRow: View {
                         .foregroundStyle(DS.Palette.textSecondary)
                         .lineLimit(1)
                         .accessibilityIdentifier("helper-update-\(host.name)")
-                } else if let line = host.lastLine {
-                    Text(line)
-                        .font(DS.Font.literalSmall)
-                        .foregroundStyle(DS.Palette.textTertiary)
-                        .lineLimit(1)
-                } else if let status = host.statusLine {
-                    Text(status)
+                } else {
+                    Text("\(Text(host.connection.title).foregroundStyle(host.connection == .connected ? DS.Palette.done : DS.Palette.attention))\(host.statusLine.map { " · \($0)" } ?? "")")
                         .font(.footnote)
                         .foregroundStyle(DS.Palette.textTertiary)
                         .monospacedDigit()
+                        .lineLimit(2)
+                    if let line = host.lastLine {
+                        Text(line)
+                            .font(DS.Font.literalSmall)
+                            .foregroundStyle(DS.Palette.textTertiary)
+                            .lineLimit(1)
+                    }
                 }
             }
         }
