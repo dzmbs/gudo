@@ -407,11 +407,7 @@ async fn bootstrap_on(
         match started {
             Started::Detached { service_output } => {
                 tracing::info!("service install failed, starting detached: {service_output}");
-                notes.push(format!(
-                    "No usable service manager ({}); the daemon was started in the background \
-                     and will not restart after a reboot.",
-                    service_output.lines().last().unwrap_or("").trim()
-                ));
+                notes.push(DETACHED_NOTE.into());
                 ServiceMode::Detached
             }
             Started::Service => ServiceMode::Service,
@@ -478,6 +474,9 @@ fn staged_path(relative_path: &str) -> String {
         None => format!(".{relative_path}.new"),
     }
 }
+
+const DETACHED_NOTE: &str = "This host has no service manager the helper can use, so it runs in \
+     the background and won't start again after a reboot.";
 
 /// Whether the staged build may replace the installed one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -820,6 +819,7 @@ mod tests {
         assert_eq!(report.service, ServiceMode::Service);
         let (detached, report) = round_trips(ScriptedHost::default()).await;
         assert_eq!(report.service, ServiceMode::Detached);
+        assert_eq!(report.notes, [DETACHED_NOTE]);
         let (upgrade, report) = round_trips(ScriptedHost {
             installed: Some(OLD_BUILD),
             running: true,
