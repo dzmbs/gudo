@@ -33,7 +33,11 @@ struct NotificationPrefsSection: View {
                 Picker(selection: choice(for: agent)) {
                     ForEach(AgentNotificationChoice.allCases, id: \.self) { Text($0.title).tag($0) }
                 } label: {
-                    Label(agent == .other ? "Other Agents" : agent.title, systemImage: agent.systemImage)
+                    if agent == .other {
+                        Label("Other Agents", systemImage: agent.systemImage)
+                    } else {
+                        Label { Text(agent.title) } icon: { ProgramMark(agent.identity) }
+                    }
                 }
             }
             .settingAnchor("notify-agents")
