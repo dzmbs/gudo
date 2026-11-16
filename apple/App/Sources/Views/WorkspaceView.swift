@@ -401,7 +401,8 @@ private struct SettingsToolbarButton: View {
 #endif
 
 /// The sidebar column on the terminal's background family. On iPad it has its own bar (the
-/// app name and New Tab) level with the detail's; on the Mac it runs up under the titlebar.
+/// app name and New Tab) level with the detail's; on the Mac its colour runs up under the
+/// titlebar while its rows start below it.
 private struct SidebarColumn: View {
     let workspace: Workspace
     @Environment(\.terminalTheme) private var theme
@@ -427,7 +428,10 @@ private struct SidebarColumn: View {
         }
         .chromeBackground(DS.Palette.sidebar)
         #else
+        // The list scrolls under the band, which has no background: clipped at its edge, no
+        // row sits beneath the traffic lights and the sidebar toggle.
         WorkspaceSidebar()
+            .clipped()
             .chromeBackground(DS.Palette.sidebar)
         #endif
     }
