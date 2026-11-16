@@ -531,6 +531,7 @@ private struct DetailColumn: View {
     @Environment(WindowModel.self) private var model
     @Environment(\.terminalTheme) private var theme
     @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
+    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
     @State private var titleBarMetrics = TitleBarMetrics()
 
     var body: some View {
@@ -580,9 +581,7 @@ private struct DetailColumn: View {
         .toolbar {
             // With the strip on top its selected tab names the tab: the row above it keeps only
             // the window's controls, so the two read as one band.
-            TerminalToolbar(
-                workspace: workspace, title: showsStrip ? nil : title,
-                subtitle: model.destination == .terminal ? subtitle : "", showsStrip: showsStrip, metrics: titleBarMetrics)
+            TerminalToolbar(workspace: workspace, showsStrip: showsStrip, metrics: titleBarMetrics, sidebarWidth: sidebarWidth)
         }
         #if os(iOS)
         .toolbar(model.isEditorFullScreen ? .hidden : .automatic, for: .navigationBar)
@@ -603,7 +602,18 @@ private struct DetailColumn: View {
         !model.isSidebarShown && showsTabBar && !model.isEditorFullScreen && !model.foldLayout.isPages
     }
 
-    private var title: String {
+    private var title: String { WindowTitles(workspace: workspace, model: model).title }
+
+    private var subtitle: String { WindowTitles(workspace: workspace, model: model).subtitle }
+}
+
+/// The window's title and the line under it, for the window and for the title bar's own line.
+@MainActor
+struct WindowTitles {
+    let workspace: Workspace
+    let model: WindowModel
+
+    var title: String {
         switch model.destination {
         case .terminal:
             model.activeMixed.map(model.title(ofMixedTab:)) ?? workspace.shownTab.map(workspace.title(of:)) ?? Brand.name
@@ -614,7 +624,7 @@ private struct DetailColumn: View {
 
     /// Under the tab's name: its context when it says something the title does not, then the
     /// split state. The host is named by the toolbar's host button instead.
-    private var subtitle: String {
+    var subtitle: String {
         if let mixed = model.activeMixed {
             let hosts = mixed.hosts.map(model.groupName).joined(separator: " + ")
             if mixed.isBrowserOnly { return hosts.isEmpty ? "Browser" : "Browser · \(hosts)" }
@@ -647,6 +657,16 @@ extension Workspace {
 }
 
 #if os(macOS)
+private struct WindowTitleItem: View {
+    let workspace: Workspace
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        let titles = WindowTitles(workspace: workspace, model: model)
+        WindowTitleLine(title: titles.title, subtitle: model.destination == .terminal ? titles.subtitle : "")
+    }
+}
+
 /// The tab's name and, after it in the secondary ink, what it is doing: one line in the toolbar
 /// row, so the band is as short as the title bar allows. Receded with the window.
 private struct WindowTitleLine: View {
@@ -684,15 +704,14 @@ private struct WindowTitleLine: View {
 /// The window toolbar, identical with the sidebar shown or hidden.
 private struct TerminalToolbar: ToolbarContent {
     let workspace: Workspace
-    let title: String?
-    let subtitle: String
     /// The tabs as a strip: beside the traffic lights in the title bar's row on the Mac.
     let showsStrip: Bool
     let metrics: TitleBarMetrics
     @Environment(WindowModel.self) private var model
+    /// Passed in rather than read here: a setting read in the bar's content is new each time
+    /// its owner updates, which updates every item and has the bar rebuild their menu forms.
+    let sidebarWidth: Double
     #if os(macOS)
-    @AppStorage("sidebarWidth") private var sidebarWidth = SidebarWidth.standard
-    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     #endif
 
@@ -713,9 +732,11 @@ private struct TerminalToolbar: ToolbarContent {
             }
             .sharedBackgroundVisibility(.hidden)
         }
-        if let title {
+        if !showsStrip {
+            // The line reads the title itself: passed in, every tab switch would update the
+            // whole bar, and the bar makes every item's menu form again on each update.
             ToolbarItem(placement: .navigation) {
-                WindowTitleLine(title: title, subtitle: subtitle)
+                WindowTitleItem(workspace: workspace)
                     .frame(maxWidth: fit.room, alignment: .leading)
             }
             .sharedBackgroundVisibility(.hidden)
@@ -757,10 +778,7 @@ private struct TerminalToolbar: ToolbarContent {
         // People here now: their faces, not a control (sharing starts from the palette).
         if let session = workspace.multiplayer, !session.others.isEmpty {
             ToolbarItem(placement: .primaryAction) {
-                PresenceToolbarButton(session: session, place: { pane in
-                    workspace.session.tabs.first { $0.root.panes.contains(PaneId(pane)) }.map(workspace.title(of:))
-                }) { model.sheet = .invite }
-                    .buttonStyle(.plain)
+                PresenceItem(workspace: workspace, session: session)
                     .titleBarWidth(.presence, in: metrics)
             }
             .sharedBackgroundVisibility(.hidden)
@@ -816,6 +834,21 @@ private struct TerminalToolbar: ToolbarContent {
             controls: metrics.width(of: shown))
     }
     #endif
+}
+
+/// The people here now. Its closures are made here, not in the bar's content, so a bar update
+/// that changes nothing of it leaves its menu form alone.
+private struct PresenceItem: View {
+    let workspace: Workspace
+    let session: MultiplayerSession
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        PresenceToolbarButton(session: session, place: { pane in
+            workspace.session.tabs.first { $0.root.panes.contains(PaneId(pane)) }.map(workspace.title(of:))
+        }) { model.sheet = .invite }
+            .buttonStyle(.plain)
+    }
 }
 
 /// Split (the pane menu) and the command palette: the two controls the bar always keeps.

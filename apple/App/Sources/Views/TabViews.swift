@@ -1478,7 +1478,6 @@ private struct ProjectNamingAlert: ViewModifier {
 /// turns that strip off for a terminal that fills the window.
 struct SidebarToggle: View {
     @Environment(WindowModel.self) private var model
-    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
 
     var body: some View {
         // Hidden, the sidebar's rows can't show a tab that called for you: the toggle does.
@@ -1503,10 +1502,18 @@ struct SidebarToggle: View {
         .help(model.isSidebarShown ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
         .accessibilityValue(calls ? "A tab wants attention" : "")
         .tint(.primary)
-        .contextMenu {
-            Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
-        }
+        .contextMenu { TabBarPlacementToggle() }
         .accessibilityIdentifier("toggle-sidebar")
+    }
+}
+
+/// Its own view, so the toggle that holds it compares equal from one bar update to the next: a
+/// setting read in the toggle itself is new each time, which made the bar rebuild its menu form.
+private struct TabBarPlacementToggle: View {
+    @AppStorage(TabPlacement.showsTabBarKey) private var showsTabBar = true
+
+    var body: some View {
+        Toggle("Tab Bar When the Sidebar Is Hidden", isOn: $showsTabBar)
     }
 }
 
