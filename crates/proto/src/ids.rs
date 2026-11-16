@@ -464,5 +464,8 @@ bitset! {
         RUN_AGAIN = 2;
         /// Applies `LayoutOp::SetRatio`.
         SPLIT_RATIOS = 3;
+        /// Launches `PaneLaunch::Agent` with `AgentKind::Pi`, reports pi panes as agents (`"pi"`)
+        /// and serves their Chat to timeline schema 3 watches.
+        PI_AGENT = 4;
     }
 }

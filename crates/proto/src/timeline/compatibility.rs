@@ -15,7 +15,7 @@ impl TimelineVersion {
                 }
                 v1_item(item);
             }
-            Self::V2 => {
+            Self::V2 | Self::V3 => {
                 if !matches!(item.body, TimelineBody::LongText { .. }) {
                     v1_item(item);
                 }
@@ -38,7 +38,7 @@ impl TimelineVersion {
     }
 
     fn operation(self, mut operation: TimelineOp) -> TimelineOp {
-        if !self.supports_operation(&operation) {
+        if !self.supports_operation(&operation) || !self.names_session_of(&operation) {
             return unavailable();
         }
         match &mut operation {
@@ -56,10 +56,18 @@ impl TimelineVersion {
         operation
     }
 
+    fn names_session_of(self, operation: &TimelineOp) -> bool {
+        match operation {
+            TimelineOp::Snapshot(TimelineSnapshot { session, .. })
+            | TimelineOp::Session { session, .. } => self.names(session.agent),
+            _ => true,
+        }
+    }
+
     fn supports_operation(self, operation: &TimelineOp) -> bool {
         // Closed whitelists keep appended variants out of older postcard decoders.
         match self {
-            Self::V1 | Self::V2 => matches!(
+            Self::V1 | Self::V2 | Self::V3 => matches!(
                 operation,
                 TimelineOp::Snapshot(_)
                     | TimelineOp::Upsert { .. }
@@ -74,7 +82,7 @@ impl TimelineVersion {
 
     fn supports_field(self, field: TimelineField) -> bool {
         match self {
-            Self::V1 | Self::V2 => matches!(
+            Self::V1 | Self::V2 | Self::V3 => matches!(
                 field,
                 TimelineField::Text | TimelineField::Output | TimelineField::Thinking
             ),

@@ -105,6 +105,8 @@ pub enum AgentKind {
     Claude,
     /// OpenAI Codex CLI.
     Codex,
+    /// pi coding agent. Needs [`MoreDaemonFeatures::PI_AGENT`](crate::MoreDaemonFeatures::PI_AGENT).
+    Pi,
 }
 
 /// What a new pane runs.
@@ -170,6 +172,31 @@ pub enum PaneLaunch {
         /// browser is not the user's. Claude prints a URL and takes a pasted code anyway.
         device_code: bool,
     },
+}
+
+impl PaneLaunch {
+    /// The agent this launch starts, if it starts one.
+    pub fn agent(&self) -> Option<AgentKind> {
+        match self {
+            Self::Agent { agent, .. }
+            | Self::AccountAgent { agent, .. }
+            | Self::AccountSignIn { agent, .. } => Some(*agent),
+            _ => None,
+        }
+    }
+}
+
+impl LayoutOp {
+    /// What the pane this operation creates runs, if it creates one.
+    pub fn launch(&self) -> Option<&PaneLaunch> {
+        match self {
+            Self::Split { launch, .. }
+            | Self::NewTab { launch, .. }
+            | Self::CreateSession { launch, .. }
+            | Self::NewFloat { launch, .. } => Some(launch),
+            _ => None,
+        }
+    }
 }
 
 /// A change to the layout, sent in [`ClientCtl::Op`](crate::ClientCtl::Op).

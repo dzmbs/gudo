@@ -4,8 +4,9 @@ use proto::{DaemonFeatures, PaneId, TimelineVersion, WorkspaceRequest};
 fn watch_negotiates_the_highest_mutually_supported_version() {
     assert!(TimelineVersion::negotiate(0).is_err());
     assert_eq!(TimelineVersion::negotiate(1), Ok(TimelineVersion::V1));
-    for maximum in [2, 3, u16::MAX] {
-        assert_eq!(TimelineVersion::negotiate(maximum), Ok(TimelineVersion::V2));
+    assert_eq!(TimelineVersion::negotiate(2), Ok(TimelineVersion::V2));
+    for maximum in [3, u16::MAX] {
+        assert_eq!(TimelineVersion::negotiate(maximum), Ok(TimelineVersion::V3));
     }
     assert!(
         TimelineVersion::SUPPORTED
@@ -26,7 +27,7 @@ fn older_helpers_only_receive_the_frozen_legacy_request() {
 
 #[test]
 fn versioned_watch_has_an_append_only_tag_and_feature_bit() {
-    let request = TimelineVersion::CURRENT.watch_request(
+    let request = TimelineVersion::V2.watch_request(
         PaneId(7),
         DaemonFeatures::AGENT_TIMELINE | DaemonFeatures::VERSIONED_TIMELINE,
     );

@@ -1,18 +1,20 @@
 use std::fmt;
 
-use crate::{DaemonFeatures, PaneId, WorkspaceRequest};
+use crate::{AgentKind, DaemonFeatures, PaneId, WorkspaceRequest};
 
 /// The timeline schema selected by one pane watch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u16)]
 pub enum TimelineVersion {
     V1 = 1,
     /// Adds `TimelineBody::LongText`.
     V2 = 2,
+    /// May name `AgentKind::Pi` in a session.
+    V3 = 3,
 }
 
 impl TimelineVersion {
-    pub const SUPPORTED: &[Self] = &[Self::V1, Self::V2];
+    pub const SUPPORTED: &[Self] = &[Self::V1, Self::V2, Self::V3];
     pub const CURRENT: Self = Self::SUPPORTED[Self::SUPPORTED.len() - 1];
 
     pub fn negotiate(maximum: u16) -> Result<Self, UnsupportedTimelineVersion> {
@@ -33,6 +35,11 @@ impl TimelineVersion {
         } else {
             WorkspaceRequest::TimelineWatch { pane_id }
         }
+    }
+
+    /// Whether a session of `agent` can be sent to a watch of this schema.
+    pub fn names(self, agent: AgentKind) -> bool {
+        agent != AgentKind::Pi || self >= Self::V3
     }
 
     pub const fn as_u16(self) -> u16 {
