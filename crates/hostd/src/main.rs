@@ -530,11 +530,12 @@ fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
 }
 
 /// The executable, if the daemon may replace it: it exists, its directory is writable (the new
-/// build is written next to it and renamed over it), and it is not inside an app bundle, whose
-/// signature a swapped binary would break (the app updates its own helper).
+/// build is written next to it and renamed over it), and it is neither inside an app bundle,
+/// whose signature a swapped binary would break, nor a copy the app installed (the app updates
+/// its own helper).
 fn upgradable_exe() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    if in_app_bundle(&exe) {
+    if in_app_bundle(&exe) || installed_by_app(&exe) {
         return None;
     }
     let dir = exe.parent()?;
@@ -551,6 +552,14 @@ fn in_app_bundle(exe: &Path) -> bool {
     parts
         .windows(2)
         .any(|pair| pair[0].to_string_lossy().ends_with(".app") && pair[1] == "Contents")
+}
+
+/// Whether `exe` is a build the Mac app copied out of its bundle
+/// (`<state>/Helper/Versions/<version>/<binary>`).
+fn installed_by_app(exe: &Path) -> bool {
+    let mut ancestors = exe.ancestors().skip(2).map(Path::file_name);
+    ancestors.next() == Some(Some(std::ffi::OsStr::new("Versions")))
+        && ancestors.next() == Some(Some(std::ffi::OsStr::new("Helper")))
 }
 
 /// Replaces this process with `exe` and the same arguments (same PID, so systemd or launchd
@@ -644,6 +653,10 @@ fn build_info(json: bool) -> Result<()> {
         // that reads its own.
         let mut object = serde_json::to_value(&info)?;
         object["handoff"] = serde_json::json!(daemon::HANDOFF_READS);
+        // The Mac app checks that a copy it installed runs and is the build it copied.
+        if let Some(digest) = exe_sha256() {
+            object["exe_sha256"] = serde_json::json!(digest);
+        }
         println!("{object}");
     } else {
         println!("{} {} ({})", brand::DAEMON_BIN, info.version, info.build);
@@ -655,6 +668,13 @@ fn build_info(json: bool) -> Result<()> {
         println!("host name: {}", info.hostname);
     }
     Ok(())
+}
+
+fn exe_sha256() -> Option<String> {
+    let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+    Some(hex(
+        ring::digest::digest(&ring::digest::SHA256, &bytes).as_ref()
+    ))
 }
 
 async fn wait_for_signal() -> Result<()> {
@@ -1077,6 +1097,15 @@ mod tests {
         )));
         assert!(!in_app_bundle(Path::new("/home/u/.local/bin/gudo-hostd")));
         assert!(!in_app_bundle(Path::new("/opt/Contents/X.app/hostd")));
+        assert!(installed_by_app(Path::new(
+            "/Users/u/Library/Application Support/Gudo/Helper/Versions/Current/gudo-hostd"
+        )));
+        assert!(!installed_by_app(Path::new(
+            "/home/u/.local/bin/gudo-hostd"
+        )));
+        assert!(!installed_by_app(Path::new(
+            "/opt/Versions/Current/gudo-hostd"
+        )));
     }
 
     /// The restart keeps SIGPIPE ignored through `exec`, so no thread writing to a closed
