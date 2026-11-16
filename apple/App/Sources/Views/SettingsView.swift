@@ -11,6 +11,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     #if os(macOS)
     @State private var navigation: SettingsNavigation
+    /// The panes list holds the keyboard as the window opens; the search only once clicked.
+    @FocusState private var focus: SettingsFocus?
     #else
     /// `-screen themes` opens the theme picker, `-screen devices` a host's devices (design review).
     @State private var path: [SettingsPage] = Self.fixturePath
@@ -31,6 +33,14 @@ struct SettingsView: View {
     #if os(macOS)
     private static let sidebarWidth: CGFloat = 220
 
+    /// Whether `event` is the user's own click or key, rather than AppKit settling a new window.
+    static func isUserEvent(_ event: NSEvent?) -> Bool {
+        switch event?.type {
+        case .leftMouseDown, .leftMouseUp, .keyDown: true
+        default: false
+        }
+    }
+
     init(navigation: SettingsNavigation = SettingsNavigation()) {
         _navigation = State(initialValue: navigation)
     }
@@ -44,12 +54,13 @@ struct SettingsView: View {
             // then the panes), no toggle; the pane's title in the titlebar over the form.
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    SettingsSearchField(query: $query)
+                    SettingsSearchField(query: $query, focus: $focus)
                         .padding(.horizontal, DS.Space.m)
                         .padding(.top, DS.Space.xs)
                         .padding(.bottom, DS.Space.s)
                     if query.isEmpty {
                         SettingsSidebar(selection: $navigation.pane)
+                            .focused($focus, equals: .panes)
                     } else {
                         // Results replace the panes while searching; the search stays.
                         let results = SettingsIndex.search(query)
@@ -89,6 +100,12 @@ struct SettingsView: View {
                         }
                     }
                 }
+            }
+            .defaultFocus($focus, .panes)
+            // AppKit hands a new window's keyboard to its first text field: the search takes it
+            // only from a click or a key.
+            .onChange(of: focus) { _, focused in
+                if focused == .search, !Self.isUserEvent(NSApp.currentEvent) { focus = .panes }
             }
             .onAppear(perform: followLink)
             .onChange(of: SettingsLink.shared.pending) { followLink() }
@@ -839,10 +856,15 @@ private struct TitleBarEdge: ViewModifier {
 }
 #endif
 
+/// Where the keyboard is in the Mac's Settings sidebar.
+private enum SettingsFocus: Hashable {
+    case search, panes
+}
+
 /// The sidebar's search (System Settings': above the panes, under the traffic lights).
 private struct SettingsSearchField: View {
     @Binding var query: String
-    @FocusState private var focused: Bool
+    var focus: FocusState<SettingsFocus?>.Binding
 
     var body: some View {
         HStack(spacing: DS.Space.row) {
@@ -850,7 +872,7 @@ private struct SettingsSearchField: View {
                 .foregroundStyle(DS.Palette.textTertiary)
             TextField("Search", text: $query)
                 .textFieldStyle(.plain)
-                .focused($focused)
+                .focused(focus, equals: .search)
                 .onKeyPress(.escape) {
                     query = ""
                     return .handled
@@ -864,7 +886,7 @@ private struct SettingsSearchField: View {
         }
         .padding(.horizontal, DS.Space.s)
         .frame(height: 28)
-        .fieldSurface(isFocused: focused)
+        .fieldSurface(isFocused: focus.wrappedValue == .search)
     }
 }
 #endif
