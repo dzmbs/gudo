@@ -114,12 +114,30 @@ extension WindowModel {
         withAnimation(DS.Motion.standard) { workspace.apply(.focus(next.panes[0])) }
     }
 
-    /// Splits the focused pane along its longer side on screen.
+    /// Splits the focused pane along its longer side on screen; when it is too small, the
+    /// largest pane in the tab that has room. With no room anywhere, says so.
     func splitBestFit() {
-        guard let workspace, let pane = workspace.focusedPane else { return }
-        let size = paneSize(pane, in: workspace)
-        let action: WorkspaceAction = size.width >= size.height ? .splitRight : .splitDown
-        action.perform(on: workspace, window: self)
+        guard let workspace, let split = bestFitSplit(in: workspace) else {
+            toasts.show(Toast(
+                "No pane here has room for another. Close one or make the window bigger.",
+                systemImage: "rectangle.split.2x1", style: .neutral))
+            return
+        }
+        workspace.apply(.split(split.pane, split.axis))
+    }
+
+    func bestFitSplit(in workspace: Workspace) -> (pane: PaneId, axis: Axis)? {
+        guard let focused = workspace.focusedPane, let tab = workspace.session.tab(containing: focused) else { return nil }
+        let sizes = Dictionary(tab.root.panes.map { ($0, paneSize($0, in: workspace)) }, uniquingKeysWith: { first, _ in first })
+        let others = (workspace.session.tiledRoot(of: tab)?.panes ?? [])
+            .filter { $0 != focused }
+            .sorted { (sizes[$0].map { $0.width * $0.height } ?? 0) > (sizes[$1].map { $0.width * $0.height } ?? 0) }
+        for pane in [focused] + others {
+            let size = sizes[pane] ?? paneSize(pane, in: workspace)
+            let axes: [Axis] = size.width >= size.height ? [.horizontal, .vertical] : [.vertical, .horizontal]
+            if let axis = axes.first(where: { workspace.hasRoomToSplit(pane, $0) }) { return (pane, axis) }
+        }
+        return nil
     }
 
     func paneSize(_ pane: PaneId, in workspace: Workspace) -> CGSize {
