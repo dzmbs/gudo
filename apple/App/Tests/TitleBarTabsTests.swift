@@ -8,23 +8,41 @@ import AppKit
 
 #if os(macOS)
 /// Counts the menu items AppKit makes, of every kind: the title bar builds one for each control
-/// it mirrors from an item's SwiftUI content.
+/// it mirrors from an item's SwiftUI content. `formsMade` names the items whose menu form the bar
+/// made again.
 enum MenuItemsMade {
     nonisolated(unsafe) static var count = 0
+    nonisolated(unsafe) static var formsMade: [String] = []
     nonisolated(unsafe) private static var isInstalled = false
 
     static func install() {
         guard !isInstalled else { return }
         isInstalled = true
         let selector = #selector(NSMenuItem.init(title:action:keyEquivalent:))
-        guard let method = class_getInstanceMethod(NSMenuItem.self, selector) else { return }
-        typealias Initializer = @convention(c) (AnyObject, Selector, NSString, Selector?, NSString) -> AnyObject
-        let original = unsafeBitCast(method_getImplementation(method), to: Initializer.self)
-        let counting: @convention(block) (AnyObject, NSString, Selector?, NSString) -> AnyObject = { item, title, action, key in
-            count += 1
-            return original(item, selector, title, action, key)
+        if let method = class_getInstanceMethod(NSMenuItem.self, selector) {
+            typealias Initializer = @convention(c) (AnyObject, Selector, NSString, Selector?, NSString) -> AnyObject
+            let original = unsafeBitCast(method_getImplementation(method), to: Initializer.self)
+            let counting: @convention(block) (AnyObject, NSString, Selector?, NSString) -> AnyObject = { item, title, action, key in
+                count += 1
+                return original(item, selector, title, action, key)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(counting))
         }
-        method_setImplementation(method, imp_implementationWithBlock(counting))
+        let setter = #selector(setter: NSToolbarItem.menuFormRepresentation)
+        if let method = class_getInstanceMethod(NSToolbarItem.self, setter) {
+            typealias Setter = @convention(c) (NSToolbarItem, Selector, NSMenuItem?) -> Void
+            let original = unsafeBitCast(method_getImplementation(method), to: Setter.self)
+            let naming: @convention(block) (NSToolbarItem, NSMenuItem?) -> Void = { item, form in
+                formsMade.append(item.label)
+                original(item, setter, form)
+            }
+            method_setImplementation(method, imp_implementationWithBlock(naming))
+        }
+    }
+
+    static func reset() {
+        count = 0
+        formsMade = []
     }
 }
 #endif
@@ -134,6 +152,41 @@ final class TitleBarTabsTests: XCTestCase {
         let toolbar = try XCTUnwrap(window.toolbar)
         XCTAssertNotNil(toolbar.items.first { Self.containsScrollView($0.view) }, "the strip is a title bar item")
         XCTAssertLessThan(MenuItemsMade.count, 5 * chips)
+    }
+
+    /// Switching tabs changes the title, or the strip's selected chip, and nothing else in the
+    /// bar: no control's menu form is made again. Each rebuild made one menu item for every
+    /// command an item holds, the Split menu's and the + menu's included, with their symbol
+    /// images: 55 per switch with the strip shown and 26 with the sidebar shown.
+    func testSwitchingTabsRebuildsNoControlsMenuForm() async throws {
+        let model = try await startedModel()
+        defer { model.close() }
+        let window = sceneWindow(model: model, width: 1100)
+        defer { window.close() }
+        for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+        let workspace = try XCTUnwrap(model.workspace)
+        for _ in 0..<3 { workspace.apply(.newTab) }
+        MenuItemsMade.install()
+        let controls: Set<String> = ["Split", "Command Palette", "More", "New", "Show Sidebar", "Hide Sidebar", model.hostName]
+        let switches = 6
+        for sidebarShown in [false, true] {
+            model.isSidebarShown = sidebarShown
+            await pump(1.5)
+            MenuItemsMade.reset()
+            for _ in 0..<switches {
+                model.selectTab(offset: 1)
+                await pump(0.4)
+            }
+            let perSwitch = Double(MenuItemsMade.count) / Double(switches)
+            print("menu items made per tab switch, sidebar shown \(sidebarShown): \(perSwitch)")
+            XCTAssertEqual(Set(MenuItemsMade.formsMade).intersection(controls), [], "sidebar shown: \(sidebarShown)")
+            // With the sidebar shown only the title's line and the Window menu change. The
+            // strip's chips redraw as the selection moves, and the bar mirrors a hosting view in
+            // an item too, so the strip's form is made again, a few items for each chip.
+            if sidebarShown {
+                XCTAssertLessThanOrEqual(perSwitch, 3)
+            }
+        }
     }
 
     /// A window too narrow for the title and every control: each item still shows, the controls
