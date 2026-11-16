@@ -55,6 +55,21 @@ nonisolated final class DevServerProxyTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(proxy.credential.password.count, 32)
     }
 
+    /// A client that connects and never finishes its greeting is closed.
+    func testSocksClosesAClientThatSendsNothing() async throws {
+        let proxy = DevServerSocksProxy(forward: { _ in 1 }, timeouts: ProxyTimeouts(setup: 0.3, halfClosedIdle: 30))
+        try await proxy.start()
+        defer { proxy.stop() }
+
+        let client = try RawClient.open(port: proxy.port)
+        defer { close(client) }
+        let accepted = await OpenSockets.wait { OpenSockets.accepted(on: proxy.port) == 1 }
+        XCTAssertTrue(accepted)
+        let closed = await OpenSockets.wait { OpenSockets.accepted(on: proxy.port) == 0 }
+        XCTAssertTrue(closed, "closed on the proxy's side")
+        XCTAssertEqual(RawClient.readsEnd(client), true, "the client sees the connection end")
+    }
+
     /// A port the host's forward refuses (not opened for that host) fails the CONNECT.
     func testSocksPassesOnARefusedPort() async throws {
         let proxy = DevServerSocksProxy { port in throw DevServerProxyError.portNotOpened(port) }
@@ -138,6 +153,52 @@ nonisolated final class DevServerProxyTests: XCTestCase {
             let routed = try await RawClient.get(port: port, path: "/whoami", cookie: "\(LoopbackRouter.routeCookie)=ta", host: host)
             XCTAssertTrue(routed.contains("server=A"), "\(host): \(routed)")
         }
+    }
+
+    /// A program that connects and closes without a word (a port probe) leaves nothing open.
+    func testRouterClosesConnectionsThatEndWithoutARequest() async throws {
+        let router = LoopbackRouter()
+        defer { router.stop() }
+        let port: UInt16 = 48_326
+        try await router.claim(port: port, token: "ta") { _ in 1 }
+
+        for _ in 0..<20 { try RawClient.probe(port: port) }
+        let closed = await OpenSockets.wait { OpenSockets.accepted(on: port) == 0 }
+        XCTAssertTrue(closed, "every probe's connection is closed on the router's side")
+    }
+
+    /// A probe that sends a request and leaves before the host answers, routed to a host that
+    /// never answers or closes (a forward that loops back to this port): both sides close.
+    func testRouterClosesAHalfClosedConnectionTheHostNeverAnswers() async throws {
+        let silent = try await SilentServer.start()
+        defer { silent.stop() }
+        let router = LoopbackRouter(timeouts: ProxyTimeouts(setup: 30, halfClosedIdle: 0.3))
+        defer { router.stop() }
+        let port: UInt16 = 48_327
+        try await router.claim(port: port, token: "signin", forward: { _ in silent.port }, acceptsAnyRequest: true)
+
+        let head = Data("HEAD / HTTP/1.0\r\nHost: localhost\r\nUser-Agent: port-probe\r\n\r\n".utf8)
+        for _ in 0..<10 { try RawClient.probe(port: port, sending: head) }
+        let routed = await OpenSockets.wait { router.count(for: "signin") == 10 }
+        XCTAssertTrue(routed, "every probe was routed to the host")
+        let closed = await OpenSockets.wait { OpenSockets.accepted(on: port) + OpenSockets.connected(to: silent.port) == 0 }
+        XCTAssertTrue(closed, "the router closes the client and the host's side")
+    }
+
+    /// A client that connects and never sends its request is closed.
+    func testRouterClosesAClientThatSendsNothing() async throws {
+        let router = LoopbackRouter(timeouts: ProxyTimeouts(setup: 0.3, halfClosedIdle: 30))
+        defer { router.stop() }
+        let port: UInt16 = 48_328
+        try await router.claim(port: port, token: "ta") { _ in 1 }
+
+        let client = try RawClient.open(port: port)
+        defer { close(client) }
+        let accepted = await OpenSockets.wait { OpenSockets.accepted(on: port) == 1 }
+        XCTAssertTrue(accepted)
+        let closed = await OpenSockets.wait { OpenSockets.accepted(on: port) == 0 }
+        XCTAssertTrue(closed, "closed on the router's side")
+        XCTAssertEqual(RawClient.readsEnd(client), true, "the client sees the connection end")
     }
 
     func testRouterRefusesAPortTakenHere() async throws {
@@ -352,8 +413,123 @@ nonisolated final class TestDevServer: @unchecked Sendable {
     }
 }
 
+/// Accepts connections and never reads, answers or closes them.
+nonisolated final class SilentServer: @unchecked Sendable {
+    private(set) var port: UInt16 = 0
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "silent-server")
+    private let connections = Locked<[NWConnection]>([])
+
+    private init(listener: NWListener) {
+        self.listener = listener
+    }
+
+    static func start() async throws -> SilentServer {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let server = SilentServer(listener: try NWListener(using: parameters))
+        server.listener.newConnectionHandler = { [server] connection in
+            server.connections.mutate { $0.append(connection) }
+            connection.start(queue: server.queue)
+        }
+        server.port = try await DevServerSocksProxy.ready(server.listener, queue: server.queue)
+        return server
+    }
+
+    func stop() {
+        listener.cancel()
+        connections.value.forEach { $0.cancel() }
+    }
+}
+
+/// This process's connected TCP sockets, read from its descriptor table.
+nonisolated enum OpenSockets {
+    /// Connected sockets whose local port is `port`: the server side of its connections.
+    static func accepted(on port: UInt16) -> Int {
+        connected { local, _ in local == port }
+    }
+
+    /// Connected sockets whose peer is on `port`: the client side of connections to it.
+    static func connected(to port: UInt16) -> Int {
+        connected { _, peer in peer == port }
+    }
+
+    private static func connected(where matches: (_ localPort: UInt16?, _ peerPort: UInt16?) -> Bool) -> Int {
+        (0..<getdtablesize()).filter { descriptor in
+            var local = sockaddr_storage()
+            var peer = sockaddr_storage()
+            var localLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            var peerLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let named = withUnsafeMutablePointer(to: &local) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(descriptor, $0, &localLength) }
+            }
+            let connected = withUnsafeMutablePointer(to: &peer) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getpeername(descriptor, $0, &peerLength) }
+            }
+            return named == 0 && connected == 0 && matches(port(of: local), port(of: peer))
+        }.count
+    }
+
+    private static func port(of address: sockaddr_storage) -> UInt16? {
+        var address = address
+        switch Int32(address.ss_family) {
+        case AF_INET:
+            return withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt16(bigEndian: $0.pointee.sin_port) } }
+        case AF_INET6:
+            return withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { UInt16(bigEndian: $0.pointee.sin6_port) } }
+        default:
+            return nil
+        }
+    }
+
+    /// Whether `condition` holds within a few seconds.
+    static func wait(until condition: @Sendable () -> Bool) async -> Bool {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return condition()
+    }
+}
+
 /// Plain TCP clients for the proxy and the router.
 nonisolated enum RawClient {
+    /// Connects to `127.0.0.1:<port>`, sends `data` and closes without waiting for an answer.
+    static func probe(port: UInt16, sending data: Data = Data()) throws {
+        let descriptor = try open(port: port)
+        defer { close(descriptor) }
+        let sent = data.withUnsafeBytes { Darwin.send(descriptor, $0.baseAddress, $0.count, 0) }
+        guard sent == data.count else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPIPE) }
+    }
+
+    /// A blocking socket connected to `127.0.0.1:<port>`; the caller closes it.
+    static func open(port: UInt16) throws -> Int32 {
+        let descriptor = socket(AF_INET, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw POSIXError(.EMFILE) }
+        var address = sockaddr_in()
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard connected == 0 else {
+            close(descriptor)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
+        }
+        return descriptor
+    }
+
+    /// Whether the server ended the connection without sending anything (waits up to a second).
+    static func readsEnd(_ descriptor: Int32) -> Bool {
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var byte: UInt8 = 0
+        let read = recv(descriptor, &byte, 1, 0)
+        return read == 0 || (read < 0 && errno == ECONNRESET)
+    }
+
     static func get(port: UInt16, path: String, cookie: String?, host: String? = nil) async throws -> String {
         var request = "GET \(path) HTTP/1.1\r\nHost: \(host ?? "localhost:\(port)")\r\n"
         if let cookie { request += "Cookie: \(cookie)\r\n" }

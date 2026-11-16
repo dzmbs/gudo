@@ -65,21 +65,49 @@ nonisolated func randomSecret() -> String {
     return bytes.map { String(format: "%02x", $0) }.joined()
 }
 
+/// How long a proxied connection may wait before it is closed. Every connection either gets
+/// going within these or is cancelled, so a client or upstream that goes quiet never holds a
+/// socket for good.
+nonisolated struct ProxyTimeouts: Sendable {
+    /// From accepting a client to splicing it: its request, the host's forward and the connect.
+    var setup: TimeInterval = 30
+    /// How long the open direction of a half-closed connection may go without a byte.
+    var halfClosedIdle: TimeInterval = 30
+}
+
+/// Cancels a connection unless it is met in time.
+nonisolated final class ConnectionDeadline: Sendable {
+    private let pending = Once()
+
+    init(_ connection: NWConnection, after timeout: TimeInterval, queue: DispatchQueue) {
+        queue.asyncAfter(deadline: .now() + timeout) { [pending] in
+            if pending.take() { connection.cancel() }
+        }
+    }
+
+    /// False when the deadline already passed and the connection was cancelled.
+    func meet() -> Bool { pending.take() }
+}
+
 // MARK: - Splicing
 
 /// Copies bytes both ways; each direction's end is passed on as a half-close, and both
-/// connections are cancelled once both directions ended or either failed.
+/// connections are cancelled once both directions ended, either failed, or the direction still
+/// open after a half-close went `idleTimeout` without a byte.
 nonisolated final class Splice: @unchecked Sendable {
     private let first: NWConnection
     private let second: NWConnection
     private let queue: DispatchQueue
+    private let idleTimeout: TimeInterval
     private var open = 2
     private var done = false
+    private var lastActivity = DispatchTime.now()
 
-    init(_ first: NWConnection, _ second: NWConnection, queue: DispatchQueue) {
+    init(_ first: NWConnection, _ second: NWConnection, queue: DispatchQueue, idleTimeout: TimeInterval) {
         self.first = first
         self.second = second
         self.queue = queue
+        self.idleTimeout = idleTimeout
     }
 
     func start() {
@@ -90,6 +118,7 @@ nonisolated final class Splice: @unchecked Sendable {
     private func copy(from source: NWConnection, to sink: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
             if let data, !data.isEmpty {
+                lastActivity = .now()
                 // Read again only once written: a slow reader holds the writer back.
                 sink.send(content: data, completion: .contentProcessed { [self] error in
                     if error != nil { finish() } else if isComplete { halfClose(sink) } else { copy(from: source, to: sink) }
@@ -108,9 +137,19 @@ nonisolated final class Splice: @unchecked Sendable {
         sink.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [self] _ in
             queue.async { [self] in
                 open -= 1
-                if open == 0 { finish() }
+                lastActivity = .now()
+                if open == 0 { finish() } else { closeWhenIdle() }
             }
         })
+    }
+
+    /// A peer that half-closed and then never hears back (or a loop of forwards back to this
+    /// listener) would hold both sockets forever.
+    private func closeWhenIdle() {
+        queue.asyncAfter(deadline: lastActivity + idleTimeout) { [self] in
+            guard !done else { return }
+            if DispatchTime.now() >= lastActivity + idleTimeout { finish() } else { closeWhenIdle() }
+        }
     }
 
     private func finish() {
@@ -180,6 +219,7 @@ nonisolated func readPrefix(
 public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev-server-socks")
     private let forward: DevServerForward
+    private let timeouts: ProxyTimeouts
     private var listener: NWListener?
     private var routedCount = 0
     private var directCount = 0
@@ -190,8 +230,13 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
     /// The only username and password it takes (RFC 1929), random per proxy.
     public let credential = (username: randomSecret(), password: randomSecret())
 
-    public init(forward: @escaping DevServerForward) {
+    public convenience init(forward: @escaping DevServerForward) {
+        self.init(forward: forward, timeouts: ProxyTimeouts())
+    }
+
+    init(forward: @escaping DevServerForward, timeouts: ProxyTimeouts) {
         self.forward = forward
+        self.timeouts = timeouts
     }
 
     /// The proxy configuration for the host's data store, its credential applied.
@@ -245,23 +290,24 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
 
     private func accept(_ client: NWConnection) {
         client.start(queue: queue)
+        let deadline = ConnectionDeadline(client, after: timeouts.setup, queue: queue)
         // Greeting: VER, NMETHODS, METHODS…; only username and password (2).
         readPrefix(client, limit: 257, enough: { $0.count >= 2 && $0.count >= 2 + Int($0[$0.startIndex + 1]) }) { [self] greeting, _ in
             let bytes = [UInt8](greeting)
             guard bytes.count >= 2, bytes[0] == 5 else { return client.cancel() }
             guard bytes[2...].contains(2) else { return refuse(client, Data([5, 0xFF])) }
-            client.send(content: Data([5, 2]), completion: .contentProcessed { [self] _ in authenticate(client) })
+            client.send(content: Data([5, 2]), completion: .contentProcessed { [self] _ in authenticate(client, deadline) })
         }
     }
 
     /// `VER=1 ULEN UNAME PLEN PASSWD`, checked against `credential`.
-    private func authenticate(_ client: NWConnection) {
+    private func authenticate(_ client: NWConnection, _ deadline: ConnectionDeadline) {
         readPrefix(client, limit: 513, enough: { Self.parseLogin([UInt8]($0)) != nil }) { [self] data, _ in
             guard let (username, password) = Self.parseLogin([UInt8](data)) else { return client.cancel() }
             let userMatches = constantTimeEqual(username, Array(credential.username.utf8))
             let passwordMatches = constantTimeEqual(password, Array(credential.password.utf8))
             guard userMatches && passwordMatches else { return refuse(client, Data([1, 1])) }
-            client.send(content: Data([1, 0]), completion: .contentProcessed { [self] _ in request(client) })
+            client.send(content: Data([1, 0]), completion: .contentProcessed { [self] _ in request(client, deadline) })
         }
     }
 
@@ -279,7 +325,7 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
         return (Array(bytes[2..<userEnd]), Array(bytes[(userEnd + 1)..<passwordEnd]))
     }
 
-    private func request(_ client: NWConnection) {
+    private func request(_ client: NWConnection, _ deadline: ConnectionDeadline) {
         readPrefix(client, limit: 262, enough: { Self.parseRequest([UInt8]($0)) != nil }) { [self] data, _ in
             guard let (command, host, port) = Self.parseRequest([UInt8](data)) else { return client.cancel() }
             guard command == 1 else { return reply(client, 7) }  // CONNECT only
@@ -288,7 +334,7 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
                 Task { [self] in
                     do {
                         let local = try await forward(port)
-                        connectLocal(local, queue: queue) { [self] upstream in established(client, upstream) }
+                        connectLocal(local, queue: queue) { [self] upstream in established(client, upstream, deadline) }
                     } catch DevServerProxyError.portNotOpened {
                         reply(client, 2)
                     } catch {
@@ -298,20 +344,21 @@ public nonisolated final class DevServerSocksProxy: @unchecked Sendable {
             } else {
                 queue.async { self.directCount += 1 }
                 connect(.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!), queue: queue) { [self] upstream in
-                    established(client, upstream)
+                    established(client, upstream, deadline)
                 }
             }
         }
     }
 
-    private func established(_ client: NWConnection, _ upstream: NWConnection?) {
+    private func established(_ client: NWConnection, _ upstream: NWConnection?, _ deadline: ConnectionDeadline) {
         guard let upstream else { return reply(client, 5) }
+        guard deadline.meet() else { return upstream.cancel() }
         client.send(content: Data([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]), completion: .contentProcessed { [self] error in
             if error != nil {
                 client.cancel()
                 upstream.cancel()
             } else {
-                Splice(client, upstream, queue: queue).start()
+                Splice(client, upstream, queue: queue, idleTimeout: timeouts.halfClosedIdle).start()
             }
         })
     }
@@ -357,6 +404,7 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     public static let routeCookie = "__gudo_route"
 
     private let queue = DispatchQueue(label: "loopback-router")
+    private let timeouts: ProxyTimeouts
     private var listeners: [UInt16: [NWListener]] = [:]
     /// Per port: route token → that host's forward.
     private var routes: [UInt16: [String: DevServerForward]] = [:]
@@ -366,7 +414,13 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
     /// Per port: told each HTTP request's target (a sign-in waiting for its callback).
     private var observers: [UInt16: @Sendable (String) -> Void] = [:]
 
-    public init() {}
+    public convenience init() {
+        self.init(timeouts: ProxyTimeouts())
+    }
+
+    init(timeouts: ProxyTimeouts) {
+        self.timeouts = timeouts
+    }
 
     /// Ports this router listens on.
     public var ports: [UInt16] { queue.sync { listeners.keys.sorted() } }
@@ -449,8 +503,8 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
 
     private func accept(_ client: NWConnection, port: UInt16) {
         client.start(queue: queue)
-        // The request head names the host by its route cookie. Browsers speak first, so no
-        // timeout.
+        // The request head names the host by its route cookie.
+        let deadline = ConnectionDeadline(client, after: timeouts.setup, queue: queue)
         readPrefix(client, limit: 64 * 1024, enough: Self.headIsComplete) { [self] head, ended in
             // On `queue` already (the connection's queue).
             guard let token = route(head, port: port), let forward = routes[port]?[token] else { return client.cancel() }
@@ -460,11 +514,12 @@ public nonisolated final class LoopbackRouter: @unchecked Sendable {
                 guard let local = try? await forward(port) else { return client.cancel() }
                 connectLocal(local, queue: queue) { [self] upstream in
                     guard let upstream else { return client.cancel() }
+                    guard deadline.meet() else { return upstream.cancel() }
                     upstream.send(content: head, completion: .contentProcessed { [self] _ in
                         if ended {
                             upstream.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .idempotent)
                         }
-                        Splice(client, upstream, queue: queue).start()
+                        Splice(client, upstream, queue: queue, idleTimeout: timeouts.halfClosedIdle).start()
                     })
                 }
             }
