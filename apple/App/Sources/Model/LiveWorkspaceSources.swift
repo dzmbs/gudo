@@ -394,13 +394,17 @@ final class LiveAgentFeed: AgentFeed {
                 }
             }
             let latest = byPane[pane.rawValue]
+            // An agent at rest that never reported a turn has not started a conversation: it is
+            // on its first screen (a sign-in, a setup question, or its prompt), in its terminal.
+            let waitsInTerminal = state == .idle && latest == nil
             // The pane title is often just the agent's name or the shell's directory ("~"); say
             // what it is doing instead.
             if prompt.isEmpty || prompt == AgentKind(agent.kind).title || prompt.lowercased() == agent.kind.lowercased()
-                || prompt.hasPrefix("~") || prompt.hasPrefix("/")
+                || prompt.hasPrefix("~") || prompt.hasPrefix("/") || waitsInTerminal
             {
                 switch state {
                 case .working: prompt = "Working…"
+                case .idle where waitsInTerminal: prompt = "Waiting in Terminal"
                 case .idle, .done: prompt = "Waiting for your next prompt"
                 default: break
                 }
@@ -413,12 +417,12 @@ final class LiveAgentFeed: AgentFeed {
             result.append(AgentItem(
                 id: id, agent: AgentKind(agent.kind), hostName: hostName,
                 sessionTitle: paneMeta.cwd.map(Self.folder) ?? "",
-                state: state == .idle ? .done : state,
+                state: waitsInTerminal ? .blocked : state == .idle ? .done : state,
                 since: latest.map { Date(timeIntervalSince1970: Double($0.atMs) / 1000) } ?? .now,
                 prompt: prompt.nonEmpty ?? AgentKind(agent.kind).title,
                 request: request, summary: summary, hostId: hostId, paneId: pane.rawValue,
                 unseen: latest.map { !$0.seen } ?? false, canReply: request == nil || options(agent).isEmpty,
-                drive: drive))
+                drive: drive, waitsInTerminal: waitsInTerminal))
         }
         // Other programs' own reports: status only, never a request to answer here.
         for (pane, program) in programs where meta[pane]?.agent == nil {

@@ -30,6 +30,24 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertNil(AgentToasts.summary(for: agent))
     }
 
+    func testAnAgentThatNeverFinishedATurnWaitsInTerminalInsteadOfLookingFinished() throws {
+        let metadata = [PaneId(1): meta(1, title: "Claude Code", agent: AgentStatus(kind: "claude", state: .idle))]
+        let fresh = try XCTUnwrap(LiveAgentFeed.items(hostId: "host", hostName: "Host", meta: metadata, attention: []).first)
+        XCTAssertEqual(fresh.state, .blocked)
+        XCTAssertTrue(fresh.waitsInTerminal)
+        XCTAssertEqual(fresh.prompt, "Waiting in Terminal")
+        XCTAssertTrue(InboxFilter.needsYou.includes(fresh))
+        let known: [AgentItem.ID: AgentToasts.Snapshot] = [fresh.id: AgentToasts.Snapshot(state: .working, request: nil)]
+        XCTAssertTrue(AgentToasts.arrivals([fresh], known: known, isShown: { _ in false }).isEmpty,
+                      "starting an agent is not news")
+
+        let finished = [attention(1, pane: 1, kind: .agentDone(agent: "claude"), title: "claude finished")]
+        let after = try XCTUnwrap(LiveAgentFeed.items(hostId: "host", hostName: "Host", meta: metadata, attention: finished).first)
+        XCTAssertEqual(after.state, .done)
+        XCTAssertFalse(after.waitsInTerminal)
+        XCTAssertEqual(after.prompt, "Waiting for your next prompt")
+    }
+
     func testADriveRequestShowsItsActionAndOffersThePane() {
         let options = [DecisionOption(id: 0, label: "Allow once"),
                        DecisionOption(id: 1, label: "Allow for this pane until it closes"),
@@ -117,7 +135,7 @@ final class WorkspaceScreenModelTests: XCTestCase {
         XCTAssertTrue(pi.canReply)
 
         let claude = try! XCTUnwrap(items.first { $0.id == "h/2" })
-        XCTAssertEqual(claude.state, .done, "the agent integration wins over the report")
+        XCTAssertTrue(claude.waitsInTerminal, "the agent integration wins over the report")
         XCTAssertNil(claude.program)
         XCTAssertEqual(items.count, 2)
 
@@ -176,7 +194,8 @@ final class WorkspaceScreenModelTests: XCTestCase {
             PaneId(1): meta(1, title: "~", cwd: "/home/me", agent: AgentStatus(kind: "claude", state: .idle)),
             PaneId(2): meta(2, title: "/srv/app", cwd: "/srv/app", agent: AgentStatus(kind: "codex", state: .idle)),
         ]
-        let items = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: [])
+        let finished = [attention(1, pane: 1, kind: .agentDone(agent: "claude")), attention(2, pane: 2, kind: .agentDone(agent: "codex"))]
+        let items = LiveAgentFeed.items(hostId: "h", hostName: "studio", meta: metas, attention: finished)
         let home = try! XCTUnwrap(items.first { $0.id == "h/1" })
         XCTAssertEqual(home.prompt, "Waiting for your next prompt")
         XCTAssertEqual(home.sessionTitle, "~")

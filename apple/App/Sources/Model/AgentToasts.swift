@@ -41,7 +41,7 @@ final class AgentToasts {
         _ items: [AgentItem], known: [AgentItem.ID: Snapshot], isShown: (AgentItem) -> Bool
     ) -> [(Kind, AgentItem)] {
         items.compactMap { item in
-            guard !item.isCommand, item.paneId != nil, let before = known[item.id] else { return nil }
+            guard !item.isCommand, !item.waitsInTerminal, item.paneId != nil, let before = known[item.id] else { return nil }
             let now = Snapshot(state: item.state, request: item.request)
             guard now != before, !isShown(item) else { return nil }
             switch item.state {

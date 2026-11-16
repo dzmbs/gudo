@@ -157,6 +157,8 @@ nonisolated struct AgentItem: Identifiable, Hashable, Sendable {
     /// what it wants ("Claude wants to type into ~/api · zsh"), its detail the exact action;
     /// Approve allows that once, and `allowForPane` is offered too.
     var drive = false
+    /// An agent that has not started a conversation: it waits on its first screen in its terminal.
+    var waitsInTerminal = false
 
     /// Who it is, for headlines and rows: the program's name, else the agent's.
     @MainActor var title: String { program.map { ProgramCatalog.identity(process: $0).displayName } ?? agent.title }
