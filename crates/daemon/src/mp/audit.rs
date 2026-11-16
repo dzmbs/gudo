@@ -36,6 +36,8 @@ struct State {
     recent: VecDeque<AuditRecord>,
     /// Every record loaded or written so far verified.
     chain_ok: bool,
+    /// Lines the disk refused (it was full), written before the next record.
+    unwritten: Vec<u8>,
 }
 
 /// What a caller records; the log fills in `seq`, `at` and the hashes.
@@ -60,6 +62,7 @@ impl Audit {
             seq: 0,
             recent: VecDeque::new(),
             chain_ok: true,
+            unwritten: Vec::new(),
         };
         if let Ok(file) = File::open(&path) {
             for line in BufReader::new(file).lines() {
@@ -112,16 +115,14 @@ impl Audit {
         record.hash = hash.to_vec();
         let mut line = serde_json::to_vec(&DiskRecord::from(&record)).expect("records encode");
         line.push(b'\n');
-        let written = state.file.as_mut().map(|file| {
-            file.write_all(&line)?;
+        let state = &mut *state;
+        state.unwritten.extend_from_slice(&line);
+        if let Some(file) = state.file.as_mut() {
             // Approvals are what someone may later have to prove; make them durable now.
-            if kind == AuditKind::Approval {
-                file.sync_data()?;
+            match append_lines(file, &state.unwritten, kind == AuditKind::Approval) {
+                Ok(()) => state.unwritten.clear(),
+                Err(error) => tracing::warn!("audit log {}: {error}", self.path.display()),
             }
-            Ok::<_, io::Error>(())
-        });
-        if let Some(Err(error)) = written {
-            tracing::warn!("audit log {}: {error}", self.path.display());
         }
         state.seq = record.seq;
         state.last_hash = hash;
@@ -180,6 +181,22 @@ impl Audit {
         }
         true
     }
+}
+
+/// Appends whole lines or nothing: a write cut short (a full disk) is cut off again, so the
+/// file never holds half a record and the lines can be written again later.
+fn append_lines(file: &mut File, lines: &[u8], sync: bool) -> io::Result<()> {
+    let length = file.metadata()?.len();
+    let written = file.write_all(lines).and_then(|()| {
+        if sync {
+            file.sync_data()?;
+        }
+        Ok(())
+    });
+    if written.is_err() {
+        let _ = file.set_len(length);
+    }
+    written
 }
 
 fn open_append(path: &Path) -> io::Result<File> {
@@ -391,5 +408,31 @@ mod tests {
                 })
                 .chain_ok
         );
+    }
+
+    /// A full disk loses no record and breaks no chain: what could not be written is
+    /// written, in order, once the disk takes it again.
+    #[test]
+    fn records_a_full_disk_refused_are_written_once_it_has_room() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = Audit::open(dir.path()).unwrap();
+        let path = dir.path().join("audit/audit.jsonl");
+        log.append(AuditKind::Join, Entry::default());
+        let writable = lock(&log.state)
+            .file
+            .replace(File::open(&path).unwrap())
+            .unwrap();
+        log.append(AuditKind::Leave, Entry::default());
+        log.append(AuditKind::Join, Entry::default());
+        lock(&log.state).file = Some(writable);
+        log.append(AuditKind::Leave, Entry::default());
+
+        assert!(log.verify_file());
+        let reopened = Audit::open(dir.path()).unwrap().query(AuditQuery {
+            after: None,
+            limit: 10,
+        });
+        assert!(reopened.chain_ok);
+        assert_eq!(reopened.total, 4);
     }
 }
