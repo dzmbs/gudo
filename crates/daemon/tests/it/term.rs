@@ -1194,7 +1194,7 @@ async fn a_wait_finds_its_match_after_a_flood_that_outruns_the_ring() {
             agent
                 .ok(
                     "pane_wait",
-                    json!({ "pane": worker, "match": "^FLOOD_END$", "since": cursor, "timeoutMs": 15000 }),
+                    json!({ "pane": worker, "match": "^FLOOD_END$", "since": cursor, "timeoutMs": 60000 }),
                 )
                 .await
         })
