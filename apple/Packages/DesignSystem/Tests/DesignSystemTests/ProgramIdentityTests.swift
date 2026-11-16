@@ -9,7 +9,9 @@ import Testing
     ("npx", "node"), ("bunx", "bun"), ("-zsh", "zsh"), ("--bash", "bash"), ("/opt/homebrew/bin/fish", "fish"),
     ("k9s", "k9s"), ("redis-cli", "redis-cli"), ("rustup", "rustc"), ("claude", "claude"), ("CLAUDE", "claude"),
     ("htop", "htop"), ("mosh-client", "mosh"), ("pwsh.exe", "pwsh"), ("lazygit", "lazygit"),
-    ("pi-rpc", "pi"),
+    ("pi-rpc", "pi"), ("kimi", "kimi"), ("aider", "aider"), ("yarn", "yarn"), ("pnpm", "node"), ("zig", "zig"),
+    ("sqlite3", "sqlite"), ("mongosh", "mongosh"), ("less", "less"), ("man", "man"), ("gmake", "make"),
+    ("iex", "elixir"), ("zellij", "zellij"), ("yazi", "yazi"), ("jj", "jj"),
 ])
 func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.normalize(name) == id)
@@ -25,8 +27,35 @@ func programNamesNormalize(name: String, id: String) {
     #expect(ProgramCatalog.normalize("node", arguments: words("node /usr/lib/node_modules/@anthropic-ai/claude-code/cli.js")) == "claude")
     #expect(ProgramCatalog.normalize("node", arguments: words("node --max-old-space-size=4096 /x/@openai/codex/bin/codex.js")) == "codex")
     #expect(ProgramCatalog.normalize("node", arguments: words("node server.js")) == "node")
+    #expect(ProgramCatalog.normalize("time", arguments: words("time make test")) == "make")
+    #expect(ProgramCatalog.normalize("caffeinate", arguments: words("caffeinate -i cargo build")) == "cargo")
+    #expect(ProgramCatalog.normalize("sudo", arguments: words("sudo -E env PATH=/x nvim")) == "neovim")
     #expect(ProgramCatalog.normalize("") == nil)
     #expect(ProgramCatalog.normalize("sudo") == "sudo")
+}
+
+/// Package runners name the package they run; interpreters name a script or module that is a
+/// program of its own.
+@Test func runnersAndInterpretersNameWhatTheyRun() {
+    let words = ProgramCatalog.words(of:)
+    #expect(ProgramCatalog.normalize("npx", arguments: words("npx @earendil-works/pi-coding-agent")) == "pi")
+    #expect(ProgramCatalog.normalize("npx", arguments: words("npx -y @anthropic-ai/claude-code@latest")) == "claude")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /usr/local/bin/npx --yes @openai/codex")) == "codex")
+    #expect(ProgramCatalog.normalize("bun", arguments: words("bun x cowsay hello")) == "cowsay")
+    #expect(ProgramCatalog.normalize("bunx", arguments: words("bunx --bun vite")) == "vite")
+    #expect(ProgramCatalog.normalize("npm", arguments: words("npm exec -- prettier --write .")) == "prettier")
+    #expect(ProgramCatalog.normalize("pnpm", arguments: words("pnpm dlx create-vite@5 app")) == "create-vite")
+    #expect(ProgramCatalog.normalize("uvx", arguments: words("uvx ruff check")) == "ruff")
+    #expect(ProgramCatalog.normalize("pipx", arguments: words("pipx run black .")) == "black")
+    #expect(ProgramCatalog.normalize("npm exec cowsay", arguments: ["npm exec cowsay"]) == "cowsay")
+    #expect(ProgramCatalog.normalize("npm", arguments: words("npm run dev")) == "node")
+    #expect(ProgramCatalog.normalize("npx", arguments: words("npx")) == "node")
+    #expect(ProgramCatalog.normalize("python3", arguments: words("python3 -m http.server 8000")) == "python")
+    #expect(ProgramCatalog.normalize("python3", arguments: words("python3 -m aider --model sonnet")) == "aider")
+    #expect(ProgramCatalog.normalize("python3", arguments: words("python3 /usr/local/bin/aider")) == "aider")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /opt/homebrew/bin/yarn install")) == "yarn")
+    #expect(ProgramCatalog.normalize("node", arguments: words("node /home/me/.pi/agent/install/releases/1.4.0/node_modules/.bin/pi")) == "pi")
+    #expect(ProgramCatalog.normalize("ruby", arguments: words("ruby bin/rails server")) == "ruby")
 }
 
 @Test func programCatalogNamesAndKinds() {
@@ -55,7 +84,7 @@ func programNamesNormalize(name: String, id: String) {
     }
     // The agents' and runtimes' official marks ship.
     for id in ["claude", "codex", "gemini", "copilot", "pi", "vim", "emacs", "htop", "docker", "kubectl", "python", "node",
-               "bun", "deno", "go", "rustc", "cargo", "psql"] {
+               "bun", "deno", "go", "rustc", "cargo", "psql", "zig", "yarn"] {
         #expect(ProgramCatalog.entry(id: id)?.logo != nil, "\(id) ships its logo")
     }
     // No official artwork could be sourced (redis-cli: brand kit unreachable; bash: not published
@@ -102,6 +131,18 @@ func programNamesNormalize(name: String, id: String) {
     // pi titles its terminal "π - <folder>".
     #expect(ProgramCatalog.identity(title: "π - gudo")?.id == "pi")
     #expect(ProgramCatalog.identity(title: "π")?.id == "pi")
+}
+
+@Test func commonProgramsHaveAKindOfTheirOwn() {
+    #expect(ProgramCatalog.identity(process: "less").symbol == "doc.plaintext")
+    #expect(ProgramCatalog.identity(process: "man").symbol == "book.closed")
+    #expect(ProgramCatalog.identity(process: "make").symbol == "hammer")
+    #expect(ProgramCatalog.identity(process: "yazi").symbol == "folder")
+    #expect(ProgramCatalog.identity(process: "sqlite3").displayName == "SQLite")
+    #expect(ProgramCatalog.identity(process: "sqlite3").symbol == "cylinder")
+    #expect(ProgramCatalog.identity(process: "aider").kind == .agent)
+    #expect(ProgramCatalog.identity(process: "kimi").displayName == "Kimi Code")
+    #expect(ProgramCatalog.identity(process: "zellij").kind == .multiplexer)
 }
 
 @Test func agentsRunAsScriptsOrBinariesAreNamed() {

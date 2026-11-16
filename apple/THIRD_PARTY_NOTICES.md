@@ -63,7 +63,7 @@ Mono under the SIL Open Font License 1.1, with Nerd Fonts symbols; the full lice
 ## Program logos
 
 `Packages/DesignSystem/Sources/DesignSystem/Resources/ProgramLogos.xcassets` holds the official
-logos of 24 programs, shown at 14-16 pt next to a tab to say which program runs in it (nominative
+logos of 26 programs, shown at 14-16 pt next to a tab to say which program runs in it (nominative
 use). Each file is the owner's own artwork as downloaded (byte-identical unless noted), in its own
 colours; where the owner publishes a dark-background variant it is the image set's dark
 appearance. Every logo is switched on by one line in `ProgramCatalog.logos`, which records each
@@ -79,9 +79,9 @@ The Linux Foundation. "Python" and the Python logos are trademarks or registered
 Python Software Foundation. Node.js is a trademark of the OpenJS Foundation. Deno is a registered
 trademark of Deno Land Inc. Rust and Cargo are trademarks of the Rust Foundation. Postgres,
 PostgreSQL and the Slonik logo are trademarks or registered trademarks of the PostgreSQL Community
-Association of Canada. Git, Neovim, Helix, tmux, btop, Ruby, Vim, Emacs, htop, Bun and pi belong
-to their owners. Names and logos are used only to identify the program running in a tab; this app is
-not affiliated with or endorsed by any of them.
+Association of Canada. Git, Neovim, Helix, tmux, btop, Ruby, Vim, Emacs, htop, Bun, pi, Zig and
+Yarn belong to their owners. Names and logos are used only to identify the program running in a
+tab; this app is not affiliated with or endorsed by any of them.
 
 "Permission requested" below marks logos whose owners' terms ask for permission before this use.
 
@@ -110,6 +110,8 @@ not affiliated with or endorsed by any of them.
 | Rust (`RustLogo`, `rust-logo.svg`, dark appearance `rust-logo-white-outline.svg`) | https://raw.githubusercontent.com/rust-lang/rust-artwork/main/logo/rust-logo.svg and `…/logo/rust-logo-white-outline.svg` (the project's version "to make it usable on dark backgrounds"; retrieved 2026-10-21) | Creative Commons Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/), Rust Foundation; also trademarks: "most commercial uses require permission" (https://rustfoundation.org/policy/rust-trademark-policy/). Unmodified | The owner's two versions, per scheme | Not stated | Permission requested |
 | Cargo (`CargoLogo`, `Cargo-Logo-Small.png`) | https://raw.githubusercontent.com/rust-lang/cargo/master/doc/book/src/images/Cargo-Logo-Small.png (the only official file; raster, 306×275; retrieved 2026-10-21) | As Rust: CC BY 4.0, Rust Foundation trademark. Unmodified | Shipped in colour | Not stated | Permission requested |
 | pi (`PiLogo`, `favicon.svg`) | https://raw.githubusercontent.com/earendil-works/pi/747c217b81980206063a89e46645b362de7ac8b1/apps/p2/public/icons/favicon.svg (retrieved 2026-11-16); the same mark pi.dev and pi's README show, in the colours pi draws it in the terminal | MIT License, Copyright (c) 2025 Mario Zechner (notice below), the repository's licence. Unmodified | pi.dev publishes a one-colour version; shipped in colour | None stated | Allowed by the licence; no trademark policy published |
+| Zig (`ZigLogo`, `zig-mark.svg`) | https://raw.githubusercontent.com/ziglang/logo/4f97e7a9ebce12fa48511c0b6502b6190005bc0e/zig-mark.svg from https://github.com/ziglang/logo ("Official Zig Project Logo"; retrieved 2026-11-16) | Creative Commons Attribution-ShareAlike 4.0 (https://creativecommons.org/licenses/by-sa/4.0/), Zig Software Foundation. Unmodified | Official one-colour versions; shipped in colour | None stated | Allowed by the licence |
+| Yarn (`YarnLogo`, `yarn-kitten.svg`) | https://raw.githubusercontent.com/yarnpkg/assets/76d30ca2aebed5b73ea8131d972218fb860bd32d/yarn-kitten.svg from https://github.com/yarnpkg/assets (retrieved 2026-11-16) | Creative Commons Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/), the Yarn project. Unmodified | Shipped in colour | None stated | Allowed by the licence |
 | PostgreSQL (`PostgreSQLLogo`, `PostgreSQL_logo.3colors.svg`) | https://wiki.postgresql.org/images/a/a4/PostgreSQL_logo.3colors.svg from https://wiki.postgresql.org/wiki/Logo (retrieved 2026-10-21) | PostgreSQL trademark policy (https://www.postgresql.org/about/policies/trademarks/): "For pretty much any use not discussed above, you must contact us for permission". Unmodified | Shipped in colour | Not stated | Permission requested |
 
 pi logo notice:

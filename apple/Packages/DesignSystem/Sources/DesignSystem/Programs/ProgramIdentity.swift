@@ -6,6 +6,7 @@ import Foundation
 nonisolated public struct ProgramIdentity: Hashable, Sendable {
     public enum Kind: String, Hashable, Sendable {
         case shell, agent, editor, monitor, vcs, container, language, database, multiplexer, remote, drawing, other
+        case pager, manual, build, files
 
         /// The neutral glyph for programs of this kind without a shipped logo.
         public var symbol: String {
@@ -21,6 +22,10 @@ nonisolated public struct ProgramIdentity: Hashable, Sendable {
             case .multiplexer: "rectangle.split.3x1"
             case .remote: "network"
             case .drawing: "scribble.variable"
+            case .pager: "doc.plaintext"
+            case .manual: "book.closed"
+            case .build: "hammer"
+            case .files: "folder"
             }
         }
     }
@@ -100,23 +105,48 @@ nonisolated public enum ProgramCatalog {
         entry("pi", "pi", .agent),
         entry("opencode", "opencode", .agent),
         entry("amp", "Amp", .agent),
+        entry("aider", "Aider", .agent),
+        entry("goose", "Goose", .agent),
+        entry("crush", "Crush", .agent),
+        entry("kimi", "Kimi Code", .agent),
+        entry("qwen", "Qwen Code", .agent),
         // Editors
         entry("vim", "Vim", .editor),
         entry("neovim", "Neovim", .editor),
         entry("emacs", "Emacs", .editor),
         entry("helix", "Helix", .editor),
         entry("nano", "nano", .editor),
+        entry("micro", "micro", .editor),
+        entry("kak", "Kakoune", .editor),
+        // Pagers and manuals
+        entry("less", "less", .pager),
+        entry("more", "more", .pager),
+        entry("most", "most", .pager),
+        entry("bat", "bat", .pager),
+        entry("man", "man", .manual),
         // Monitors
         entry("htop", "htop", .monitor),
         entry("btop", "btop", .monitor),
         entry("top", "top", .monitor),
+        entry("btm", "bottom", .monitor),
+        entry("glances", "Glances", .monitor),
+        entry("atop", "atop", .monitor),
+        entry("nvtop", "nvtop", .monitor),
         // Version control
         entry("git", "Git", .vcs),
         entry("lazygit", "lazygit", .vcs),
+        entry("tig", "tig", .vcs),
+        entry("gitui", "gitui", .vcs),
+        entry("jj", "Jujutsu", .vcs),
+        entry("hg", "Mercurial", .vcs),
         // Containers
         entry("docker", "Docker", .container),
         entry("kubectl", "kubectl", .container),
         entry("k9s", "K9s", .container),
+        entry("podman", "Podman", .container),
+        entry("lazydocker", "lazydocker", .container),
+        entry("helm", "Helm", .container),
+        entry("minikube", "minikube", .container),
         // Languages and runtimes
         entry("python", "Python", .language),
         entry("node", "Node.js", .language),
@@ -126,13 +156,50 @@ nonisolated public enum ProgramCatalog {
         entry("go", "Go", .language),
         entry("cargo", "Cargo", .language),
         entry("rustc", "Rust", .language),
+        entry("yarn", "Yarn", .language),
+        entry("zig", "Zig", .language),
+        entry("lua", "Lua", .language),
+        entry("php", "PHP", .language),
+        entry("perl", "Perl", .language),
+        entry("java", "Java", .language),
+        entry("swift", "Swift", .language),
+        entry("kotlin", "Kotlin", .language),
+        entry("scala", "Scala", .language),
+        entry("clojure", "Clojure", .language),
+        entry("elixir", "Elixir", .language),
+        entry("erlang", "Erlang", .language),
+        entry("haskell", "Haskell", .language),
+        entry("ocaml", "OCaml", .language),
+        entry("julia", "Julia", .language),
+        // Builds
+        entry("make", "make", .build),
+        entry("cmake", "CMake", .build),
+        entry("ninja", "Ninja", .build),
+        entry("just", "just", .build),
+        entry("gradle", "Gradle", .build),
+        entry("mvn", "Maven", .build),
+        entry("bazel", "Bazel", .build),
+        entry("xcodebuild", "xcodebuild", .build),
         // Databases
         entry("psql", "psql", .database),
         entry("redis-cli", "redis-cli", .database),
+        entry("sqlite", "SQLite", .database),
+        entry("mysql", "MySQL", .database),
+        entry("mongosh", "mongosh", .database),
+        entry("duckdb", "DuckDB", .database),
         // Multiplexers, remote
         entry("tmux", "tmux", .multiplexer),
+        entry("zellij", "Zellij", .multiplexer),
+        entry("screen", "screen", .multiplexer),
         entry("ssh", "SSH", .remote),
         entry("mosh", "Mosh", .remote),
+        entry("sftp", "SFTP", .remote),
+        // File managers
+        entry("yazi", "Yazi", .files),
+        entry("ranger", "ranger", .files),
+        entry("nnn", "nnn", .files),
+        entry("lf", "lf", .files),
+        entry("mc", "Midnight Commander", .files),
         // Shells
         entry("bash", "bash", .shell),
         entry("zsh", "zsh", .shell),
@@ -194,6 +261,10 @@ nonisolated public enum ProgramCatalog {
         // MIT (© 2025 Mario Zechner): pi's mark in its repository, in the colours pi draws it
         // in the terminal; the same mark as pi.dev's.
         "pi": .init("PiLogo", sources: ["https://raw.githubusercontent.com/earendil-works/pi/747c217b81980206063a89e46645b362de7ac8b1/apps/p2/public/icons/favicon.svg"], retrieved: "2026-11-16", clearance: .licensed),
+        // CC BY-SA 4.0 (Zig Software Foundation, ziglang/logo).
+        "zig": .init("ZigLogo", sources: ["https://raw.githubusercontent.com/ziglang/logo/4f97e7a9ebce12fa48511c0b6502b6190005bc0e/zig-mark.svg"], retrieved: "2026-11-16", clearance: .licensed),
+        // CC BY 4.0 (yarnpkg/assets).
+        "yarn": .init("YarnLogo", sources: ["https://raw.githubusercontent.com/yarnpkg/assets/76d30ca2aebed5b73ea8131d972218fb860bd32d/yarn-kitten.svg"], retrieved: "2026-11-16", clearance: .licensed),
     ]
 
     /// Our own simple glyphs for agents without artwork we may ship, drawn in the ink like a
@@ -211,16 +282,23 @@ nonisolated public enum ProgramCatalog {
         "github-copilot-cli": "copilot",
         "pi-coding-agent": "pi", "pi-rpc": "pi",
         "opencode-ai": "opencode",
+        "kimi-cli": "kimi",
+        "qwen-code": "qwen",
         "vi": "vim", "view": "vim", "vimdiff": "vim", "gvim": "vim", "mvim": "vim",
         "nvim": "neovim",
         "emacsclient": "emacs",
         "hx": "helix",
         "rnano": "nano",
         "ipython": "python", "bpython": "python", "ptpython": "python", "pypy": "python",
-        "nodejs": "node", "npm": "node", "npx": "node", "pnpm": "node", "yarn": "node",
+        "nodejs": "node", "npm": "node", "npx": "node", "pnpm": "node", "pnpx": "node",
         "bunx": "bun",
         "irb": "ruby", "bundle": "ruby", "rake": "ruby", "rails": "ruby",
         "rustup": "rustc", "rust-analyzer": "rustc",
+        "pip": "python", "uv": "python",
+        "sqlite3": "sqlite", "litecli": "sqlite", "mycli": "mysql", "mariadb": "mysql", "mongo": "mongosh",
+        "gmake": "make", "gradlew": "gradle", "mvnw": "mvn", "bazelisk": "bazel",
+        "iex": "elixir", "erl": "erlang", "ghci": "haskell", "ghc": "haskell", "utop": "ocaml", "clj": "clojure",
+        "lazyjj": "jj", "kakoune": "kak", "ranger-fm": "ranger",
         "docker-compose": "docker", "com.docker.cli": "docker",
         "kubecolor": "kubectl",
         "postgres": "psql", "pgcli": "psql",
@@ -247,8 +325,14 @@ nonisolated public enum ProgramCatalog {
     /// Interpreters whose versioned binaries (`python3.12`, `ruby3.3`) share one identity.
     static let versioned = ["python", "ruby", "node", "perl", "php", "lua", "pip"]
 
-    /// Interpreters that run an agent as a script (`node …/claude-code/cli.js`).
-    static let scriptHosts: Set<String> = ["node", "bun", "deno", "python"]
+    /// Interpreters that run a program as a script (`node …/claude-code/cli.js`, `python3 -m aider`).
+    static let scriptHosts: Set<String> = ["node", "bun", "deno", "python", "ruby", "perl", "php"]
+
+    /// Package runners and the subcommand that runs a package, if they need one (`bun x`).
+    static let runners: [String: Set<String>] = [
+        "npx": [], "bunx": [], "pnpx": [], "uvx": [],
+        "npm": ["exec", "x"], "pnpm": ["dlx", "exec"], "yarn": ["dlx", "exec"], "bun": ["x"], "pipx": ["run"],
+    ]
 
     /// Agents named anywhere in their script's path (`…/@anthropic-ai/claude-code/cli.js`).
     static let scriptAgents = ["claude", "codex", "gemini", "copilot"]
@@ -258,8 +342,16 @@ nonisolated public enum ProgramCatalog {
     static let scriptPackages: [String: String] = [
         "pi-coding-agent": "pi", "pi-rpc": "pi",
         "opencode-ai": "opencode",
+        "kimi-cli": "kimi",
+        "qwen-code": "qwen",
         "opencode": "opencode",
         "@sourcegraph/amp": "amp",
+    ]
+
+    /// Names that are ordinary words too, never read from a title ("make: building", "less is more").
+    static let ordinaryWords: Set<String> = [
+        "make", "just", "less", "more", "most", "man", "screen", "micro", "goose", "crush", "helm", "bat", "ninja",
+        "swift", "java", "mc", "lf",
     ]
 
     private static let byId: [String: ProgramIdentity] = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
@@ -291,7 +383,7 @@ nonisolated public enum ProgramCatalog {
         if "✳✻✽✶✢".unicodeScalars.contains(firstScalar) { return byId["claude"] }
         if firstScalar == "π" { return byId["pi"] }
         let word = trimmedTitle.split(whereSeparator: { $0.isWhitespace || $0 == ":" }).first.map(String.init) ?? trimmedTitle
-        guard let name = normalize(word), let known = byId[name], !known.isShell else { return nil }
+        guard let name = normalize(word), !ordinaryWords.contains(name), let known = byId[name], !known.isShell else { return nil }
         return known
     }
 
@@ -302,22 +394,44 @@ nonisolated public enum ProgramCatalog {
     /// `node /…/@anthropic-ai/claude-code/cli.js` → claude. Nil for an empty name.
     public static func normalize(_ name: String, arguments: [String] = []) -> String? {
         var words = arguments.isEmpty ? [name] : arguments
+        // A program that set its process title ("npm exec cowsay") has it all in argv0.
+        if let head = words.first, head.contains(" ") { words = Self.words(of: head) + words.dropFirst() }
         // `FOO=1 make` from a command line.
         if let commandStart = words.firstIndex(where: { !isAssignment($0) }), commandStart > 0 { words = Array(words[commandStart...]) }
         words = unwrapped(words)
         guard let head = words.first else { return nil }
         let base = canonical(head)
         guard !base.isEmpty else { return nil }
-        // An agent run as a script by its interpreter: name it, not the interpreter.
-        if scriptHosts.contains(base), let script = words.dropFirst().first(where: { !$0.hasPrefix("-") }) {
-            let lowered = script.lowercased()
+        if let package = runPackage(words) { return package }
+        // A program run as a script by its interpreter: name it, not the interpreter.
+        if scriptHosts.contains(base), let index = words.indices.dropFirst().first(where: { !words[$0].hasPrefix("-") }) {
+            let lowered = words[index].lowercased()
             for agent in scriptAgents where lowered.contains(agent) { return agent }
+            if let package = runPackage(Array(words[index...])) { return package }
             let scriptName = canonical(lowered)
             if Set(scriptPackages.values).contains(scriptName) { return scriptName }
             let directories = "/" + lowered + "/"
             for (package, agent) in scriptPackages where directories.contains("/\(package)/") { return agent }
+            if byId[scriptName] != nil { return scriptName }
         }
         return base
+    }
+
+    /// The program a package runner runs (`npx -y @openai/codex` → codex, `bun x vite` → vite),
+    /// nil when `words` is not a runner running a package.
+    static func runPackage(_ words: [String]) -> String? {
+        guard let head = words.first, let subcommands = runners[basename(head).lowercased()] else { return nil }
+        var rest = words.dropFirst()
+        if !subcommands.isEmpty {
+            guard let subcommand = rest.first, subcommands.contains(subcommand) else { return nil }
+            rest = rest.dropFirst()
+        }
+        guard let package = rest.first(where: { !$0.hasPrefix("-") })?.lowercased() else { return nil }
+        for agent in scriptAgents where package.contains(agent) { return agent }
+        // `@scope/name@1.2` → `@scope/name`.
+        let name = package.dropFirst().firstIndex(of: "@").map { String(package[..<$0]) } ?? package
+        for (scripted, agent) in scriptPackages where name == scripted || name.hasSuffix("/" + scripted) { return agent }
+        return canonical(name)
     }
 
     /// Splits a command line into words for `normalize` (quoting ignored: only the leading words
