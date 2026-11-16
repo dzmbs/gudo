@@ -74,6 +74,9 @@ struct SettingsView: View {
                     ScrollViewReader { proxy in
                         Form { detail(navigation.pane).chromeRows() }
                             .formStyle(.grouped)
+                            // Each pane opens at its top, never where the last one was left.
+                            .defaultScrollAnchor(.top, for: .initialOffset)
+                            .id(navigation.pane)
                             .chromeGrouped()
                             .titleBarEdge()
                             .navigationTitle(navigation.pane.title)
@@ -788,28 +791,38 @@ private extension View {
     }
 }
 
+/// The title bar's height over the form, and how far the form's own top sits below the window's:
+/// a band laid inside a view that ignores the safe area would read no inset at all.
+private nonisolated struct TitleBand: Equatable, Sendable {
+    var height: CGFloat = 0
+    var formTop: CGFloat = 0
+}
+
 private struct TitleBarEdge: ViewModifier {
     @State private var isScrolled = false
+    @State private var band = TitleBand()
 
     func body(content: Content) -> some View {
         content
             .onScrollGeometryChange(for: Bool.self, of: { $0.contentOffset.y + $0.contentInsets.top > 0 }) { _, scrolled in
                 isScrolled = scrolled
             }
+            .onGeometryChange(for: TitleBand.self) { proxy in
+                let formTop = proxy.frame(in: .global).minY
+                return TitleBand(height: proxy.safeAreaInsets.top + formTop, formTop: formTop)
+            } action: { band = $0 }
             .overlay(alignment: .top) {
-                GeometryReader { proxy in
-                    Rectangle()
-                        .fill(DS.Palette.groupedPage)
-                        .overlay(alignment: .bottom) {
-                            Hairline(style: DS.Palette.separator)
-                                .opacity(isScrolled ? 1 : 0)
-                                .animation(DS.Motion.micro, value: isScrolled)
-                        }
-                        .frame(height: proxy.safeAreaInsets.top)
-                }
-                .ignoresSafeArea(edges: .top)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+                Rectangle()
+                    .fill(DS.Palette.groupedPage)
+                    .overlay(alignment: .bottom) {
+                        Hairline(style: DS.Palette.separator)
+                            .opacity(isScrolled ? 1 : 0)
+                            .animation(DS.Motion.micro, value: isScrolled)
+                    }
+                    .frame(height: band.height)
+                    .offset(y: -band.formTop)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
     }
 }

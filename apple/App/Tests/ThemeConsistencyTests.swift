@@ -92,6 +92,53 @@ final class ThemeConsistencyTests: XCTestCase {
         }
     }
 
+    /// A pane opens at its top, and rows scrolled up pass under a band of the page's colour: the
+    /// title never prints over a row.
+    func testSettingsOpensAtTheTopAndRowsPassUnderTheTitle() async throws {
+        for name in Self.themes {
+            let palette = use(name)
+            var offsetAtOpen: CGFloat?
+            var offsetOnSwitch: CGFloat?
+            let navigation = SettingsNavigation(pane: .terminal)
+            func scrollDown() async {
+                guard let form = Self.formScrollView() else { return }
+                form.contentView.scroll(to: NSPoint(x: 0, y: 240 - form.contentInsets.top))
+                form.reflectScrolledClipView(form.contentView)
+                await self.pump(0.8)
+            }
+            let picture = try await render("settings-scrolled", theme: name, size: CGSize(width: 820, height: 560), sceneWindow: true) {
+                SettingsView(navigation: navigation)
+            } settle: {
+                await self.pump(1.5)
+                offsetAtOpen = Self.formScrollView().map { $0.contentView.bounds.minY + $0.contentInsets.top }
+                await scrollDown()
+                navigation.pane = .appearance
+                await self.pump(1)
+                offsetOnSwitch = Self.formScrollView().map { $0.contentView.bounds.minY + $0.contentInsets.top }
+                await scrollDown()
+            }
+            XCTAssertEqual(try XCTUnwrap(offsetAtOpen, "\(name): the form's scroll view"), 0, accuracy: 1, "\(name): Settings opens at the top of the pane")
+            XCTAssertEqual(try XCTUnwrap(offsetOnSwitch), 0, accuracy: 1, "\(name): another pane opens at its top, not where the last was left")
+            for x in [300.0, 500, 700] {
+                try picture.expect(palette.groupedPage, at: CGPoint(x: x, y: 40), "\(name): the band under the title, rows scrolled under it")
+            }
+        }
+    }
+
+    /// The tallest scroll view right of the Settings sidebar: the pane's form.
+    private static func formScrollView() -> NSScrollView? {
+        guard let window = NSApp.windows.first(where: { $0.frame.minX <= -29000 && $0.isVisible }), let root = window.contentView else { return nil }
+        var found: [NSScrollView] = []
+        func walk(_ view: NSView) {
+            if let scroll = view as? NSScrollView { found.append(scroll) }
+            view.subviews.forEach(walk)
+        }
+        walk(root)
+        return found
+            .filter { $0.convert($0.bounds, to: nil).minX > 200 }
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) }
+    }
+
     func testMainWindowToolbarAndPanes() async throws {
         for name in Self.themes {
             let palette = use(name)
