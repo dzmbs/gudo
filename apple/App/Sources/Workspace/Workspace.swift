@@ -365,6 +365,9 @@ final class Workspace {
             onNoRoomToSplit?()
             return
         }
+        if case .newTab = op, let store = layout.base as? DaemonLayoutStore {
+            store.newTabDirectory = focusedPane.flatMap { (host as? DaemonConnection)?.meta[$0]?.cwd?.nonEmpty ?? pane($0)?.workingDirectory.nonEmpty }
+        }
         // Splits, closes and zooms animate the panes' sizes (`SplitTreeView`), and a dragged
         // divider resizes them under the pointer: no cols × rows overlay through them. A divider
         // moved from the keyboard keeps it.

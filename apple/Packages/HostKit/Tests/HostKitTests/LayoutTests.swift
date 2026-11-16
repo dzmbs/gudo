@@ -60,6 +60,17 @@ import GudoCore
 
 @MainActor
 @Suite struct DaemonLayoutStoreTests {
+    @Test func aNewTabStartsInTheFolderItWasAskedForOnce() {
+        var sent: [GudoCore.LayoutOp] = []
+        let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }
+        store.receive(sampleLayout(revision: 5))
+        store.newTabDirectory = "/home/me/project"
+        store.apply(.newTab)
+        #expect(sent.last == .newTab(sessionId: 7, name: "", launch: .shell(cwd: "/home/me/project")))
+        store.apply(.newTab)
+        #expect(sent.last == .newTab(sessionId: 7, name: "", launch: .shell(cwd: nil)), "once")
+    }
+
     @Test func theDaemonIsTheSourceOfTruth() {
         var sent: [GudoCore.LayoutOp] = []
         let store = DaemonLayoutStore { sent.append($0); return UInt64(sent.count) }

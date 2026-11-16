@@ -33,6 +33,9 @@ public final class DaemonLayoutStore: LayoutStore {
     /// The least time between two ratios sent for a divider being dragged: it follows the
     /// pointer here at once, while the daemon and every other device hear of it this often.
     @ObservationIgnored public var ratioInterval = Duration.milliseconds(33)
+    /// Where the next new tab's shell starts, once (the focused pane's folder, as a split's
+    /// does); nil leaves it to the daemon (the home folder).
+    @ObservationIgnored public var newTabDirectory: String?
 
     private enum Pending {
         case layout(PaneLayout.LayoutOp)
@@ -82,7 +85,11 @@ public final class DaemonLayoutStore: LayoutStore {
 
     public func apply(_ op: PaneLayout.LayoutOp) {
         if case .setRatio(let pane, let axis, let ratio) = op { return setRatio(pane, axis, ratio) }
-        guard let sessionId, let daemonOp = LayoutConversion.op(op, sessionId: sessionId, session: session) else { return }
+        guard let sessionId, var daemonOp = LayoutConversion.op(op, sessionId: sessionId, session: session) else { return }
+        if case .newTab = op, let directory = newTabDirectory {
+            daemonOp = .newTab(sessionId: sessionId, name: "", launch: .shell(cwd: directory))
+        }
+        newTabDirectory = nil
         if LayoutConversion.isOptimistic(op) {
             var next = session
             next.apply(op)
