@@ -9,10 +9,10 @@ use proto::{
     Actor, ArtifactError, ArtifactEvent, ArtifactInfo, ArtifactRequest, ArtifactResponse,
     AttachFailure, AttachVia, Attachment, AuditKind, BlobHeader, BlobReply, Bulk, Caps, ClientCtl,
     ClientInput, DaemonFeatures, DeviceId, ForwardReply, Hello, InputPayload, InputRejectReason,
-    LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId, PaneLaunch, PaneSize, RefuseReason,
-    ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant, StreamHeader,
-    SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest, WorkspaceResponse,
-    WsError,
+    InputSeq, LeaseRequestKind, MpError, MpRequest, MpResponse, PaneId, PaneLaunch, PaneSize,
+    RefuseReason, ResumePoint, RpcError, Scope, Seq, ServerCtl, SessionId, SignedGrant,
+    StreamHeader, SubscribeMode, TransferReply, WIRE_VERSION, Welcome, WorkspaceRequest,
+    WorkspaceResponse, WsError,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
@@ -44,6 +44,9 @@ struct ConnState {
     visible: Vec<PaneId>,
     sizes: HashMap<PaneId, PaneSize>,
     subscriptions: HashMap<PaneId, Subscription>,
+    /// The newest acknowledgement for a pane's input that arrived before its subscription,
+    /// sent once the subscription exists.
+    unsent_acks: HashMap<PaneId, (InputSeq, Seq)>,
     resume: HashMap<PaneId, ResumePoint>,
     /// The metadata last sent per pane: most changes the core announces (agent events, a
     /// title set again) leave what this client sees as it was.
@@ -925,13 +928,8 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .inputs
                 .admit(client.actor.device, stream, input.input_seq.0)
         {
-            if let Some(entry) = client.core.pane(input.pane_id)
-                && let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id)
-            {
-                let _ = subscription.cmds.send(StreamCmd::InputAck {
-                    input_seq: input.input_seq,
-                    at_seq: entry.pane.head(),
-                });
+            if let Some(entry) = client.core.pane(input.pane_id) {
+                client.ack_input(input.pane_id, input.input_seq, entry.pane.head());
             }
             continue;
         }
@@ -1017,17 +1015,28 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
             client.core.theme_used(client.id, &entry);
             client.core.mp.typed(&client.core, client.id, input.pane_id);
         }
-        if let Some(subscription) = lock(&client.state).subscriptions.get(&input.pane_id) {
-            let _ = subscription.cmds.send(StreamCmd::InputAck {
-                input_seq: input.input_seq,
-                at_seq,
-            });
-        }
+        client.ack_input(input.pane_id, input.input_seq, at_seq);
     }
     Ok(())
 }
 
 impl Client {
+    /// Acknowledges input on the pane's stream, or once there is one: input and the
+    /// subscription travel on different QUIC streams, so the input may arrive first.
+    fn ack_input(&self, pane_id: PaneId, input_seq: InputSeq, at_seq: Seq) {
+        let mut state = lock(&self.state);
+        match state.subscriptions.get(&pane_id) {
+            Some(subscription) => {
+                let _ = subscription
+                    .cmds
+                    .send(StreamCmd::InputAck { input_seq, at_seq });
+            }
+            None => {
+                state.unsent_acks.insert(pane_id, (input_seq, at_seq));
+            }
+        }
+    }
+
     fn send(&self, message: ServerCtl) {
         let _ = self.ctl.send(message);
     }
@@ -3429,6 +3438,9 @@ impl Client {
         pane.pty().refresh_echo();
         let (acks, acks_rx) = watch::channel(Seq(0));
         let (cmds, cmds_rx) = mpsc::unbounded_channel();
+        if let Some((input_seq, at_seq)) = state.unsent_acks.remove(&pane_id) {
+            let _ = cmds.send(StreamCmd::InputAck { input_seq, at_seq });
+        }
         let class = state.class(pane_id);
         let (client, conn, link) = (Arc::downgrade(self), self.conn.clone(), self.link);
         let task = tokio::spawn(async move {

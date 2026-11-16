@@ -259,3 +259,34 @@ async fn without_a_mirror_bytes_and_snapshots_still_flow() {
     drop(client);
     daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn input_that_arrives_before_its_subscription_is_still_acknowledged() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let ticket = daemon
+        .pairing_ticket(daemon::PAIRING_TTL)
+        .unwrap()
+        .to_string();
+    let (client, mut events) = connect(&ticket, false);
+    client.attach(None);
+    let ClientEvent::Layout { layout } = next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Layout { .. })
+    })
+    .await
+    else {
+        unreachable!()
+    };
+    let pane = layout.tabs[0].focused;
+    client.send_input(pane, b"true\r".to_vec());
+    // Input and subscriptions travel on different streams; let the input land first.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    client.subscribe(pane);
+    next_matching(
+        &mut events,
+        |event| matches!(event, ClientEvent::InputAck { pane_id, .. } if *pane_id == pane),
+    )
+    .await;
+    drop(client);
+    daemon.shutdown().await;
+}
