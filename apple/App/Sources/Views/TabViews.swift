@@ -44,15 +44,8 @@ struct WorkspaceSidebar: View {
         List {
             Group {
                 if showsDestinations {
-                    VStack(spacing: 0) {
-                        destinationRow(.inbox) {
-                            CountBadge(model.needsYouCount)
-                        }
-                        destinationRow(.hosts) {
-                            Text("\(model.hosts.hostCount)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
-                        }
-                    }
-                    .padding(.top, DS.Space.s)
+                    SidebarDestinations()
+                        .padding(.top, DS.Space.s)
                 }
 
                 SidebarTabList(geometry: geometry)
@@ -120,6 +113,22 @@ struct WorkspaceSidebar: View {
         }
         .animation(DS.Motion.standard, value: model.isSelectingTabs || model.tabSelection.isMultiple)
         .overlay(alignment: .bottomLeading) { ConnectionProbe() }
+    }
+}
+
+/// Inbox and Hosts; a view of its own so their counts re-render only these rows, never the list.
+private struct SidebarDestinations: View {
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 0) {
+            destinationRow(.inbox) {
+                CountBadge(model.needsYouCount)
+            }
+            destinationRow(.hosts) {
+                Text("\(model.hosts.hostCount)").font(DS.Font.meta).foregroundStyle(DS.Palette.textTertiary)
+            }
+        }
     }
 
     private func destinationRow(_ destination: Destination, @ViewBuilder trailing: () -> some View) -> some View {
