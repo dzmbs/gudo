@@ -465,9 +465,12 @@ private struct HostRow: View {
                     .font(.footnote)
                     .lineLimit(2)
             case .disconnected:
-                Text(host.statusLine ?? lastUsed)
-                    .font(.footnote)
-                    .foregroundStyle(DS.Palette.textTertiary)
+                // "Last used 33 seconds ago" keeps counting while it is on screen.
+                TimelineView(.periodic(from: .now, by: 15)) { context in
+                    Text(host.statusLine ?? HostsView.lastUsed(host.lastSeen, now: context.date))
+                        .font(.footnote)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                }
             case .connected, .slow, .paused:
                 if let helper = host.helper, helper.canUpdate {
                     Label(helper.message, systemImage: "arrow.down.circle")
@@ -491,8 +494,13 @@ private struct HostRow: View {
         }
     }
 
-    private var lastUsed: String {
-        guard host.lastSeen > .distantPast else { return "Not connected" }
-        return "Last used \(host.lastSeen.formatted(.relative(presentation: .named)))"
+}
+
+extension HostsView {
+    static func lastUsed(_ lastSeen: Date, now: Date) -> String {
+        guard lastSeen > .distantPast else { return "Not connected" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.dateTimeStyle = .named
+        return "Last used \(formatter.localizedString(for: min(lastSeen, now), relativeTo: now))"
     }
 }
