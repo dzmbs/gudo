@@ -134,9 +134,7 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
         exe = systemd_word(exe)?,
         state = systemd_word(state_dir)?,
     );
-    std::fs::create_dir_all(path.parent().expect("unit path has a parent"))?;
-    std::fs::write(&path, unit)?;
-    run(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
+    write_unit(&path, &unit, Path::new("systemctl"))?;
     let unit = format!("{}.service", brand::DAEMON_BIN);
     run(Command::new("systemctl").args(["--user", "enable", &unit]))?;
     // Restart rather than start, so reinstalling over a new binary (an upgrade) runs it.
@@ -266,6 +264,33 @@ pub fn uninstall() -> Result<()> {
     Ok(())
 }
 
+/// Writes the unit at `path` and has systemd's user manager load it. Where that cannot work
+/// (no systemd, or no user manager for this login) a unit written here is taken away again,
+/// so nothing stale stays behind; one installed before is kept.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn write_unit(path: &Path, unit: &str, systemctl: &Path) -> Result<()> {
+    let existed = path.exists();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(path, unit)?;
+    let reloaded = Command::new(systemctl)
+        .args(["--user", "daemon-reload"])
+        .output();
+    let failure = match reloaded {
+        Ok(output) if output.status.success() => return Ok(()),
+        Ok(_) => anyhow::anyhow!("systemd's user manager isn't running for this login"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            anyhow::anyhow!("this host has no systemd")
+        }
+        Err(error) => anyhow::Error::new(error).context("running systemctl"),
+    };
+    if !existed {
+        let _ = std::fs::remove_file(path);
+    }
+    Err(failure)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,6 +306,34 @@ mod tests {
             r#""/x/%%h$$HOME\"q\\""#
         );
         assert!(systemd_word(Path::new("/x\nExecStartPre=/bin/evil")).is_err());
+    }
+
+    #[test]
+    fn without_systemd_no_unit_file_is_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("systemd/user/hostd.service");
+        let missing = dir.path().join("no-such-systemctl");
+        let error = write_unit(&path, "[Unit]\n", &missing).unwrap_err();
+        assert_eq!(error.to_string(), "this host has no systemd");
+        assert!(!path.exists());
+
+        std::fs::write(&path, "[Unit]\nDescription=installed before\n").unwrap();
+        assert!(write_unit(&path, "[Unit]\n", &missing).is_err());
+        assert!(path.exists(), "a unit installed before stays");
+    }
+
+    #[test]
+    fn a_systemd_without_a_user_manager_leaves_no_unit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hostd.service");
+        let error = write_unit(&path, "[Unit]\n", Path::new("false")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "systemd's user manager isn't running for this login"
+        );
+        assert!(!path.exists());
+        assert!(write_unit(&path, "[Unit]\n", Path::new("true")).is_ok());
+        assert!(path.exists());
     }
 
     #[test]
