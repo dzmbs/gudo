@@ -47,7 +47,7 @@ async fn keepalives_keep_an_idle_connection_and_measure_rtt() {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn silent_drop_is_detected_by_keepalives() {
     let env = env();
-    let proxy = Proxy::start(format!("{}:22", env.host)).await;
+    let proxy = Proxy::start(env.address()).await;
     let (connection, ..) = via_proxy(&proxy, fast_keepalive()).await;
     assert!(connection.exec("true").await.unwrap().success());
     proxy.blackhole(true);
@@ -73,7 +73,7 @@ async fn silent_drop_is_detected_by_keepalives() {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn fast_probe_and_input_after_silence() {
     let env = env();
-    let proxy = Proxy::start(format!("{}:22", env.host)).await;
+    let proxy = Proxy::start(env.address()).await;
     // Slow keepalives, so only the probe can catch the drop quickly.
     let keepalive = Keepalive {
         interval: Duration::from_secs(30),
@@ -93,7 +93,7 @@ async fn fast_probe_and_input_after_silence() {
     assert!(why.contains("probe"), "{why}");
 
     // Typing into a shell after a keepalive interval of silence triggers the same probe.
-    let proxy = Proxy::start(format!("{}:22", env.host)).await;
+    let proxy = Proxy::start(env.address()).await;
     let keepalive = Keepalive {
         interval: Duration::from_secs(2),
         count_max: 100,
@@ -165,7 +165,7 @@ impl ssh::SessionListener for States {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn session_reconnects_after_a_drop_and_reports_states() {
     let env = env();
-    let proxy = Proxy::start(format!("{}:22", env.host)).await;
+    let proxy = Proxy::start(env.address()).await;
     let mut options = env.options(env.key_credentials());
     options.keepalive = fast_keepalive();
     options.timeouts.handshake = Duration::from_secs(2);

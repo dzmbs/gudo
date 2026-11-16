@@ -203,8 +203,8 @@ async fn proxy_jump_chain() {
 
     // The same route from an ssh_config `ProxyJump`.
     let config = ssh::SshConfig::parse(&format!(
-        "Host vm\n  HostName {}\n  User {}\nHost behind\n  HostName 127.0.0.1\n  ProxyJump vm\n  User {}\n",
-        env.host, env.user, env.user
+        "Host vm\n  HostName {}\n  Port {}\n  User {}\nHost behind\n  HostName 127.0.0.1\n  ProxyJump vm\n  User {}\n",
+        env.host, env.port, env.user, env.user
     ))
     .unwrap();
     let target = config.target("behind", "nobody").unwrap();
@@ -220,8 +220,9 @@ async fn proxy_jump_chain() {
 async fn jump_hosts_sign_in_with_their_own_credentials() {
     let env = env();
     let config = ssh::SshConfig::parse(&format!(
-        "Host vm\n  HostName {}\n  User {}\n  IdentityFile {}\n",
+        "Host vm\n  HostName {}\n  Port {}\n  User {}\n  IdentityFile {}\n",
         env.host,
+        env.port,
         env.user,
         env.keys.join("id_ecdsa").display()
     ))

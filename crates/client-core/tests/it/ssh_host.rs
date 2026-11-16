@@ -20,6 +20,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 struct Env {
     host: String,
+    port: u16,
     user: String,
     keys: PathBuf,
 }
@@ -32,6 +33,10 @@ fn env() -> Env {
     };
     Env {
         host: var("GUDO_SSH_TEST_HOST"),
+        port: std::env::var("GUDO_SSH_TEST_PORT")
+            .ok()
+            .and_then(|port| port.parse().ok())
+            .unwrap_or(22),
         user: var("GUDO_SSH_TEST_USER"),
         keys: PathBuf::from(var("GUDO_SSH_TEST_KEYS")),
     }
@@ -187,7 +192,7 @@ async fn proxy(upstream: String, cut: Arc<AtomicBool>) -> u16 {
 async fn fallback_pane_survives_a_drop_with_a_new_shell() {
     let env = env();
     let cut = Arc::new(AtomicBool::new(false));
-    let port = proxy(format!("{}:22", env.host), Arc::clone(&cut)).await;
+    let port = proxy(format!("{}:{}", env.host, env.port), Arc::clone(&cut)).await;
     let session = Session::start(
         Target::direct(HostSpec::new("127.0.0.1", &env.user).with_port(port)),
         options(&env),
@@ -281,7 +286,7 @@ async fn fallback_pane_survives_a_drop_with_a_new_shell() {
 async fn tmux_pane_reattaches_after_a_drop() {
     let env = env();
     let session = Session::start(
-        Target::direct(HostSpec::new(&env.host, &env.user)),
+        Target::direct(HostSpec::new(&env.host, &env.user).with_port(env.port)),
         options(&env),
         ReconnectPolicy::default(),
         None,
@@ -350,7 +355,7 @@ fn hostd_binary(platform: ssh::HostPlatform) -> PathBuf {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn bootstrap_then_pair_over_iroh() {
     let env = env();
-    let target = Target::direct(HostSpec::new(&env.host, &env.user));
+    let target = Target::direct(HostSpec::new(&env.host, &env.user).with_port(env.port));
     let started = Instant::now();
     let connection = ssh::Connection::connect(&target, &options(&env))
         .await

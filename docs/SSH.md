@@ -147,7 +147,9 @@ cargo test -p client-core --test it ssh_host   # fallback pane, tmux re-attach,
                                   # fresh bootstrap → pair over iroh → pane echo
 ```
 
-`GUDO_SSH_TEST_HOSTD` overrides the daemon build the bootstrap tests install. Failures are
+`GUDO_SSH_TEST_HOSTD` overrides the daemon build the bootstrap tests install, and
+`GUDO_SSH_TEST_PORT` points the tests at an sshd that is not on port 22 (a container behind a
+forwarded port). Failures are
 injected without root: a test proxy that silently swallows traffic (a dead NAT mapping),
 and `kill -STOP` on the connection's own sshd process. ProxyJump uses the VM as the first
 hop and its own `127.0.0.1:22` as the next. The external-signer test uses a software P-256

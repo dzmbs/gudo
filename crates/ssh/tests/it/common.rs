@@ -16,6 +16,7 @@ use tokio::net::{TcpListener, TcpStream};
 
 pub struct Env {
     pub host: String,
+    pub port: u16,
     pub user: String,
     pub password: String,
     pub keys: PathBuf,
@@ -31,15 +32,29 @@ pub fn env() -> Env {
     };
     Env {
         host: var("GUDO_SSH_TEST_HOST"),
+        port: test_port(),
         user: var("GUDO_SSH_TEST_USER"),
         password: var("GUDO_SSH_TEST_PASSWORD"),
         keys: PathBuf::from(var("GUDO_SSH_TEST_KEYS")),
     }
 }
 
+/// `GUDO_SSH_TEST_PORT`, when the test sshd is not on port 22.
+pub fn test_port() -> u16 {
+    std::env::var("GUDO_SSH_TEST_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+        .unwrap_or(22)
+}
+
 impl Env {
     pub fn spec(&self) -> HostSpec {
-        HostSpec::new(&self.host, &self.user)
+        HostSpec::new(&self.host, &self.user).with_port(self.port)
+    }
+
+    /// `host:port`, for proxies in front of the test sshd.
+    pub fn address(&self) -> String {
+        format!("{}:{}", self.host, self.port)
     }
 
     pub fn target(&self) -> Target {

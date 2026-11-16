@@ -233,7 +233,7 @@ async fn host_keys_tofu_pin_and_mismatch() {
     );
     match Connection::connect(&env.target(), &options).await {
         Err(SshError::HostKeyRejected { host, fingerprint }) => {
-            assert_eq!(host, env.host);
+            assert_eq!(host, ssh::host_name(&env.host, env.port));
             assert!(fingerprint.starts_with("SHA256:"));
         }
         other => panic!("{other:?}"),
@@ -260,7 +260,9 @@ async fn host_keys_tofu_pin_and_mismatch() {
 
     // Pinned to another key: a hard mismatch carrying both fingerprints.
     let other = ssh::generate_ed25519("").unwrap();
-    known_hosts.pin(&env.host, 22, &other.public_key).unwrap();
+    known_hosts
+        .pin(&env.host, env.port, &other.public_key)
+        .unwrap();
     match Connection::connect(&env.target(), &options).await {
         Err(error @ SshError::HostKeyMismatch { .. }) => {
             let SshError::HostKeyMismatch {
