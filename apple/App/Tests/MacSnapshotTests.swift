@@ -632,14 +632,15 @@ final class MacSnapshotTests: XCTestCase {
     func testPortsLeafOpensPagesBeside() async throws {
         try await window("leaf-browser-open") { model in
             model.sheet = .browser
-            await model.openPort(model.ports.ports[0])
+            let portsTool = model.activeMixed?.tools.values.first { $0.tool == .ports }?.id
+            await model.openPort(model.ports.ports[0], besideTool: portsTool)
             let tab = try? XCTUnwrap(model.activeMixed)
             XCTAssertEqual(tab?.tools.values.map(\.tool), [.ports], "Ports stays a leaf")
             XCTAssertEqual(tab?.browsers.count, 1, "the page is a leaf of its own")
             XCTAssertNotNil(tab?.focusedBrowser, "and has the focus")
             XCTAssertNil(model.browserURL, "the Ports leaf shows no page")
             // Again: the leaf showing it comes forward.
-            await model.openPort(model.ports.ports[0])
+            await model.openPort(model.ports.ports[0], besideTool: portsTool)
             XCTAssertEqual(model.activeMixed?.browsers.count, 1)
         }
     }
