@@ -283,6 +283,7 @@ fn run(
                 .unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .log_internal_errors(false)
         .init();
     adopt_legacy_install(&state_dir)?;
