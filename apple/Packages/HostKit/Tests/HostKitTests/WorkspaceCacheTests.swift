@@ -402,7 +402,7 @@ struct WorkspaceCacheTests {
         let (backend, _, states) = try heldPane(connection, saved: ["$ "])
         [UInt8](repeating: 0, count: DaemonPaneBackend.holdBytes + 1).withUnsafeBytes { backend.writeGenerated($0) }
         client().send(.paneSnapshot(paneId: 1, seq: 0, data: try liveSnapshot(["$ "])))
-        try await eventually("generated input dropped") { states.all.last == .dropped }
+        try await eventually("generated input dropped") { states.all.last == .dropped(.tooMuch) }
         #expect(!client().calls.contains { if case .generatedInput = $0 { true } else { false } })
     }
 
@@ -411,7 +411,7 @@ struct WorkspaceCacheTests {
         let (backend, _, states) = try heldPane(connection, saved: ["Allow rm -rf build? (y/n)"])
         Array("y\r".utf8).withUnsafeBytes { backend.write($0) }
         client().send(.paneSnapshot(paneId: 1, seq: 0, data: try liveSnapshot(["Allow git push --force? (y/n)"])))
-        try await eventually("dropped") { states.all.last == .dropped }
+        try await eventually("dropped") { states.all.last == .dropped(.screenChanged) }
         #expect(inputs(client()).isEmpty, "never typed into a screen the user did not see")
     }
 
@@ -421,7 +421,7 @@ struct WorkspaceCacheTests {
         let text = String(repeating: "a", count: DaemonPaneBackend.holdBytes + 1)
         backend.paste(text)
         client().send(.paneSnapshot(paneId: 1, seq: 0, data: try liveSnapshot(["$ "])))
-        try await eventually("dropped") { states.all.last == .dropped }
+        try await eventually("dropped") { states.all.last == .dropped(.tooMuch) }
         #expect(inputs(client()).isEmpty)
     }
 

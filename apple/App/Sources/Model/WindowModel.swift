@@ -291,13 +291,23 @@ final class WindowModel {
                     "No room for another pane here. Close one or make the window bigger.",
                     systemImage: "rectangle.split.2x1", style: .neutral))
             }
-            workspace?.onHeldInputDropped = { [weak self] in
-                self?.toasts.show(Toast(
-                    "What you typed while connecting wasn't sent: the screen had changed.",
-                    systemImage: "keyboard", style: .neutral))
+            workspace?.onHeldInputDropped = { [weak self] reason in
+                guard let message = Self.heldInputDropMessage(reason) else { return }
+                self?.toasts.show(Toast(message, systemImage: "keyboard", style: .neutral))
             }
         }
     }
+    /// Why what was typed while the pane waited for its host was not sent; nil when the input
+    /// gate already said so.
+    static func heldInputDropMessage(_ reason: DaemonPaneBackend.HeldInputDrop) -> String? {
+        switch reason {
+        case .screenChanged: "What you typed while connecting wasn't sent: the screen had changed."
+        case .tookTooLong: "What you typed while connecting wasn't sent: the pane didn't come back in time."
+        case .tooMuch: "What you typed while connecting wasn't sent: it was too much to hold."
+        case .notAllowed: nil
+        }
+    }
+
     /// The design fixtures' stand-in connection state (`-screen reconnect`).
     var connectionOverride: ConnectionState?
     #if DEBUG

@@ -480,14 +480,22 @@ final class InstantStartTests: XCTestCase {
         // when the main actor takes the layout, and the toast follows the drop on a later
         // turn of it: no order among them to rely on.
         let deadline = ContinuousClock.now + .seconds(30)
-        while client.inputs.isEmpty || tests.heldInput != .dropped || model.toasts.current == nil || !connection.status.isLive,
+        while client.inputs.isEmpty || tests.heldInput != .dropped(.screenChanged) || model.toasts.current == nil || !connection.status.isLive,
               ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTAssertEqual(client.inputs, ["ls\r"])
-        XCTAssertEqual(tests.heldInput, .dropped)
+        XCTAssertEqual(tests.heldInput, .dropped(.screenChanged))
         XCTAssertTrue(connection.status.isLive)
         XCTAssertTrue(model.toasts.current?.message.contains("wasn't sent") == true)
+    }
+
+    func testInputThatWasNotSentSaysWhy() {
+        let reasons: [DaemonPaneBackend.HeldInputDrop] = [.screenChanged, .tookTooLong, .tooMuch]
+        let messages = reasons.compactMap(WindowModel.heldInputDropMessage)
+        XCTAssertEqual(Set(messages).count, reasons.count)
+        XCTAssertTrue(messages.allSatisfy { !$0.contains("—") && !$0.contains("–") })
+        XCTAssertNil(WindowModel.heldInputDropMessage(.notAllowed), "the input gate says so itself")
     }
 }
 #endif

@@ -83,6 +83,8 @@ nonisolated final class PaneRouter: Sendable {
     private let connection = Mutex(PaneConnection.stale(reason: "Connecting…"))
     /// Set by `suspend`: the disconnect the suspension causes keeps the "Paused" reason.
     private let suspended = Mutex(false)
+    /// The daemon run of the last connection (nil before the first).
+    private let runEpoch = Mutex<UInt64?>(nil)
     private let connectionGeneration = Atomic<UInt64>(0)
     /// Multiplayer: panes this connection may not type into (a viewer's role, another
     /// person's lease). Gated input is dropped here, never predicted, and reported.
@@ -232,6 +234,12 @@ nonisolated final class PaneRouter: Sendable {
 
     /// Whether the daemon has sent the pane's state (see `Route.live`).
     func isLive(_ pane: UInt64) -> Bool { routes.withLock { $0[pane]?.live ?? false } }
+
+    /// No connection to send to: not yet, or the link dropped (input is held, not queued).
+    var isDown: Bool { connection.withLock { $0 } != .live }
+
+    /// The daemon run of the last connection (nil before the first).
+    var epoch: UInt64? { runEpoch.withLock { $0 } }
 
     /// Running taps of a pane (tests, diagnostics).
     func tapCount(_ pane: UInt64) -> Int { routes.withLock { $0[pane]?.taps.count ?? 0 } }
@@ -392,7 +400,8 @@ nonisolated final class PaneRouter: Sendable {
             for feed in feeds { feed(.hint(gated ? nil : mapped)) }
         case .paneHistoryGone:
             break
-        case .connected:
+        case .connected(let epoch, _):
+            runEpoch.withLock { $0 = epoch }
             // A dial that finished while the app was away: the pane stays paused.
             guard !suspended.withLock({ $0 }) else { return false }
             beginCatchingUp()
@@ -579,18 +588,23 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
     let router: PaneRouter
     /// This window's tap on the pane's stream.
     let tap: UInt64
-    /// Input typed while the pane shows a saved screen (instant start), until the host's.
+    /// Input typed while the pane shows a saved screen (instant start) or its host is down,
+    /// until the pane is back.
     private let held = Mutex<HeldInput?>(nil)
+    /// Who hears about input held while the host is down (`followHeldInput`).
+    private let follower = Mutex<HeldInputFollower?>(nil)
     /// How long held input stays worth sending, and how much is held at most.
     static let holdLimit = Duration.seconds(30)
     static let holdBytes = 4096
+    let holdLimit: Duration
     /// Bytes requested per history page.
     static let historyPageBytes: UInt32 = 256 * 1024
 
-    init(pane: PaneId, client: any DaemonClientAPI, router: PaneRouter) {
+    init(pane: PaneId, client: any DaemonClientAPI, router: PaneRouter, holdLimit: Duration = holdLimit) {
         self.pane = pane
         self.client = client
         self.router = router
+        self.holdLimit = holdLimit
         tap = router.register(pane.rawValue)
     }
 
@@ -602,7 +616,8 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
         let sink: @Sendable (PaneEvent) -> Void = { [weak self] event in
             events(event)
             switch event {
-            case .snapshot, .output: self?.releaseHeldInput()
+            case .snapshot, .output: self?.releaseHeldInput(screenArrived: true)
+            case .connection(.live): self?.releaseHeldInput(screenArrived: false)
             default: break
             }
         }
@@ -725,15 +740,26 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
 
     // MARK: Input before the host's screen
 
-    /// What happened to input typed over a saved screen.
+    /// What happened to input typed over a saved screen or while the host was down.
     public enum HeldInputState: Sendable, Equatable {
-        /// Waiting for the host's screen (`count` inputs so far).
+        /// Waiting for the pane to be back (`count` inputs so far).
         case holding(Int)
-        /// The host's screen was the one typed at: sent.
+        /// The pane came back as it was typed at: sent, in order.
         case sent
-        /// The host's screen had changed (or it took too long, or too much was typed): not
-        /// sent, so no keystroke lands in a state the user never saw.
-        case dropped
+        /// Not sent, so no keystroke lands in a state the user never saw.
+        case dropped(HeldInputDrop)
+    }
+
+    /// Why held input was not sent.
+    public enum HeldInputDrop: Sendable, Equatable {
+        /// The pane came back showing another screen than the one typed at.
+        case screenChanged
+        /// The pane did not come back within `holdLimit`.
+        case tookTooLong
+        /// More was typed than is held (`holdBytes`).
+        case tooMuch
+        /// This device may not type into the pane (a viewer, another person's lease).
+        case notAllowed
     }
 
     private enum Held: Sendable {
@@ -742,14 +768,30 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
         case generated(Data)
     }
 
+    private struct HeldInputFollower {
+        let screen: @Sendable () -> String
+        let onChange: @Sendable (HeldInputState) -> Void
+    }
+
     private struct HeldInput {
+        /// The screen typed at.
         let screen: String
         let current: @Sendable () -> String
         let onChange: @Sendable (HeldInputState) -> Void
-        let since = ContinuousClock.now
+        /// The daemon run the screen came from; nil for a saved screen or before any connection.
+        let epoch: UInt64?
+        /// When the first input still held was typed.
+        var since: ContinuousClock.Instant?
         var inputs: [Held] = []
         var bytes = 0
         var overflowed = false
+
+        /// The pane shows the screen typed at: the same run, the same text, or nothing then
+        /// (typing ahead into a blank pane).
+        func matches(epoch now: UInt64?) -> Bool {
+            if let epoch, epoch == now { return true }
+            return current() == screen || screen.allSatisfy(\.isWhitespace)
+        }
     }
 
     /// Whether the daemon has sent this pane's state on this connection.
@@ -762,12 +804,27 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
         screen: @escaping @Sendable () -> String, onChange: @escaping @Sendable (HeldInputState) -> Void
     ) {
         guard !isLive else { return }
-        held.withLock { $0 = HeldInput(screen: screen(), current: screen, onChange: onChange) }
+        held.withLock { $0 = HeldInput(screen: screen(), current: screen, onChange: onChange, epoch: nil) }
+    }
+
+    /// Input typed while the host is down (not connected yet, or the link dropped) is held from
+    /// then on, read against `screen()`, and `onChange` follows it. It is sent once the pane is
+    /// back on the same daemon run, or on a new run whose screen reads the same; otherwise, or
+    /// after `holdLimit`, or past `holdBytes`, it is dropped. Never queued in the core, so a
+    /// new run never receives keys meant for the old one.
+    public func followHeldInput(
+        screen: @escaping @Sendable () -> String, onChange: @escaping @Sendable (HeldInputState) -> Void
+    ) {
+        follower.withLock { $0 = HeldInputFollower(screen: screen, onChange: onChange) }
     }
 
     /// Keeps `input` while holding; false when it should be sent now.
     private func hold(_ input: Held) -> Bool {
-        let update = held.withLock { held -> (@Sendable (HeldInputState) -> Void, Int)? in
+        let update = held.withLock { held -> (@Sendable (HeldInputState) -> Void, Int, ContinuousClock.Instant?)? in
+            if held == nil {
+                guard router.isDown, let follower = follower.withLock({ $0 }) else { return nil }
+                held = HeldInput(screen: follower.screen(), current: follower.screen, onChange: follower.onChange, epoch: router.epoch)
+            }
             guard var current = held else { return nil }
             let size = switch input {
             case .bytes(let data), .generated(let data): data.count
@@ -779,26 +836,63 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 current.inputs.append(input)
                 current.bytes += size
             }
+            var started: ContinuousClock.Instant?
+            if current.since == nil {
+                started = .now
+                current.since = started
+            }
             held = current
-            return (current.onChange, current.inputs.count)
+            return (current.onChange, current.inputs.count, started)
         }
-        guard let (onChange, count) = update else { return false }
+        guard let (onChange, count, started) = update else { return false }
+        if let started { expireHeldInput(typedAt: started) }
         onChange(.holding(count))
         return true
     }
 
-    /// The host's screen is on the terminal now: send or drop what was held.
-    private func releaseHeldInput() {
-        guard isLive else { return }
+    /// Drops what is still held `holdLimit` after it was typed: the pane did not come back.
+    private func expireHeldInput(typedAt started: ContinuousClock.Instant) {
+        let limit = holdLimit
+        Task.detached { [weak self] in
+            try? await Task.sleep(until: started + limit)
+            guard let self else { return }
+            let onChange = held.withLock { held -> (@Sendable (HeldInputState) -> Void)? in
+                guard var current = held, current.since == started else { return nil }
+                current.inputs = []
+                current.bytes = 0
+                current.overflowed = false
+                current.since = nil
+                held = current
+                return current.onChange
+            }
+            onChange?(.dropped(.tookTooLong))
+        }
+    }
+
+    /// The pane may be back: send or drop what was held. On the same daemon run a resumed
+    /// stream is enough (`screenArrived` false); otherwise it waits for the host's screen.
+    private func releaseHeldInput(screenArrived: Bool) {
+        let epoch = router.epoch
+        let isUp = !router.isDown
         held.withLock { held in
             guard let current = held else { return }
+            let sameRun = isUp && current.epoch != nil && current.epoch == epoch
+            guard sameRun || (screenArrived && isLive) else { return }
             held = nil
             guard !current.inputs.isEmpty || current.overflowed else { return }
-            let fresh = ContinuousClock.now - current.since < Self.holdLimit
-            guard fresh, !current.overflowed, current.current() == current.screen,
-                  router.admitsInput(pane.rawValue)
-            else {
-                current.onChange(.dropped)
+            let drop: HeldInputDrop? = if current.overflowed {
+                .tooMuch
+            } else if let since = current.since, ContinuousClock.now - since >= holdLimit {
+                .tookTooLong
+            } else if !current.matches(epoch: epoch) {
+                .screenChanged
+            } else if !router.admitsInput(pane.rawValue) {
+                .notAllowed
+            } else {
+                nil
+            }
+            if let drop {
+                current.onChange(.dropped(drop))
                 return
             }
             let claimsSize = current.inputs.contains { input in

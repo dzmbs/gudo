@@ -42,7 +42,7 @@ final class Pane {
     /// Input typed over the saved screen: held, then sent or dropped.
     private(set) var heldInput: DaemonPaneBackend.HeldInputState?
     /// Held input was dropped: the host's screen was not the one it was typed at.
-    @ObservationIgnored var onHeldInputDropped: (() -> Void)?
+    @ObservationIgnored var onHeldInputDropped: ((DaemonPaneBackend.HeldInputDrop) -> Void)?
     /// Called on the main actor after `title` or `foregroundProgram` change.
     @ObservationIgnored var onContextChange: (() -> Void)?
     /// BEL from the program (after the view's own haptic or sound).
@@ -132,6 +132,9 @@ final class Pane {
         let daemon = backend as? DaemonPaneBackend
         let sizing = MainActorCoalescer { [weak self, weak daemon] in
             self?.isSizingTap = daemon?.drivesLocalSize ?? true
+        }
+        daemon?.followHeldInput(screen: { [weak terminal] in terminal?.visibleText() ?? "" }) { [weak self] state in
+            Task { @MainActor in await self?.heldInputChanged(state) }
         }
         if let saved, let screen = saved.screen, let daemon, !daemon.isLive {
             showSaved(screen, saved: saved, on: terminal, holdingInputOf: daemon)
@@ -249,16 +252,16 @@ final class Pane {
         showsSavedScreen = true
         savedScreenShown.withLock { $0 = true }
         daemon.holdInputUntilLive(screen: { [weak terminal] in terminal?.visibleText() ?? "" }) { [weak self] state in
-            Task { @MainActor in
-                guard let self else { return }
-                self.heldInput = state == .sent ? nil : state
-                if state == .dropped {
-                    self.onHeldInputDropped?()
-                    try? await Task.sleep(for: .seconds(3))
-                    if self.heldInput == .dropped { self.heldInput = nil }
-                }
-            }
+            Task { @MainActor in await self?.heldInputChanged(state) }
         }
+    }
+
+    private func heldInputChanged(_ state: DaemonPaneBackend.HeldInputState) async {
+        heldInput = state == .sent ? nil : state
+        guard case .dropped(let reason) = state else { return }
+        onHeldInputDropped?(reason)
+        try? await Task.sleep(for: .seconds(3))
+        if heldInput == state { heldInput = nil }
     }
 
     /// The view shows a frame of this pane's screen (the host's or the saved one) at its own grid,

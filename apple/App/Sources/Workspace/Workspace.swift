@@ -341,8 +341,8 @@ final class Workspace {
         case .vertical: Int(grid.rows) >= 2 * Self.smallestSplitGrid.rows + 2
         }
     }
-    /// Input typed over a saved screen was not sent (the host's screen had changed).
-    @ObservationIgnored var onHeldInputDropped: (() -> Void)?
+    /// Input typed while a pane waited for its host was not sent, and why.
+    @ObservationIgnored var onHeldInputDropped: ((DaemonPaneBackend.HeldInputDrop) -> Void)?
     /// A pane rang the bell, whatever the bell's border setting.
     @ObservationIgnored var onPaneBell: ((PaneId) -> Void)?
     /// Whether any of this window's panes on the host still shows its saved screen, or the
@@ -793,7 +793,7 @@ final class Workspace {
             if self?.grids[id] != size { self?.grids[id] = size }
         }
         pane.isFocusedPane = { [weak self] in self?.focusedPane == id }
-        pane.onHeldInputDropped = { [weak self] in self?.onHeldInputDropped?() }
+        pane.onHeldInputDropped = { [weak self] reason in self?.onHeldInputDropped?(reason) }
         pane.onBell = { [weak self] in self?.ringBell(id) }
         pane.onCellSize = { [weak self] size in
             if self?.cellSize != size { self?.cellSize = size }
