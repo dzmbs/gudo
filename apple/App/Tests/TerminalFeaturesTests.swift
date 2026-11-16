@@ -214,6 +214,36 @@ final class TerminalFeaturesTests: XCTestCase {
         XCTAssertEqual(member.line, 3)
     }
 
+    /// ⌘-click on a printed path with a line: the viewer opens the file with that line in view,
+    /// and its text can be selected and copied.
+    func testTheViewerShowsTheClickedLineAndItsTextSelects() async throws {
+        commandClick(printed: "~/projects/gudo/src/main.rs:30")
+        await waitUntil { self.viewerMember != nil }
+        XCTAssertEqual(viewerMember?.line, 30)
+        await waitUntil { self.codeView?.string.contains("value_40") == true }
+        let code = try XCTUnwrap(codeView, "the viewer shows the file's text")
+        await waitUntil(seconds: 2) { code.visibleRect.minY > 0 }
+        let lines = code.string.components(separatedBy: "\n")
+        XCTAssertEqual(lines.count, 40)
+        let marked = (code.string as NSString).range(of: "value_30 ")
+        let layout = try XCTUnwrap(code.layoutManager)
+        let markedRect = layout.boundingRect(
+            forGlyphRange: layout.glyphRange(forCharacterRange: marked, actualCharacterRange: nil), in: try XCTUnwrap(code.textContainer))
+        XCTAssertTrue(code.visibleRect.intersects(markedRect), "line 30 is in view: \(code.visibleRect) \(markedRect)")
+        XCTAssertFalse(code.isEditable)
+        XCTAssertTrue(code.isSelectable)
+        code.selectAll(nil)
+        XCTAssertEqual(code.selectedRange().length, (code.string as NSString).length)
+    }
+
+    func testAMarkdownPathOpensRendered() async throws {
+        commandClick(printed: "~/projects/gudo/README.md")
+        await waitUntil { self.viewerMember != nil }
+        XCTAssertEqual(viewerMember?.path, "~/projects/gudo/README.md")
+        await waitUntil(seconds: 1.5) { self.codeView != nil }
+        XCTAssertNil(codeView, "Markdown shows rendered, not as source lines")
+    }
+
     // MARK: Helpers
 
     private var pane: Pane? {
@@ -225,6 +255,32 @@ final class TerminalFeaturesTests: XCTestCase {
 
     private var viewerMember: ToolMember? {
         model.activeMixed?.tools.values.first { $0.tool == .viewer }
+    }
+
+    private var codeView: CodeNSTextView? {
+        func find(_ view: NSView) -> CodeNSTextView? {
+            if let code = view as? CodeNSTextView { return code }
+            return view.subviews.lazy.compactMap(find).first
+        }
+        return window.contentView.flatMap(find)
+    }
+
+    /// Prints `path` as a program would, then ⌘-clicks it.
+    private func commandClick(printed path: String) {
+        guard let view = pane?.view else { return XCTFail("no terminal") }
+        view.surface.terminal.write(Array("\r\n\(path)\r\n".utf8))
+        view.surface.outputArrived()
+        let rows = view.surface.terminal.visibleText().split(separator: "\n", omittingEmptySubsequences: false)
+        guard let row = rows.lastIndex(where: { $0.contains(path) }) else { return XCTFail("\(path) not on screen") }
+        let rect = view.surface.rect(for: GridPoint(x: 3, y: row))
+        let point = view.convert(CGPoint(x: rect.midX, y: rect.midY), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: .command, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            else { continue }
+            if type == .leftMouseDown { view.mouseDown(with: event) } else { view.mouseUp(with: event) }
+        }
     }
 
     private var fieldHasKeyboard: Bool {
