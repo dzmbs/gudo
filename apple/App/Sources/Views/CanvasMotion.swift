@@ -23,6 +23,8 @@ struct CanvasMotion {
 
     /// Panes that move or resize: each travels over a still of its last frame.
     private(set) var moving: Set<PaneId> = []
+    /// Panes going from a window of their own back into the tree.
+    private(set) var docking: Set<PaneId> = []
     /// New panes, and the sliver each grows from.
     private(set) var seeds: [PaneId: CGRect] = [:]
     private(set) var departures: [Departure] = []
@@ -41,6 +43,7 @@ struct CanvasMotion {
                 if shows, old.frame != leaf.frame || old.window != leaf.window || old.visible != leaf.visible {
                     moving.insert(leaf.pane)
                 }
+                if old.window != nil, leaf.window == nil { docking.insert(leaf.pane) }
             } else if leaf.visible {
                 let givers = before.leaves.filter { $0.visible && $0.window == leaf.window && $0.frame.intersects(leaf.frame) }
                 seeds[leaf.pane] = Self.edge(of: leaf.frame, awayFrom: givers.map(\.frame))
@@ -69,6 +72,7 @@ struct CanvasMotion {
     /// left then and have not come back keep going, and panes still arriving keep arriving.
     func continuing(_ earlier: CanvasMotion, in after: CanvasLayout) -> CanvasMotion {
         var merged = self
+        merged.docking.formUnion(earlier.docking.filter { after.leaf($0)?.window == nil })
         for (pane, seed) in earlier.seeds where merged.seeds[pane] == nil && after.leaf(pane)?.visible == true {
             merged.seeds[pane] = seed
         }
@@ -140,6 +144,8 @@ struct PaneTravel: ViewModifier, Animatable {
     var stillTop: CGFloat = 0
     var background: Color?
     var radius: CGFloat = 0
+    /// A pane that is a window of its own, or on its way into or out of one.
+    var chrome: TravelChrome?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
 
@@ -159,7 +165,7 @@ struct PaneTravel: ViewModifier, Animatable {
 
     func body(content: Content) -> some View {
         let place = Self.placement(frame: frame, shown: reduceMotion ? frame : shown)
-        let shape = TravelShape(rect: place.clip, radius: radius)
+        let shape = TravelShape(rect: place.clip, radius: radius, corners: chrome?.radii)
         content
             .background(alignment: .topLeading) {
                 if let background { shape.fill(background) }
@@ -170,56 +176,88 @@ struct PaneTravel: ViewModifier, Animatable {
                         .padding(.top, stillTop)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
+                        // Whole on the frame the terminal hides, and gone on the frame it shows:
+                        // faded in, the pane would be blank for a frame; faded out, it would
+                        // show two prompts while the redrawn terminal fades in under it.
+                        .transition(.identity)
                 }
             }
             .clipShape(shape)
+            .background(alignment: .topLeading) {
+                if let chrome { TravelChromeBackdrop(chrome: chrome).frame(width: place.clip.width, height: place.clip.height) }
+            }
+            .overlay(alignment: .topLeading) {
+                if let chrome { TravelChromeRing(chrome: chrome).frame(width: place.clip.width, height: place.clip.height) }
+            }
             .offset(place.offset)
     }
 }
 
-/// A new pane or divider arriving: it grows out of `seed` into `frame` (where its own
-/// `PaneTravel` already draws it), solid from its first frame, so the edge it comes in at shows
-/// at once whichever way it splits. Under Reduce Motion a pane fades in where it lands (a line
-/// is there at once). At rest it leaves the view alone, so a later move of the pane is not cut
-/// to where it arrived.
-struct ArrivalTransition: Transition {
-    let seed: CGRect?
-    let frame: CGRect
-    var fades = true
+/// A floating pane's look as a window: lifted (its edges and shadow) and, while its window has
+/// the focus, the accent ring. Drawn on the rectangle the pane travels through, so both stay
+/// whole on every frame of a move, and fade (never switch) as it lifts out or docks.
+struct TravelChrome: Equatable {
+    var radii: RectangleCornerRadii
+    var lifted: Bool
+    var focused: Bool
+}
 
-    func body(content: Content, phase: TransitionPhase) -> some View {
-        let away = seed.map { CGRect(x: $0.minX - frame.minX, y: $0.minY - frame.minY, width: $0.width - frame.width, height: $0.height - frame.height) }
-        return content.modifier(ArrivalEffect(
-            change: phase.isIdentity ? .zero : (away ?? .zero), frame: frame,
-            opacity: phase.isIdentity || !fades ? 1 : 0))
+private struct TravelChromeBackdrop: View {
+    let chrome: TravelChrome
+
+    var body: some View {
+        Color.clear
+            .surface(.window, in: UnevenRoundedRectangle(cornerRadii: chrome.radii, style: .continuous))
+            .opacity(chrome.lifted ? 1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
-private struct ArrivalEffect: ViewModifier, Animatable {
-    /// How far the shown rectangle is from `frame`: its origin's offset and its size's change.
-    var change: CGRect
-    let frame: CGRect
-    var opacity: Double
+private struct TravelChromeRing: View {
+    let chrome: TravelChrome
+
+    var body: some View {
+        UnevenRoundedRectangle(cornerRadii: chrome.radii, style: .continuous)
+            .strokeBorder(DS.Palette.accent, lineWidth: 1)
+            .opacity(chrome.lifted && chrome.focused ? 1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A new pane or divider arriving: on its first frame it is shown in `seed`, the sliver at the
+/// edge it splits from, and its own `PaneTravel` takes it to where it is laid out in the
+/// structural spring the panes making room move in. Solid from that first frame, its content
+/// riding its leading corner, so a new pane shows its header and background at once whichever
+/// way it splits. Under Reduce Motion a pane fades in where it lands (a line is there at once).
+/// Once there it is a pane like any other, so a later move is not cut to where it arrived.
+struct ArrivingTravel: ViewModifier {
+    let seed: CGRect?
+    let travel: PaneTravel
+    var fades = true
+    @State private var landed = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var animatableData: AnimatablePair<CGRect.AnimatableData, Double> {
-        get { AnimatablePair(change.animatableData, opacity) }
-        set {
-            change.animatableData = newValue.first
-            opacity = newValue.second
-        }
+    func body(content: Content) -> some View {
+        let arriving = !landed && seed != nil
+        content
+            .modifier(Self.travel(travel, seed: arriving ? seed : nil))
+            .opacity(arriving && fades && reduceMotion ? 0 : 1)
+            .onAppear {
+                if seed == nil {
+                    landed = true
+                } else {
+                    withAnimation(DS.Motion.structural) { landed = true }
+                }
+            }
     }
 
-    func body(content: Content) -> some View {
-        let change = reduceMotion ? .zero : change
-        let atRest = abs(change.minX) < 0.01 && abs(change.minY) < 0.01 && abs(change.width) < 0.01 && abs(change.height) < 0.01
-        let clip = atRest
-            ? frame.insetBy(dx: -frame.width - 10_000, dy: -frame.height - 10_000)
-            : CGRect(origin: frame.origin, size: CGSize(width: max(0, frame.width + change.width), height: max(0, frame.height + change.height)))
-        content
-            .clipShape(TravelShape(rect: clip, radius: 0))
-            .offset(x: change.minX, y: change.minY)
-            .opacity(reduceMotion ? opacity : 1)
+    /// Where it is drawn: in `seed` until it sets off.
+    static func travel(_ travel: PaneTravel, seed: CGRect?) -> PaneTravel {
+        var travel = travel
+        if let seed { travel.shown = seed }
+        return travel
     }
 }
 
@@ -227,17 +265,10 @@ private struct ArrivalEffect: ViewModifier, Animatable {
 nonisolated private struct TravelShape: Shape {
     var rect: CGRect
     let radius: CGFloat
+    var corners: RectangleCornerRadii?
 
     func path(in _: CGRect) -> Path {
-        radius > 0 ? Path(roundedRect: rect, cornerRadius: radius, style: .continuous) : Path(rect)
-    }
-}
-
-extension View {
-    /// Inserted growing out of `seed` into `frame` (`fades`: under Reduce Motion); removed at once (a departing pane stays in
-    /// the layout while it goes, `CanvasLayout.depart`).
-    func arrives(from seed: CGRect?, into frame: CGRect, fades: Bool = true) -> some View {
-        // motion-lint-allow: rides the structural change it is inserted in, from the edge it splits from.
-        transition(.asymmetric(insertion: AnyTransition(ArrivalTransition(seed: seed, frame: frame, fades: fades)), removal: .identity))
+        if let corners { return UnevenRoundedRectangle(cornerRadii: corners, style: .continuous).path(in: rect) }
+        return radius > 0 ? Path(roundedRect: rect, cornerRadius: radius, style: .continuous) : Path(rect)
     }
 }

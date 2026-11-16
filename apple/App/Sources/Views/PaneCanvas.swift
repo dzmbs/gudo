@@ -231,6 +231,19 @@ struct CanvasLayout {
         leaves[index].z = Self.zoomZ
     }
 
+    /// `panes` go over the tiled panes and their dividers while they dock, and the dividers
+    /// beside them wait for them: the card lands whole, and its slot's line shows as it does.
+    mutating func dock(_ panes: Set<PaneId>) {
+        guard !panes.isEmpty else { return }
+        for index in leaves.indices where panes.contains(leaves[index].pane) && leaves[index].window == nil {
+            leaves[index].z = Self.zoomZ
+        }
+        for index in dividers.indices where !dividers[index].departing {
+            let line = dividers[index].divider
+            if panes.contains(line.leadingSide) || panes.contains(line.next) { dividers[index].fade = 0 }
+        }
+    }
+
     /// `panes` go under the other tiled panes, which uncover them as they make room.
     mutating func lower(_ panes: Set<PaneId>) {
         for index in leaves.indices where panes.contains(leaves[index].pane) && leaves[index].window == nil {
@@ -779,8 +792,8 @@ final class PaneArrangement {
 // MARK: - Chrome
 
 extension View {
-    /// A pane's look on the canvas: a tile in the tree; a `Surface.window` when it is a window
-    /// of its own, with the accent rim while it has the focus. Every value animates, so lifting out and docking are one motion.
+    /// Washes a pane while it is being dragged. Its look as a window (`TravelChrome`) is drawn
+    /// where it travels.
     func floatingChrome(_ leaf: CanvasLayout.Leaf, dragging: Bool) -> some View {
         modifier(FloatingChrome(leaf: leaf, dragging: dragging))
     }
@@ -823,20 +836,13 @@ private struct FloatingChrome: ViewModifier {
     let dragging: Bool
 
     func body(content: Content) -> some View {
-        let shape = UnevenRoundedRectangle(cornerRadii: leaf.radii, style: .continuous)
-        // Its edges and shadow go with it into the tray, fading as it does.
         content
-            .surface(leaf.lifted ? .window : .tile, in: shape)
-            .overlay {
-                shape
-                    .strokeBorder(DS.Palette.accent, lineWidth: 1)
-                    .opacity(leaf.lifted && leaf.focusedWindow ? 1 : 0)
-                    .allowsHitTesting(false)
-            }
-            // Washed while it is being moved: an overlay, as the terminal's layer draws itself.
+            // An overlay, as the terminal's layer draws itself.
             .overlay {
                 if dragging {
-                    shape.fill(DS.Palette.veil).allowsHitTesting(false)
+                    UnevenRoundedRectangle(cornerRadii: leaf.radii, style: .continuous)
+                        .fill(DS.Palette.veil)
+                        .allowsHitTesting(false)
                 }
             }
     }

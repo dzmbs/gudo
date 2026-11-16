@@ -186,8 +186,9 @@ struct SplitTreeView: View {
             let _ = lastLayout.layout = target
             let shown = arrangement.preview ?? drawn
             let layout = arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
-            let seeds = arrangement.motion.seeds
-            let dividerSeeds = arrangement.motion.dividerSeeds
+            // A scrubbed change draws arrivals part way itself (`blended`).
+            let seeds = arrangement.scrub == nil ? arrangement.motion.seeds : [:]
+            let dividerSeeds = arrangement.scrub == nil ? arrangement.motion.dividerSeeds : [:]
             ZStack(alignment: .topLeading) {
                 ForEach(layout.cards, id: \.id) { card in
                     FloatCardBackdrop(card: card)
@@ -200,9 +201,10 @@ struct SplitTreeView: View {
                         .floatingChrome(leaf, dragging: arrangement.paneDrag?.pane == leaf.pane)
                         // Laid out once, at its new size: only where it is shown moves.
                         .transaction(value: leaf.frame.size) { $0.animation = nil }
-                        .modifier(PaneTravel(
+                        .modifier(ArrivingTravel(seed: seeds[leaf.pane], travel: PaneTravel(
                             shown: leaf.shownFrame, frame: leaf.frame, still: arrangement.still(of: leaf.pane),
-                            stillTop: leaf.header, background: theme.background, radius: paneRadius(of: leaf)))
+                            stillTop: leaf.header, background: theme.background, radius: paneRadius(of: leaf),
+                            chrome: Self.chrome(of: leaf, docking: arrangement.motion.docking))))
                         // A pane zooming over its neighbours, or shrinking back onto them,
                         // keeps an edge against them on the way.
                         .shadow(.panel, visible: leaf.z == CanvasLayout.zoomZ && arrangement.isMoving) // style-exempt: a pane zooming over its neighbours, only while it moves
@@ -214,18 +216,18 @@ struct SplitTreeView: View {
                         .allowsHitTesting(leaf.visible)
                         .accessibilityHidden(!leaf.visible)
                         .zIndex(leaf.z)
-                        .arrives(from: seeds[leaf.pane], into: leaf.frame)
                 }
                 ForEach(layout.dividers, id: \.id) { divider in
                     SplitDivider(divider: divider.divider, tree: tree)
                         .frame(width: divider.divider.frame.width, height: divider.divider.frame.height)
                         .transaction(value: divider.divider.frame.size) { $0.animation = nil }
-                        .modifier(PaneTravel(shown: divider.shownFrame, frame: divider.divider.frame))
+                        // A new divider rides the edge it sits on from the first frame.
+                        .modifier(ArrivingTravel(
+                            seed: dividerSeeds[divider.id], travel: PaneTravel(shown: divider.shownFrame, frame: divider.divider.frame),
+                            fades: false))
                         .opacity(divider.opacity)
                         .allowsHitTesting(divider.visible && !divider.departing)
                         .zIndex(divider.z)
-                        // A new divider rides the edge it sits on from the first frame.
-                        .arrives(from: dividerSeeds[divider.id], into: divider.divider.frame, fades: false)
                 }
                 if tree.arranges != nil {
                     ForEach(layout.cards.filter(\.visible), id: \.id) { card in
@@ -267,6 +269,13 @@ struct SplitTreeView: View {
         }
     }
 
+    /// A pane's look as a window: while it floats, and while it docks, so its edges, shadow and
+    /// ring fade in the spring that lands it.
+    static func chrome(of leaf: CanvasLayout.Leaf, docking: Set<PaneId>) -> TravelChrome? {
+        guard leaf.window != nil || docking.contains(leaf.pane) else { return nil }
+        return TravelChrome(radii: leaf.radii, lifted: leaf.lifted, focused: leaf.focusedWindow)
+    }
+
     /// How a leaf's opacity changes. Closed: it fades in the spring it is squeezed out in. Out of
     /// sight (under a zoomed pane, into the tray): solid while it shrinks, fading at the end.
     /// Coming back: solid at once, then it grows.
@@ -290,6 +299,7 @@ struct SplitTreeView: View {
         var drawn = target
         drawn.lower(Set(arrangement.motion.seeds.keys))
         drawn.raise(arrangement.raised)
+        drawn.dock(arrangement.motion.docking)
         drawn.depart(arrangement.motion)
         return drawn
     }
@@ -708,8 +718,10 @@ struct PaneSlot: View {
         TerminalHost(pane: pane, isFocused: isFocused, workspace: workspace, isActive: isActive, isConcealed: terminalHidden)
             .id(HostPane(hostId: workspace.groupId, pane: id))
             // A moving pane shows its still (`PaneTravel`), an arriving one its background:
-            // platform views do not follow SwiftUI transforms or clips.
+            // platform views do not follow SwiftUI transforms or clips. It hides and shows in
+            // the frame its still comes and goes in, never fading through a blank pane.
             .opacity(terminalHidden ? 0 : 1)
+            .animation(nil, value: terminalHidden)
             .clipped()
             .fadedTowardTerminalBackground(pane.showsSavedScreen ? 0.25 : 0)
             .overlay { SavedScreenOverlay(pane: pane) }

@@ -43,7 +43,7 @@ struct StyleLintTests {
     /// The surfaces the design names, the file that builds each and the call it builds it with.
     static let namedSurfaces: [(name: String, file: String, call: String)] = [
         ("panes, compact and comfortable", "App/Sources/Views/SplitTreeView.swift", ".surface(paneSurface"),
-        ("floating panes", "App/Sources/Views/PaneCanvas.swift", ".surface(leaf.lifted ? .window : .tile"),
+        ("floating panes", "App/Sources/Views/CanvasMotion.swift", ".surface(.window, in: UnevenRoundedRectangle"),
         ("the card under a window of several panes", "App/Sources/Views/PaneCanvas.swift", ".surface(shown ? .window : .tile"),
         ("picture in picture", "App/Sources/Views/PictureInPicture.swift", ".surface(.window"),
         ("the update card", "App/Sources/Views/UpdateCard.swift", ".surface(.card"),
