@@ -571,7 +571,9 @@ and only once), `mp::policy` unit test.
   (`SELF_UPGRADE`), and the machine: `gethostname` (empty when refusing), OS, `os-release`
   `PRETTY_NAME`, CPU. Older daemons ignore the bit and answer `Welcome` directly, so clients
   treat "no info" as level 0. `gudo-hostd build-info [--json]` prints the same for a binary
-  without running it as a daemon. Release stamps come from `cargo xtask build-hostd-linux`
+  without running it as a daemon (`--hash` adds `exe_sha256`, the SHA-256 of the executable,
+  which the Mac app checks its installed copy with; not by default, since a restarting daemon
+  runs `build-info` on its successor). Release stamps come from `cargo xtask build-hostd-linux`
   (`GUDO_BUILD_ID`, `GUDO_BUILD_UNIX`), which also writes `apple/build/hostd/hostd-manifest.json`
   (file, OS, CPU, build, time, level per bundled build) for the app.
 - **Incompatible clients.** A client with `DAEMON_INFO` whose snapshot format differs, presenting

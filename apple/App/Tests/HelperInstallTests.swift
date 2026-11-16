@@ -17,7 +17,7 @@ final class HelperInstallTests: XCTestCase {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    /// A stand-in helper that reports the hash of its own file, as `build-info --json` does;
+    /// A stand-in helper that reports the hash of its own file, as `build-info --json --hash` does;
     /// `build` makes each build's bytes differ.
     private func bundledHelper(build: String, reports report: String? = nil) throws -> URL {
         let app = folder.appending(path: "App-\(build).app/Contents/MacOS", directoryHint: .isDirectory)

@@ -165,7 +165,7 @@ nonisolated struct HelperInstall {
             else { throw HelperInstallError.signatureDiffers }
         }
         let expected = try sha256(of: bundled)
-        let output = try await LocalHelper.output(copy, ["build-info", "--json"])
+        let output = try await LocalHelper.output(copy, ["build-info", "--json", "--hash"])
         guard let info = try JSONSerialization.jsonObject(with: output) as? [String: Any],
               info["exe_sha256"] as? String == expected
         else { throw HelperInstallError.copyDiffers }

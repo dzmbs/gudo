@@ -448,7 +448,7 @@ re-signing or updating the app leaves the running helper and its launchd job alo
   `<state>/Helper/Versions/<CFBundleVersion>-<code hash>/` unless that build is there already
   (compared by code directory hash, else SHA-256), clears the copy's quarantine mark, and checks
   it: when the bundled build is signed, the copy's signature is valid with the same code hash and
-  team; and the copy runs (`build-info --json`) and reports the SHA-256 of the bundled file
+  team; and the copy runs (`build-info --json --hash`) and reports the SHA-256 of the bundled file
   (`exe_sha256`). A staged copy of that folder then takes `Versions/Current`'s place in one step
   (`renamex_np(RENAME_SWAP)`), so the path never names half a build and a running helper keeps
   the file it started from. Builds other than the current one and the one before it, and staging
