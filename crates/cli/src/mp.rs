@@ -149,8 +149,8 @@ pub(crate) enum MpCmd {
         #[arg(long)]
         devices: bool,
     },
-    /// Revoke a grant (hex id or prefix), `--device KEY` or `--principal ID`; disconnects at
-    /// once (owner).
+    /// Revoke a grant (hex id or prefix), `--device KEY` (or its first 8 or more hex digits,
+    /// as `grants --devices` lists it) or `--principal ID`; disconnects at once (owner).
     Revoke {
         grant: Option<String>,
         #[arg(long, conflicts_with_all = ["grant", "principal"])]
@@ -182,6 +182,30 @@ fn unhex<const N: usize>(text: &str) -> Result<[u8; N]> {
         *byte = u8::from_str_radix(&text[i * 2..i * 2 + 2], 16).context("not hex")?;
     }
     Ok(out)
+}
+
+/// Shortest device key prefix accepted, as `gudo-hostd unpair` takes.
+const MIN_DEVICE_PREFIX: usize = 8;
+
+/// The device whose key is `text` or starts with it (at least [`MIN_DEVICE_PREFIX`] digits).
+fn device_by_prefix(known: &[DeviceId], text: &str) -> Result<DeviceId> {
+    let prefix = text.trim().to_ascii_lowercase();
+    if prefix.len() == 64 {
+        return Ok(DeviceId(unhex(&prefix)?));
+    }
+    if prefix.len() < MIN_DEVICE_PREFIX || !prefix.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("give the device key or its first {MIN_DEVICE_PREFIX} or more hex digits");
+    }
+    let matches: Vec<DeviceId> = known
+        .iter()
+        .copied()
+        .filter(|device| hex(&device.0).starts_with(&prefix))
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(*one),
+        [] => bail!("no device starts with {prefix}; nothing was revoked"),
+        _ => bail!("several devices start with {prefix}; give more digits"),
+    }
 }
 
 fn parse_ttl(text: &str) -> Result<Option<Duration>> {
@@ -680,7 +704,9 @@ pub(crate) async fn run(conn: &mut Conn, command: MpCmd) -> Result<()> {
             principal,
         } => {
             let target = if let Some(device) = device {
-                RevokeTarget::Device(DeviceId(unhex(&device)?))
+                let devices = conn.client.list_devices().await?;
+                let keys: Vec<DeviceId> = devices.iter().map(|entry| entry.device).collect();
+                RevokeTarget::Device(device_by_prefix(&keys, &device)?)
             } else if let Some(principal) = principal {
                 RevokeTarget::Principal(PrincipalId(unhex(&principal)?))
             } else {
@@ -748,4 +774,20 @@ pub(crate) async fn run(conn: &mut Conn, command: MpCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_is_named_by_its_key_or_a_prefix_of_it() {
+        let first = DeviceId([0xab; 32]);
+        let second = DeviceId([0xac; 32]);
+        let known = [first, second];
+        assert_eq!(device_by_prefix(&known, "abababab").unwrap(), first);
+        assert_eq!(device_by_prefix(&known, &hex(&second.0)).unwrap(), second);
+        assert!(device_by_prefix(&known, "abab").is_err());
+        assert!(device_by_prefix(&known, "cdcdcdcd").is_err());
+    }
 }
