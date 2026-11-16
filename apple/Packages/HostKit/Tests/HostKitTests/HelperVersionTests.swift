@@ -252,15 +252,16 @@ nonisolated let bundled = BundledDaemons(
 /// Upload progress reads in one unit, the helper's own bytes, and ends at its size.
 @Suite struct UploadProgressTests {
     private let binarySize: UInt64 = 37_940_960
+    private var shownSize: String { ByteCountFormatter.string(fromByteCount: Int64(binarySize), countStyle: .file) }
 
     @Test func anInstallUploadEndsAtTheHelpersSize() {
         let finished = InstallProgress(step: .uploading(size: binarySize, sent: binarySize))
-        #expect(finished.summary == "Uploading helper (37.9 MB of 37.9 MB)")
+        #expect(finished.summary == "Uploading helper (\(shownSize) of \(shownSize))")
     }
 
     @Test func anUpdateUploadEndsAtTheHelpersSize() {
         let step = HelperUpdateProgress.Step(bootstrap: .uploading(size: binarySize, sent: binarySize))
-        #expect(step.map { HelperUpdateProgress(step: $0).summary } == "Updating helper (37.9 MB of 37.9 MB)")
+        #expect(step.map { HelperUpdateProgress(step: $0).summary } == "Updating helper (\(shownSize) of \(shownSize))")
     }
 
     @Test func progressNeverReadsPastTheWhole() {
