@@ -156,7 +156,9 @@ Six radii, nothing in between, every one with continuous corners: chrome rounds 
 2. Never glass on glass. Neighbouring glass controls share a `GlassEffectContainer` (toolbar
    groups do this already).
 3. Tint glass only to carry state: the prominent primary action (`.glassProminent`) and a latched
-   key-bar modifier. Never for decoration.
+   key-bar modifier. Never for decoration. On the Mac the primary action (`.primaryGlass`) is
+   drawn solid in `prominent` instead: system glass buttons turn grey in a window that is not
+   key, and an approval card over another app must still read as the action to take.
 4. The window chrome follows the terminal, not the system (Ghostty `window-theme = auto`, the
    default "Match Terminal"): a dark theme gives dark chrome everywhere (sidebar, toolbar and
    title bar, tab strip, sheets, key bar) even with the system in light mode, and the reverse.
@@ -278,7 +280,7 @@ own stroke or shadow (`StyleLintTests`).
   scene that is not foreground active) recedes: edges at half strength, no top light, `panel`
   becomes `float`, the selected tab's pill drops to the hover fill, the selected sidebar row to
   the soft accent, and unfocused panes dim further (their opacity × 0.85). The terminal grid's
-  own colours never change.
+  own colours never change, and neither does the primary button.
 
 ### Checks
 

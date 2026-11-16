@@ -64,20 +64,81 @@ private struct ThemedGlassFill<S: InsettableShape>: ViewModifier {
     }
 }
 
-/// The one primary action on a screen: prominent glass tinted with the theme's prominent colour
-/// (its accent deepened until the label reads on it at 4.5:1). A pale accent under the system's
-/// white label would not.
+/// The one primary action on a screen, in the theme's prominent colour (its accent deepened
+/// until the label reads on it at 4.5:1). On touch it is prominent glass. On the Mac it is drawn
+/// solid: the system's glass buttons turn grey in a window that is not key, and the label then
+/// fades into them, so an approval card over another app would read as disabled.
 public struct PrimaryGlassButtonStyle: PrimitiveButtonStyle {
     public init() {}
 
     public func makeBody(configuration: Configuration) -> some View {
+        #if os(macOS)
+        Button(configuration)
+            .buttonStyle(PrimaryFillButtonStyle())
+        #else
         Button(configuration)
             .buttonStyle(.glassProminent)
             .tint(DS.Palette.prominent)
             // Its own label colour: content under `chromeContent()` carries the theme's ink.
             .foregroundStyle(DS.Palette.onProminent)
+        #endif
     }
 }
+
+#if os(macOS)
+/// The Mac's primary button: the prominent fill at the system button's height for its control
+/// size, lit and pressed from `ControlState`. Disabled, it drops to a push button's bezel with
+/// the stepped-down ink.
+struct PrimaryFillButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlSize) private var controlSize
+
+    func makeBody(configuration: Configuration) -> some View {
+        let metrics = PrimaryButtonMetrics(controlSize)
+        let shape = RoundedRectangle.rounded(DS.Radius.field)
+        configuration.label
+            .font(metrics.font)
+            .lineLimit(1)
+            .foregroundStyle(isEnabled ? DS.Palette.onProminent : DS.Palette.text.disabled)
+            .padding(.horizontal, metrics.horizontalPadding)
+            .frame(minHeight: metrics.height)
+            .background {
+                if isEnabled {
+                    shape.fill(DS.Palette.prominent)
+                        .overlay {
+                            ControlFillShape(
+                                state: ControlState(isHovered: isHovered, isPressed: configuration.isPressed), shape: shape)
+                                .animation(DS.Motion.micro, value: isHovered)
+                        }
+                } else {
+                    ControlFillShape(state: ControlState(isSelected: true, isEnabled: false), shape: shape)
+                }
+            }
+            .contentShape(shape)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(DS.Motion.micro, value: configuration.isPressed)
+            .onHover { isHovered = $0 }
+    }
+}
+
+/// The system push button's height, padding and label size for each control size.
+nonisolated struct PrimaryButtonMetrics: Equatable {
+    var height: CGFloat
+    var horizontalPadding: CGFloat
+    var font: Font
+
+    init(_ controlSize: ControlSize) {
+        switch controlSize {
+        case .mini: (height, horizontalPadding, font) = (16, DS.Space.row, .caption)
+        case .small: (height, horizontalPadding, font) = (20, DS.Space.s, .subheadline)
+        case .large: (height, horizontalPadding, font) = (30, DS.Space.m, .body)
+        case .extraLarge: (height, horizontalPadding, font) = (36, DS.Space.l, .title3)
+        default: (height, horizontalPadding, font) = (24, DS.Space.gap10, .body)
+        }
+    }
+}
+#endif
 
 public extension PrimitiveButtonStyle where Self == PrimaryGlassButtonStyle {
     static var primaryGlass: PrimaryGlassButtonStyle { PrimaryGlassButtonStyle() }
