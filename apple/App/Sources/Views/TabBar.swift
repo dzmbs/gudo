@@ -191,23 +191,41 @@ struct StripEdges: Equatable {
 }
 
 private extension View {
-    /// A soft fade where chips run past an edge, so a cut chip reads as more to scroll to.
+    /// A soft fade where chips run past an edge, so a cut chip reads as more to scroll to; clear
+    /// at the edge itself, so no sliver of a chip shows against what stands beside the strip.
     func stripEdgeFade(_ edges: StripEdges) -> some View {
         mask {
             HStack(spacing: 0) {
-                // style-exempt: a mask, only its alpha counts
-                LinearGradient(colors: [edges.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.tabStripFade)
+                StripEdgeFade(isFading: edges.leading, towards: .leading)
                 Rectangle()
-                // style-exempt: a mask, only its alpha counts
-                LinearGradient(colors: [.black, edges.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.tabStripFade)
+                StripEdgeFade(isFading: edges.trailing, towards: .trailing)
             }
         }
     }
 
     func tabChipWidth() -> some View {
         TabChipWidth(range: DS.Size.tabMinWidth...DS.Size.tabMaxWidth).callAsFunction { self }
+    }
+}
+
+/// One edge of the strip's mask: opaque, or clear for `DS.Space.s` at the edge, then fading in.
+private struct StripEdgeFade: View {
+    let isFading: Bool
+    let towards: HorizontalEdge
+
+    var body: some View {
+        // style-exempt: a mask, only its alpha counts
+        let opaque = Color.black
+        let edge = isFading ? Color.clear : opaque
+        LinearGradient(
+            stops: [
+                .init(color: edge, location: 0),
+                .init(color: edge, location: DS.Space.s / DS.Size.tabStripFade),
+                .init(color: opaque, location: 1),
+            ],
+            startPoint: towards == .leading ? .leading : .trailing,
+            endPoint: towards == .leading ? .trailing : .leading)
+            .frame(width: DS.Size.tabStripFade)
     }
 }
 
