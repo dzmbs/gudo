@@ -309,7 +309,7 @@ enum TabCmd {
 enum DaemonCmd {
     /// Version, build, protocol level, OS, CPU and host name.
     Info,
-    /// Send a new build (an `gudo-hostd` executable or its .gz) to the daemon, which
+    /// Send a new build (a `gudo-hostd` executable or its .gz) to the daemon, which
     /// checks it, swaps it in and restarts into it. Panes come back from its saved layout;
     /// shells restart.
     Upgrade {
