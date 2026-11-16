@@ -82,6 +82,18 @@ final class IdentityGalleryTests: XCTestCase {
         }
     }
 
+    /// Every program the catalog knows, as its row tile, at rest and selected.
+    func testRenderProgramMarks() throws {
+        for (appearance, themeName) in Self.themes {
+            let renderer = ImageRenderer(content: ProgramSheet(theme: ThemeCatalog.theme(named: themeName)))
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.nsImage)
+            let tiff = try XCTUnwrap(image.tiffRepresentation)
+            let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+            try png.write(to: galleryDirectory.appendingPathComponent("programs-\(appearance).png"))
+        }
+    }
+
     private static func arrange(_ model: WindowModel, selecting selectedIndex: Int) {
         guard let workspace = model.workspace else { return }
         // The mock host keeps its tabs across windows: start every capture from these alone.
@@ -140,6 +152,39 @@ final class IdentityGalleryTests: XCTestCase {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         try png.write(to: galleryDirectory.appendingPathComponent("\(name).png"))
+    }
+}
+
+private struct ProgramSheet: View {
+    let theme: TerminalTheme
+    private let columns = 4
+
+    var body: some View {
+        let chrome = ChromePalette(theme: theme)
+        let entries = ProgramCatalog.entries
+        let rows = stride(from: 0, to: entries.count, by: columns).map { Array(entries[$0..<min($0 + columns, entries.count)]) }
+        Grid(alignment: .leading, horizontalSpacing: DS.Space.xl, verticalSpacing: DS.Space.s) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(row, id: \.id) { identity in
+                        HStack(spacing: DS.Space.s) {
+                            ProgramTile(identity)
+                            ProgramTile(identity, isSelected: true)
+                                .padding(DS.Space.xxs)
+                                .background(DS.Palette.selectedFill, in: .rounded(DS.Radius.control))
+                            Text(identity.displayName).font(DS.Font.meta)
+                        }
+                        .frame(width: 190, alignment: .leading)
+                    }
+                }
+            }
+        }
+        .padding(DS.Space.l)
+        .background(chrome.color(.sidebar))
+        .foregroundStyle(DS.Palette.text)
+        .environment(\.terminalTheme, theme)
+        .environment(\.chrome, chrome)
+        .environment(\.colorScheme, chrome.scheme)
     }
 }
 
