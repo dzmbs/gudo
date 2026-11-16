@@ -316,6 +316,83 @@ async fn fixed_size_survives_resizes_and_input_until_the_policy_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_lone_window_sizes_the_panes_it_shows_while_another_app_has_the_keys() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    desktop.client.attach(None);
+    desktop
+        .until("layout", |client| client.layout.is_some())
+        .await;
+    let pane = desktop.focused();
+    desktop
+        .client
+        .set_pane_activity(pane, PaneActivity::Inactive);
+    desktop.follow(pane).await;
+    desktop
+        .until("the window's grid, sized by the window", |client| {
+            let sized = client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 100 && meta.size.rows == 30);
+            sized
+                && client
+                    .sizing
+                    .get(&pane)
+                    .is_some_and(|state| state.peer.is_some())
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_backgrounded_phone_hands_the_grid_to_a_window_that_still_shows_the_pane() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = desktop.attach_and_follow().await;
+    desktop
+        .until("desktop size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 100)
+        })
+        .await;
+    desktop
+        .client
+        .set_pane_activity(pane, PaneActivity::Inactive);
+    let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    phone.attach_and_follow().await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 45,
+            rows: 20,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    desktop
+        .until("phone size", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 45)
+        })
+        .await;
+    phone.client.set_view(None, Vec::new());
+    phone.client.set_pane_activity(pane, PaneActivity::Inactive);
+    desktop
+        .until("the window still showing the pane sizes it", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 100 && meta.size.rows == 30)
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn smallest_size_combines_active_drivers_and_ignores_background_requests() {
     let directory = tempfile::tempdir().unwrap();
     let daemon = start(directory.path()).await;

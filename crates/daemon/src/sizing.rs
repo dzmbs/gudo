@@ -43,8 +43,43 @@ struct Request {
     size: Option<PaneSize>,
     activity: PaneActivity,
     explicit_activity: bool,
+    /// The connection's view shows the pane, whatever its window's own activity.
+    shown: bool,
     active_order: u64,
     input_order: u64,
+}
+
+/// How strongly a request asks for the pane's size. With no active view, one that still shows
+/// the pane (a window behind another app's) sizes it rather than nobody.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Claim {
+    Hidden,
+    Shown,
+    Active,
+}
+
+impl Request {
+    fn new(authz: &Authz, activity: PaneActivity) -> Self {
+        Self {
+            authz: authz.clone(),
+            size: None,
+            activity,
+            explicit_activity: false,
+            shown: false,
+            active_order: 0,
+            input_order: 0,
+        }
+    }
+
+    fn claim(&self) -> Claim {
+        if self.activity == PaneActivity::Active {
+            Claim::Active
+        } else if self.shown {
+            Claim::Shown
+        } else {
+            Claim::Hidden
+        }
+    }
 }
 
 #[derive(Default)]
@@ -74,14 +109,9 @@ impl Sizing {
     }
 
     fn request(&mut self, conn: ConnId, authz: &Authz, activity: PaneActivity) -> &mut Request {
-        self.requests.entry(conn).or_insert_with(|| Request {
-            authz: authz.clone(),
-            size: None,
-            activity,
-            explicit_activity: false,
-            active_order: 0,
-            input_order: 0,
-        })
+        self.requests
+            .entry(conn)
+            .or_insert_with(|| Request::new(authz, activity))
     }
 
     pub fn set_size(
@@ -94,12 +124,19 @@ impl Sizing {
         if size.cols == 0 || size.rows == 0 {
             return Err(EmptyGrid);
         }
-        self.request(conn, authz, initial_activity).size = Some(bounded(size));
+        let shown = initial_activity == PaneActivity::Active;
+        let request = self.requests.entry(conn).or_insert_with(|| Request {
+            shown,
+            ..Request::new(authz, initial_activity)
+        });
+        request.size = Some(bounded(size));
         Ok(())
     }
 
     pub fn view_activity(&mut self, conn: ConnId, authz: &Authz, activity: PaneActivity) {
-        if self.request(conn, authz, activity).explicit_activity {
+        let request = self.request(conn, authz, activity);
+        request.shown = activity == PaneActivity::Active;
+        if request.explicit_activity {
             return;
         }
         self.activity(conn, authz, activity);
@@ -157,12 +194,21 @@ impl Sizing {
                 },
             });
         }
-        let candidates = || {
-            self.requests.iter().filter(|(_, request)| {
-                request.activity == PaneActivity::Active
+        let claimants: Vec<(&ConnId, &Request)> = self
+            .requests
+            .iter()
+            .filter(|(_, request)| {
+                request.claim() > Claim::Hidden
                     && request.size.is_some()
                     && eligible(&request.authz)
             })
+            .collect();
+        let strongest = claimants.iter().map(|(_, request)| request.claim()).max()?;
+        let candidates = || {
+            claimants
+                .iter()
+                .copied()
+                .filter(move |(_, request)| request.claim() == strongest)
         };
         if policy == SizePolicy::Smallest {
             let (cols, rows) = candidates().filter_map(|(_, request)| request.size).fold(
@@ -367,6 +413,36 @@ mod tests {
         sizing.remove(2);
         assert_eq!(sizing.choose(|_| true).unwrap().size, size(160, 40));
         sizing.explicit_activity(1, &authz(1), PaneActivity::Inactive);
+        sizing.view_activity(1, &authz(1), PaneActivity::Inactive);
         assert!(sizing.choose(|_| true).is_none());
+    }
+
+    #[test]
+    fn a_view_still_showing_the_pane_sizes_it_when_no_view_is_active() {
+        let mut sizing = two_clients();
+        sizing.explicit_activity(1, &authz(1), PaneActivity::Inactive);
+        assert_eq!(sizing.choose(|_| true).unwrap().size, size(45, 20));
+        sizing.explicit_activity(2, &authz(2), PaneActivity::Inactive);
+        assert_eq!(sizing.choose(|_| true).unwrap().size, size(45, 20));
+        sizing.view_activity(2, &authz(2), PaneActivity::Inactive);
+        assert_eq!(sizing.choose(|_| true).unwrap().size, size(160, 40));
+        sizing.set_policy(SizePolicy::Smallest).unwrap();
+        assert_eq!(sizing.choose(|_| true).unwrap().size, size(160, 40));
+        sizing.explicit_activity(2, &authz(2), PaneActivity::Active);
+        assert_eq!(sizing.choose(|_| true).unwrap().size, size(45, 20));
+    }
+
+    #[test]
+    fn a_lone_inactive_window_sizes_the_pane_it_shows() {
+        let mut sizing = Sizing::default();
+        sizing.explicit_activity(1, &authz(1), PaneActivity::Inactive);
+        sizing
+            .set_size(1, &authz(1), size(156, 41), PaneActivity::Inactive)
+            .unwrap();
+        assert!(sizing.choose(|_| true).is_none());
+        sizing.view_activity(1, &authz(1), PaneActivity::Active);
+        let choice = sizing.choose(|_| true).unwrap();
+        assert_eq!(choice.size, size(156, 41));
+        assert_eq!(choice.owner.map(|(conn, _)| conn), Some(1));
     }
 }
