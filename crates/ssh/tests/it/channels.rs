@@ -116,6 +116,24 @@ async fn exec_captures_streams_and_status() {
 #[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
 async fn upload_raw_and_gzip_with_checksum() {
     let connection = env().connect().await;
+    let progress = std::sync::Mutex::new(Vec::new());
+    let mut random = vec![0u8; 8 << 20];
+    getrandom::fill(&mut random).unwrap();
+    connection
+        .upload_reporting(
+            "~/gudo-test/progress.bin",
+            &random,
+            0o600,
+            UploadEncoding::Raw,
+            &|sent| progress.lock().unwrap().push(sent),
+        )
+        .await
+        .unwrap();
+    let progress = progress.into_inner().unwrap();
+    assert!(progress.len() >= 8, "{progress:?}");
+    assert!(progress.is_sorted());
+    assert_eq!(progress.last(), Some(&(8 << 20)));
+
     // Half compressible, half random.
     let mut data = vec![0u8; 4 << 20];
     getrandom::fill(&mut data[..2 << 20]).unwrap();

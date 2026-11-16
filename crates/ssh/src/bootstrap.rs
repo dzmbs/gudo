@@ -7,10 +7,10 @@
 //! 1. **Probe**: `uname -sm`, `gzip` presence, the SHA-256 and build of an installed binary
 //!    and whether its daemon runs.
 //! 2. **Upload** (only if the installed binary differs): gzip-compressed when possible,
-//!    written to a temp file, SHA-256-checked on the remote, renamed into place. Over an
-//!    installed build that reports its version, the new one is staged next to it first and
-//!    only replaces it if it is not older (rollback protection: an older app on another
-//!    device must not quietly reinstate an older helper), unless
+//!    written to a temp file, SHA-256-checked on the remote, staged next to the install. It
+//!    is installed only once it runs there, and over an installed build that reports its
+//!    version only if it is not older (rollback protection: an older app on another device
+//!    must not quietly reinstate an older helper), unless
 //!    [`BootstrapOptions::allow_downgrade`].
 //! 3. **Service** (if uploaded or not running): a running daemon is first asked to restart
 //!    into the new build in place (`gudo-hostd restart`), keeping its sessions; else
@@ -288,8 +288,11 @@ pub async fn bootstrap(
             size: binary.len() as u64,
             sent: 0,
         });
+        let size = binary.len() as u64;
         let report = connection
-            .upload(&format!("~/{staged}"), &binary, 0o755, encoding)
+            .upload_reporting(&format!("~/{staged}"), &binary, 0o755, encoding, &|sent| {
+                step(BootstrapStep::Uploading { size, sent });
+            })
             .await?;
         step(BootstrapStep::Uploading {
             size: report.size,

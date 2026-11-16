@@ -29,7 +29,7 @@ export them as async functions and callback interfaces without wrappers.
 | `Connection::connect(&Target, &ConnectOptions)` | one live, authenticated connection; clones share it |
 | `conn.exec / exec_with_input` → `ExecOutput` | stdout, stderr, exit status or signal; `check()` turns failure into `SshError::Remote` |
 | `conn.open_shell(&PtyRequest)` → `(Shell, ShellOutput)` | PTY (`TERM`, size, `IUTF8`), env, optional command; `Shell::{write, resize, close}`, `ShellOutput::next()` → `Data`/`Stderr`/`Exit` |
-| `conn.upload(path, bytes, mode, Raw\|Gzip)` / `download` | exec-based, no SFTP: temp file, SHA-256 checked on the remote, `chmod`, atomic `mv`; `~/` paths, spaces fine |
+| `conn.upload(path, bytes, mode, Raw\|Gzip)` (`upload_reporting` adds progress) / `download` | exec-based, no SFTP: temp file, SHA-256 checked on the remote, `chmod`, atomic `mv`; `~/` paths, spaces fine |
 | `conn.{ping, probe, note_input, rtt, closed, is_dead}` | liveness (§2) |
 | `Session::start(target, options, ReconnectPolicy, listener)` | the self-healing handle views keep (04 R7): `state()`, `subscribe()`, `connected()`, `connection()`, `set_foreground`, `network_changed`, `reconnect_now`, `close` |
 | `bootstrap(&conn, &HostdBinaries, &BootstrapOptions)` → `BootstrapReport` | §3 |

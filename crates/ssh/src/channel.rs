@@ -366,6 +366,24 @@ impl Connection {
         mode: u32,
         encoding: UploadEncoding,
     ) -> Result<UploadReport, SshError> {
+        self.upload_reporting(path, data, mode, encoding, &|_| {})
+            .await
+    }
+
+    /// [`upload`](Self::upload), calling `on_sent` with the bytes put on the wire so far as
+    /// they go out.
+    ///
+    /// # Errors
+    ///
+    /// As [`upload`](Self::upload).
+    pub async fn upload_reporting(
+        &self,
+        path: &str,
+        data: &[u8],
+        mode: u32,
+        encoding: UploadEncoding,
+        on_sent: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<UploadReport, SshError> {
         let sha256 = sha256_hex(data);
         let wire = match encoding {
             UploadEncoding::Raw => data.to_vec(),
@@ -401,7 +419,7 @@ trap - EXIT"#,
             path = remote_path(path),
         );
         let output = self
-            .exec_with_input(&sh_command(&script), wire.as_slice())
+            .exec_with_input(&sh_command(&script), Progress::new(&wire, on_sent))
             .await?;
         let remote_hash = output
             .stdout_text()
@@ -435,6 +453,49 @@ trap - EXIT"#,
             .await?
             .check()?;
         Ok(output.stdout)
+    }
+}
+
+/// Upload bytes read in slices, reporting how many have been taken.
+struct Progress<'a> {
+    remaining: &'a [u8],
+    sent: u64,
+    reported: u64,
+    on_sent: &'a (dyn Fn(u64) + Send + Sync),
+}
+
+impl<'a> Progress<'a> {
+    /// Often enough for a progress bar, rarely enough to cost nothing.
+    const STEP: usize = 256 * 1024;
+
+    fn new(data: &'a [u8], on_sent: &'a (dyn Fn(u64) + Send + Sync)) -> Self {
+        Self {
+            remaining: data,
+            sent: 0,
+            reported: 0,
+            on_sent,
+        }
+    }
+}
+
+impl AsyncRead for Progress<'_> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let count = buf.remaining().min(self.remaining.len()).min(Self::STEP);
+        let (taken, rest) = self.remaining.split_at(count);
+        buf.put_slice(taken);
+        self.remaining = rest;
+        self.sent += count as u64;
+        if count > 0
+            && (self.sent - self.reported >= Self::STEP as u64 || self.remaining.is_empty())
+        {
+            self.reported = self.sent;
+            (self.on_sent)(self.sent);
+        }
+        std::task::Poll::Ready(Ok(()))
     }
 }
 
