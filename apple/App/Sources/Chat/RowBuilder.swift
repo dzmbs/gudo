@@ -339,7 +339,9 @@ nonisolated final class RowBuilder {
 
     private func block(_ markup: any Markup, source: String, original: MarkdownSource, cachesHighlights: Bool) -> ChatMarkdownBlock {
         if let code = markup as? CodeBlock {
-            let text = code.code
+            var text = code.code
+            // cmark ends every fenced block with the newline before its closing fence.
+            if text.last?.isNewline == true { text.removeLast() }
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
             let preview = prefix(lines.prefix(30).joined(separator: "\n"), bytes: 8_192)
             let highlighting = codeHighlighter.highlighting(preview, language: CodeLanguage(fence: code.language),

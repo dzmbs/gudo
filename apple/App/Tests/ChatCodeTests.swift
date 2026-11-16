@@ -15,15 +15,15 @@ import XCTest
             let row = try XCTUnwrap(rendered.rows.first)
             guard case .markdown(let block) = row.content else { return XCTFail("Expected code") }
             let code = try XCTUnwrap(block.code)
-            XCTAssertEqual(code.text, source)
-            XCTAssertEqual(code.preview, source)
+            XCTAssertEqual(code.text + "\n", source)
+            XCTAssertEqual(code.preview + "\n", source)
             XCTAssertFalse(code.highlights.isEmpty, "Grammar/query bundle must be present in the actual app")
             XCTAssertTrue(code.highlights.contains { $0.role == .keyword })
             XCTAssertTrue(code.highlights.contains { $0.role == .string })
             XCTAssertGreaterThanOrEqual(rendered.cost.bytes, code.highlights.count * 32)
             for themeName in ["Dracula", "Apple System Colors Light"] {
                 let styled = ChatCodeStyler.text(code, theme: ThemeCatalog.theme(named: themeName), increasedContrast: false)
-                XCTAssertEqual(String(styled.characters), source)
+                XCTAssertEqual(String(styled.characters) + "\n", source)
                 XCTAssertTrue(styled.runs.allSatisfy { $0.link == nil })
                 XCTAssertGreaterThan(Set(styled.runs.compactMap(\.foregroundColor)).count, 2)
             }
@@ -57,7 +57,7 @@ import XCTest
             let rows = builder.rows(for: try assistant("```\(language)\n" + source + "```", id: language))
             guard case .markdown(let block) = try XCTUnwrap(rows.first).content else { return XCTFail("Expected code") }
             let code = try XCTUnwrap(block.code)
-            XCTAssertEqual(code.text, source)
+            XCTAssertEqual(code.text + "\n", source)
             XCTAssertTrue(code.isTruncated)
             XCTAssertLessThanOrEqual(code.preview.utf8.count, 8_192)
             if language == "unknown" { XCTAssertTrue(code.highlights.isEmpty) }

@@ -42,7 +42,7 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(blocks[2].list.map(\.depth), [0, 1, 0])
         XCTAssertEqual(blocks[2].list.last?.marker, "☑")
         XCTAssertEqual(String(blocks[3].text.characters).trimmingCharacters(in: .whitespacesAndNewlines), "A quote")
-        XCTAssertEqual(String(blocks[4].text.characters), "fn main() {}\n")
+        XCTAssertEqual(String(blocks[4].text.characters), "fn main() {}")
         XCTAssertEqual(blocks[5].table.count, 2)
         XCTAssertEqual(String(blocks[5].table[1][1].characters).trimmingCharacters(in: .whitespacesAndNewlines), "Passed")
         XCTAssertTrue(String(blocks[7].text.characters).contains("<div>"))
@@ -190,9 +190,23 @@ final class RowBuilderTests: XCTestCase {
         let code = (0..<100).map { "print(\($0))" }.joined(separator: "\n")
         let rows = builder.rows(for: try assistant("```swift\n\(code)\n```"))
         guard case .markdown(let block) = rows.first?.content else { return XCTFail("Missing code") }
-        XCTAssertEqual(block.code?.text, code + "\n")
-        XCTAssertEqual(block.code?.lineCount, 101)
+        XCTAssertEqual(block.code?.text, code)
+        XCTAssertEqual(block.code?.lineCount, 100)
         XCTAssertEqual(block.code?.preview.split(separator: "\n").count, 30)
+    }
+
+    func testACodeBlockEndsOnItsLastLine() async throws {
+        let builder = RowBuilder()
+        let rows = builder.rows(for: try assistant("```swift\nlet a = 1\nlet b = 2\n```\n\n```\n\nspaced\n\n```"))
+        let codes = rows.compactMap { row -> ChatCodeSnippet? in
+            guard case .markdown(let block) = row.content else { return nil }
+            return block.code
+        }
+        XCTAssertEqual(codes.map(\.text), ["let a = 1\nlet b = 2", "\nspaced\n"])
+        XCTAssertEqual(codes.map(\.preview), ["let a = 1\nlet b = 2", "\nspaced\n"])
+        XCTAssertEqual(codes.map(\.lineCount), [2, 3])
+        XCTAssertEqual(codes.map(\.visibleLineCount), [2, 3])
+        XCTAssertEqual(codes.map(\.isTruncated), [false, false])
     }
 
     func testLongSingleLineCodeHasAByteBoundedUTF8Preview() async throws {
@@ -204,7 +218,7 @@ final class RowBuilderTests: XCTestCase {
         XCTAssertEqual(block.code?.visibleLineCount, 1)
         XCTAssertEqual(block.code?.isTruncated, true)
         XCTAssertFalse(block.code?.preview.contains("�") ?? true)
-        XCTAssertEqual(block.code?.text, code + "\n")
+        XCTAssertEqual(block.code?.text, code)
     }
 
     func testLargeTextValuesKeepFullTextOutsideTheInlinePreview() async throws {
@@ -415,8 +429,8 @@ final class RowBuilderTests: XCTestCase {
     }
 
     func testCodeBlocksKeepEveryNewline() async throws {
-        let code = try XCTUnwrap(blocks("```\nfirst\nsecond\n```").first)
-        XCTAssertEqual(String(code.text.characters), "first\nsecond\n")
+        let code = try XCTUnwrap(blocks("```\nfirst\n\nsecond\n```").first)
+        XCTAssertEqual(String(code.text.characters), "first\n\nsecond")
     }
 
     private func blocks(_ markdown: String) throws -> [ChatMarkdownBlock] {
