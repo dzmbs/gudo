@@ -131,6 +131,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Strip chip width / edge fade | as wide as its title, 120 to 240 pt (`tabMinWidth`, `tabMaxWidth`); more tabs scroll / 16 pt (`stripFade`) | - |
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
 | Chat reading column | 680 pt of text, centred; full width on iPhone | about 75 characters of body text |
+| Chat Send / Stop disc | 32 pt (`proseSendDisc`) inside a 44 pt target | the one primary action on the composer, weighted like a key |
 | Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
 | Window padding | 4 pt (`Space.xs`), balanced | Ghostty `window-padding-balance`; wider than Ghostty's 2 pt so text never touches a split's line |
 

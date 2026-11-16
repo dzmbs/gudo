@@ -217,19 +217,26 @@ finish/cancel cannot control a replacement recording in another pane, and failur
 target. Agent/presentation/lifetime changes and backgrounding cancel. Starting may survive an inactive
 scene for system permission dialogs, but host controls remain unavailable during that interval.
 
-The composer is one rounded surface: the field over a fixed 44 pt bar with the Add menu, a one-line status, and one trailing button that swaps in place between Send (a draft is typed), Stop (the agent is working and the draft is empty) and Dictate, so neither status text nor the agent starting or stopping moves the layout. Terminal is reached from the header's Chat/Terminal switch, not the composer.
+The composer is one rounded surface and, empty, one 44 pt row: the Add menu, the field and one trailing button that swaps in place between Send (a draft is typed), Stop (the agent is working and the draft is empty) and Dictate. Send is a disc in the prominent accent with its glyph in `onProminent`, Stop the same disc in the ink, both inside a 44 pt target, so the swap never moves the row. The field grows upward to six lines with the buttons held at the bottom; a status or the command hint takes a line above the field. Hide Keyboard sits at the leading end of the row under the composer. Terminal is reached from the header's Chat/Terminal switch, not the composer.
 
 Under the composer sit the session's model and permission mode, as the transcript records them
-(`ChatSessionChips`). Choosing a model puts Claude Code's own `/model <alias>` in an empty draft
-for Send to apply; nothing is sent by the menu. The mode is shown, not changed: Claude Code cycles
-it with Shift-Tab, and a key that steps through modes could land on one the user did not choose.
-Effort is not in the transcript, so Chat does not show it. While the agent works, three dots
-(`ChatWorkingIndicator`) sit above the composer, swept by the working shimmer and still under
-Reduce Motion; they overlay the transcript so starting and stopping never moves it.
+(`ChatSessionChips`), each a small menu with a trailing up-down chevron and the shared press fill.
+The model menu opens on the running model, checked, then the aliases with its own family first.
+Choosing one puts Claude Code's own `/model <alias>` in an empty draft for Send to apply; nothing
+is sent by the menu, and with a draft typed the aliases are disabled. The mode menu lists every
+mode with a one-line description and checks the current one; the others are disabled under
+"Change with Shift-Tab in Terminal": Claude Code cycles it with Shift-Tab, and a key that steps
+through modes could land on one the user did not choose. Effort is not in the transcript, so Chat
+does not show it. While the agent works, three dots (`ChatWorkingIndicator`) on a small card sit
+centred a step above the composer, swept by the working shimmer and still under Reduce Motion;
+they float over the transcript so starting and stopping never moves it.
 
-An empty Chat says why (`ChatEmptyState`): a Claude Code started by hand in a shell has no session
-until the daemon finds its transcript, and Chat says it is looking and offers Terminal instead of
-"No messages yet". The daemon wakes the pane's timeline as soon as it records the session.
+An empty Chat says why (`ChatEmptyState`, drawn with the design system's `EmptyState`): a Claude
+Code started by hand in a shell has no session until the daemon finds its transcript, and Chat says
+it is looking and offers Terminal instead of "No messages yet". The daemon wakes the pane's
+timeline as soon as it records the session. "Opening Chat…" shows only after the 200 ms feedback
+delay. A reason Chat cannot go on (the timeline failed, a page of history did not load) is a
+failure banner at the top with Terminal as its one action.
 
 The composer Add menu offers Claude's bounded session command list (built-ins plus user/project
 command directories). Selecting a command only edits an unchanged, current-scope draft; it never
@@ -257,14 +264,22 @@ Tool headers distinguish Running, Completed, Failed, Denied and Interrupted in t
 colour; future status tags never become success. Titles are bounded for native layout and
 accessibility. Thinking with no text and no duration has no row; with a duration it reads
 "Thought for 4s", and only recorded text expands. Two or more consecutive tool calls fold into one
-line (`ChatToolGroups`) that names them by kind, "Ran 3 commands, read 2 files (1 failed)", and
-expands to the calls. The fold happens on the render worker; expanding re-renders without parsing,
+line (`ChatToolGroups`) that names them by kind, "Ran 3 commands, read 2 files (1 failed)", on one
+line with the outcome in the error colour, and expands to the calls. A call's time or state follows
+its title rather than the far edge, and a failed command names its exit code, "Failed · exit 101".
+Expanded, a command reads "$ cargo test" and a file call its path rather than the recorded JSON.
+The fold happens on the render worker; expanding re-renders without parsing,
 and a call still running stays visible under the line. A Read of an image keeps its own row and
-shows the image. Prompts are right-aligned on a light bubble with their time, Copy and, where Chat
-can send, Send again (it sends the same text through the composer's checks) under it.
+shows the image. Prompts are right-aligned on a light bubble (a step deeper on light chrome) with
+their time, Copy and, where Chat can send, Send again (it sends the same text through the
+composer's checks) just under it, a step apart, each still a 44 pt target; attached images sit
+at the trailing edge with the prompt.
 
-Markdown tables size each column to its longest cell up to a limit past which cells wrap
-(`ChatTableColumns`); a wider table scrolls sideways inside its own box. An image alone in a
+Markdown tables are open grids: a separator under the header, hairlines between rows and no box.
+Each column takes its longest cell up to a limit past which cells wrap (`ChatTableColumns`); on a
+narrow screen the widest columns give way first, down to the narrowest a column may be, and only a
+table that still does not fit scrolls sideways, its cut edge faded. Inline code is SF Mono a step
+under the prose, on the raised fill. An image alone in a
 paragraph with a host path, a Read of an image file and image attachments show inline in a box of
 fixed height, read with the viewer's file access and decoded no larger than shown; web images are
 never fetched.
@@ -332,10 +347,13 @@ bare URL/email candidates retain Foundation's existing interpretation and link p
 tests compare characters and all attributes, not just visual text. Short attributed blocks retain
 their existing storage instead of copying a whole-value slice. The inline cache stays bounded at
 32 entries/64 KiB; it was not enlarged to pass the cold-row check. Long lists and paragraphs split
-into bounded native rows. Code uses the terminal's font and background, with a 30-line/8-KiB prepared preview
-and an explicit full-code action. `ChatSyntax` prepares Tree-sitter token ranges on the rendering
+into bounded native rows. Code uses the terminal's font on its background lifted by its own ink at the sidebar strength
+(`TerminalTheme.codeSurface`), under a quiet header with the language and an icon-only Copy, on
+`control` corners, with a 30-line/8-KiB prepared preview and an explicit full-code action. A
+fenced block ends on its last line; cmark's newline before the closing fence is not a line. `ChatSyntax` prepares Tree-sitter token ranges on the rendering
 worker for both agents. Rust, Swift, JS/JSX, TS/TSX, Python, Go, shell, JSON, YAML, TOML, Markdown,
-C/C++, HTML, CSS and diff fences use the theme's ANSI hues, adjusted to 4.5:1 text contrast;
+C/C++, HTML, CSS and diff fences use the theme's ANSI hues, adjusted to 4.5:1 text contrast on
+both the terminal background and the code surface;
 Increase Contrast targets 7:1 or the surface's maximum possible contrast. Unknown, unavailable or
 over-budget highlighting stays plain. Each render pass has a 4 ms highlighting allowance; code past
 it renders plain and the worker highlights it in follow-up passes. The unfinished tail of a
