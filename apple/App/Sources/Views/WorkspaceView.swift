@@ -409,39 +409,47 @@ struct NewTabButton: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        let groups = model.groups.groups
         if canOpen {
-            Menu {
-                Button("New Terminal", systemImage: "terminal") { model.newTab() }
-                    .accessibilityIdentifier("new-tab-terminal")
-                Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent() }
-                    .accessibilityIdentifier("new-tab-agent")
-                Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
-                    withAnimation(DS.Motion.standard) { model.newEmptyProject() }
-                }
-                .accessibilityIdentifier("new-tab-project")
-                if groups.count > 1 {
-                    Menu("New Terminal On", systemImage: "plus.rectangle.on.rectangle") {
-                        ForEach(groups) { group in
-                            Button(group.name, systemImage: group.systemImage) { model.newTab(onGroup: group.id) }
-                        }
-                    }
-                }
-                Divider()
-                Button("Add Host…", systemImage: "plus.circle") { model.addHost() }
-            } label: {
+            #if os(macOS)
+            LazyMenuButton("New", systemImage: "plus") { newItems }
+                .help("New Terminal (⌘T) or New Agent (⇧⌘N)")
+                .accessibilityIdentifier("new-tab")
+            #else
+            Menu { newItems } label: {
                 Label("New", systemImage: "plus")
                     .labelStyle(.iconOnly)
             }
             .menuIndicator(.hidden)
             .help("New Terminal (⌘T) or New Agent (⇧⌘N)")
             .accessibilityIdentifier("new-tab")
+            #endif
         } else {
             Button("Add Host", systemImage: "plus") { model.newTab() }
                 .labelStyle(.iconOnly)
                 .help("Add Host")
                 .accessibilityIdentifier("new-tab")
         }
+    }
+
+    @ViewBuilder private var newItems: some View {
+        Button("New Terminal", systemImage: "terminal") { model.newTab() }
+            .accessibilityIdentifier("new-tab-terminal")
+        Button(WorkspaceAction.newAgent.title, systemImage: "sparkle") { model.newAgent() }
+            .accessibilityIdentifier("new-tab-agent")
+        Button(WorkspaceAction.newProject.title, systemImage: "folder.badge.plus") {
+            withAnimation(DS.Motion.standard) { model.newEmptyProject() }
+        }
+        .accessibilityIdentifier("new-tab-project")
+        let groups = model.groups.groups
+        if groups.count > 1 {
+            Menu("New Terminal On", systemImage: "plus.rectangle.on.rectangle") {
+                ForEach(groups) { group in
+                    Button(group.name, systemImage: group.systemImage) { model.newTab(onGroup: group.id) }
+                }
+            }
+        }
+        Divider()
+        Button("Add Host…", systemImage: "plus.circle") { model.addHost() }
     }
 
     private var canOpen: Bool { workspace.canOpenTabs || model.groups.newTabHost(preferred: nil) != nil }
@@ -816,21 +824,35 @@ private struct PaneControls: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        Menu("Split", systemImage: "rectangle.split.2x1") {
-            PaneMenuItems(workspace: workspace, model: model)
-            Divider()
-            Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
-                get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
-                .accessibilityIdentifier("two-columns")
-        }
-        .help("Split, zoom, float or close the pane")
-        .menuIndicator(.hidden)
-        .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
-        .accessibilityLabel("Split")
-        .accessibilityIdentifier("pane-menu")
+        #if os(macOS)
+        LazyMenuButton("Split", systemImage: "rectangle.split.2x1") { splitItems }
+            .help("Split, zoom, float or close the pane")
+            .disabled(isSplitDisabled)
+            .accessibilityLabel("Split")
+            .accessibilityIdentifier("pane-menu")
+        #else
+        Menu("Split", systemImage: "rectangle.split.2x1") { splitItems }
+            .help("Split, zoom, float or close the pane")
+            .menuIndicator(.hidden)
+            .disabled(isSplitDisabled)
+            .accessibilityLabel("Split")
+            .accessibilityIdentifier("pane-menu")
+        #endif
         Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
             .help("Command Palette (⌘K)")
             .accessibilityIdentifier("open-palette")
+    }
+
+    @ViewBuilder private var splitItems: some View {
+        PaneMenuItems(workspace: workspace, model: model)
+        Divider()
+        Toggle("Two Columns", systemImage: "rectangle.split.2x1", isOn: Binding(
+            get: { model.isTwoColumns }, set: { _ in model.toggleTwoColumns() }))
+            .accessibilityIdentifier("two-columns")
+    }
+
+    private var isSplitDisabled: Bool {
+        (workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal
     }
 }
 
@@ -922,6 +944,80 @@ struct TitleBarHosted<Content: View>: NSViewRepresentable {
     }
 }
 
+/// A control whose menu is made as it opens. In the title bar a SwiftUI `Menu` is mirrored as
+/// menu items, every command with its symbol image, and made again whenever anything it lists
+/// changes: for the pane menu, which names the other tabs, and the + menu in the tab strip, on
+/// every tab switch. An empty menu stays one stable item, and its menu is current when it opens.
+struct LazyMenuButton<Items: View>: View {
+    let title: String
+    let systemImage: String
+    @ViewBuilder let items: () -> Items
+    @Environment(\.self) private var environment
+    @State private var anchor = MenuAnchor()
+
+    init(_ title: String, systemImage: String, @ViewBuilder items: @escaping () -> Items) {
+        self.title = title
+        self.systemImage = systemImage
+        self.items = items
+    }
+
+    var body: some View {
+        // A menu of its own with nothing in it draws and reads exactly as the menu did.
+        Menu {
+        } label: {
+            Label(title, systemImage: systemImage)
+                .labelStyle(.iconOnly)
+                .background(MenuAnchorView(anchor: anchor))
+        } primaryAction: {
+            open()
+        }
+        .menuIndicator(.hidden)
+    }
+
+    private func open() {
+        guard let view = anchor.view ?? Self.clickedToolbarItem() else { return }
+        let menu = Self.menu(of: items(), in: environment)
+        let below = view.isFlipped ? view.bounds.maxY + DS.Space.xs : view.bounds.minY - DS.Space.xs
+        menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
+    }
+
+    static func menu(of items: Items, in environment: EnvironmentValues) -> NSMenu {
+        NSHostingMenu(rootView: items.environment(\.self, environment))
+    }
+
+    /// A toolbar draws its buttons itself, without the label's views: the item clicked.
+    private static func clickedToolbarItem() -> NSView? {
+        guard let event = NSApp.currentEvent, let window = event.window else { return nil }
+        return window.toolbar?.items.lazy.compactMap(\.view).first { view in
+            view.window === window && view.bounds.contains(view.convert(event.locationInWindow, from: nil))
+        }
+    }
+}
+
+@MainActor
+final class MenuAnchor {
+    weak var view: NSView?
+}
+
+/// Where a `LazyMenuButton` opens its menu from: the label's own bounds.
+private struct MenuAnchorView: NSViewRepresentable {
+    let anchor: MenuAnchor
+
+    func makeNSView(context: Context) -> NSView {
+        let view = PassThroughView()
+        anchor.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        anchor.view = view
+    }
+
+    private final class PassThroughView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+}
+
 /// The trailing controls folded into one menu for a narrow window: the hosts, Split and the
 /// command palette.
 private struct TitleBarOverflowMenu: View {
@@ -929,7 +1025,7 @@ private struct TitleBarOverflowMenu: View {
     @Environment(WindowModel.self) private var model
 
     var body: some View {
-        Menu {
+        LazyMenuButton("More", systemImage: "ellipsis.circle") {
             Section("Hosts") {
                 ForEach(model.switcherHosts) { host in
                     Button(host.name, systemImage: host.isCurrent ? "checkmark" : host.systemImage) { model.selectHost(id: host.id) }
@@ -940,11 +1036,7 @@ private struct TitleBarOverflowMenu: View {
             }
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
-        } label: {
-            Label("More", systemImage: "ellipsis.circle")
-                .labelStyle(.iconOnly)
         }
-        .menuIndicator(.hidden)
         .help("\(model.hostName), Split and Command Palette")
         .accessibilityIdentifier("toolbar-overflow")
     }

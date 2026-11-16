@@ -189,6 +189,26 @@ final class TitleBarTabsTests: XCTestCase {
         }
     }
 
+    /// Made as it opens, the menu holds what the SwiftUI menu held, submenus and sections too.
+    func testALazyMenuListsItsCommands() {
+        let menu = LazyMenuButton<AnyView>.menu(of: AnyView(Group {
+            Section("Hosts") {
+                Button("This Mac", systemImage: "laptopcomputer") {}
+            }
+            Menu("Split", systemImage: "rectangle.split.2x1") {
+                Button("Split Right") {}
+                Button("Split Down") {}
+            }
+            Button("Command Palette", systemImage: "command") {}
+        }), in: EnvironmentValues())
+        menu.update()
+        let titles = menu.items.map(\.title)
+        XCTAssertTrue(titles.contains("This Mac"), "\(titles)")
+        XCTAssertTrue(titles.contains("Command Palette"), "\(titles)")
+        let split = menu.items.first { $0.title == "Split" }
+        XCTAssertEqual(split?.submenu?.items.map(\.title), ["Split Right", "Split Down"])
+    }
+
     /// A window too narrow for the title and every control: each item still shows, the controls
     /// as one menu.
     func testANarrowWindowKeepsEveryToolbarItem() async throws {
