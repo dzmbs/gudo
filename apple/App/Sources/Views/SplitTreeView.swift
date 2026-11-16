@@ -704,7 +704,8 @@ struct PaneSlot: View {
                                                   pane: pane.id.rawValue, placement: .chatComposer),
                          permitsSending: daemon.multiplayer.isOwner,
                          readsToolDetails: daemon.multiplayer.canPrompt,
-                         working: daemon.meta[pane.id]?.agent?.state == .running) { active in
+                         working: daemon.meta[pane.id]?.agent?.state == .running,
+                         terminalWait: ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state)) { active in
                 terminalContent(pane, isActive: active)
             }
         } else { terminalContent(pane) }

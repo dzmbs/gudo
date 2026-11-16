@@ -14,6 +14,8 @@ struct PaneChatView<Terminal: View>: View {
     /// A tool's full output and recorded changes need the right to prompt; a viewer sees the row only.
     var readsToolDetails = true
     var working = false
+    /// The host's reason the agent waits on a screen only its terminal answers (`ChatEmptyState.terminalWait`).
+    var terminalWait: String?
     @Environment(\.scenePhase) private var scenePhase
     @ViewBuilder var terminal: (Bool) -> Terminal
     private var selectedDetail: ChatDetail? {
@@ -43,7 +45,8 @@ struct PaneChatView<Terminal: View>: View {
                 .accessibilityHidden(state.presentation != .chat)
             }
             if state.presentation == .chat, state.model?.frame.rows.isEmpty != false {
-                emptyState(ChatEmptyState(isLoading: state.model?.isLoading == true, session: state.model?.frame.session))
+                emptyState(ChatEmptyState(isLoading: state.model?.isLoading ?? true, session: state.model?.frame.session,
+                                          agent: state.agent, terminalWait: terminalWait))
             }
         }
     }
@@ -51,9 +54,10 @@ struct PaneChatView<Terminal: View>: View {
     @ViewBuilder private func emptyState(_ empty: ChatEmptyState) -> some View {
         Group {
             if let detail = empty.detail {
-                EmptyState(empty.title, systemImage: "text.bubble", message: detail) {
+                EmptyState(empty.title, systemImage: empty.symbol, message: detail) {
                     if empty.offersTerminal {
                         Button("Open Terminal") { state.show(.terminal, terminal: pane) }
+                            .accessibilityIdentifier("chat-empty-terminal")
                             .buttonStyle(.quiet)
                             .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.border)
                             .frame(minHeight: DS.Size.touchTarget)
@@ -174,10 +178,10 @@ struct PaneChatView<Terminal: View>: View {
                     composerNotes
                     HStack(alignment: .bottom, spacing: 0) {
                         leadingControl
-                        TextField("Message", text: $state.draft, axis: .vertical)
+                        TextField("Message", text: $state.draft, prompt: Text(composerPrompt), axis: .vertical)
                             .font(DS.Font.prose).lineLimit(1...6)
                             .focused($draftFocused)
-                            .disabled(state.dictation.isActive)
+                            .disabled(state.dictation.isActive || !composerTakesText)
                             .padding(.vertical, DS.Space.gap10)
                             .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
                             .accessibilityIdentifier("chat-draft")
@@ -186,8 +190,10 @@ struct PaneChatView<Terminal: View>: View {
                     .padding(DS.Space.xs)
                 }
                 .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
+                // Nothing can be sent: the composer says so by looking it, not only by ignoring taps.
+                .opacity(composerTakesText ? 1 : DS.Opacity.mutedGlyph)
                 .contentShape(.rect)
-                .onTapGesture { if !state.dictation.isActive { draftFocused = true } }
+                .onTapGesture { if !state.dictation.isActive, composerTakesText { draftFocused = true } }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-composer")
                 sessionControls
@@ -209,6 +215,15 @@ struct PaneChatView<Terminal: View>: View {
         .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
         .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
         .foregroundStyle(DS.Palette.text)
+    }
+
+    /// Whether a message typed now could go: this device may prompt, and the agent is not stopped
+    /// on a screen only its terminal answers.
+    private var composerTakesText: Bool { permitsSending && terminalWait == nil }
+
+    private var composerPrompt: String {
+        if terminalWait != nil { return "Answer in Terminal first" }
+        return permitsSending ? "Message" : "You can watch, not send"
     }
 
     /// What the composer is doing, or the command hint, on a line above the field, so the

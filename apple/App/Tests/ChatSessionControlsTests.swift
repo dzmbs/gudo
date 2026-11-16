@@ -1,5 +1,6 @@
 import DesignSystem
 import Foundation
+import GudoCore
 import HostKit
 import XCTest
 @testable import App
@@ -56,6 +57,35 @@ final class ChatSessionControlsTests: XCTestCase {
         for text in [state.title, state.detail ?? ""] {
             XCTAssertFalse(text.contains("—") || text.contains("–"))
         }
+    }
+
+    func testAnAgentWithoutAConversationIsWaitingInTerminal() throws {
+        let noSession = ChatEmptyState(isLoading: false, session: nil, agent: .claude)
+        XCTAssertEqual(noSession, .waitingInTerminal(agent: .claude, reason: nil))
+        XCTAssertEqual(noSession.title, "Claude Code is waiting in Terminal")
+        XCTAssertTrue(noSession.offersTerminal)
+        XCTAssertNotNil(noSession.detail)
+
+        let signIn = "Claude Code is not signed in on this host"
+        let blocked = ChatEmptyState(isLoading: true, session: try session(native: "known"), agent: .claude,
+                                     terminalWait: signIn)
+        XCTAssertEqual(blocked, .waitingInTerminal(agent: .claude, reason: signIn))
+        XCTAssertTrue(blocked.detail?.hasPrefix(signIn) == true)
+        XCTAssertTrue(blocked.offersTerminal)
+        for text in [noSession.title, noSession.detail ?? "", blocked.detail ?? ""] {
+            XCTAssertFalse(text.contains("—") || text.contains("–"))
+        }
+    }
+
+    func testOnlyABlockerWithoutChoicesWaitsInTerminal() {
+        XCTAssertEqual(ChatEmptyState.terminalWait(.blocked(requestId: 1, summary: " Sign in ", options: [])), "Sign in")
+        XCTAssertEqual(ChatEmptyState.terminalWait(.blocked(requestId: 1, summary: "", options: [])), "")
+        let choice = DecisionOption(id: 0, label: "Yes")
+        XCTAssertNil(ChatEmptyState.terminalWait(.blocked(requestId: 1, summary: "Run ls?", options: [choice])))
+        XCTAssertNil(ChatEmptyState.terminalWait(.idle))
+        XCTAssertNil(ChatEmptyState.terminalWait(nil))
+        XCTAssertEqual(ChatEmptyState(isLoading: false, session: nil, agent: .claude, terminalWait: ""),
+                       .waitingInTerminal(agent: .claude, reason: nil))
     }
 
     func testTableColumnsFitTheirLongestCellUpToTheWrapLimit() {
