@@ -793,7 +793,8 @@ impl DaemonClient {
 
     /// Whether the helper launches pi, reports pi panes as agents and serves their Chat.
     pub fn starts_pi(&self) -> bool {
-        self.inner.daemon_offers(proto::MoreDaemonFeatures::PI_AGENT)
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::PI_AGENT)
     }
 
     /// Starts following a pane's output. Kept across reconnects.

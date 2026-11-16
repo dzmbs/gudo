@@ -50,7 +50,11 @@ async fn pi_pane(fixture: &mut Fixture, launched: bool) -> PiPane {
         ("ENV".into(), String::new()),
         (
             "PATH".into(),
-            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()),
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
         ),
         (
             agents::PI_DIR_VAR.into(),
@@ -157,9 +161,18 @@ async fn a_launched_pi_shows_its_session_follows_it_and_takes_prompts() {
         watched.snapshot.session.model.as_deref(),
         Some("claude-opus-4-5")
     );
-    assert!(watched.capabilities.contains(AgentCapabilities::READ | AgentCapabilities::SEND));
+    assert!(
+        watched
+            .capabilities
+            .contains(AgentCapabilities::READ | AgentCapabilities::SEND)
+    );
     assert!(!watched.capabilities.contains(AgentCapabilities::STOP));
-    let shown: Vec<_> = watched.snapshot.items.iter().map(|item| text(&item.body)).collect();
+    let shown: Vec<_> = watched
+        .snapshot
+        .items
+        .iter()
+        .map(|item| text(&item.body))
+        .collect();
     let expected: Vec<_> = (10..70).map(|index| format!("reply {index}")).collect();
     assert_eq!(shown, expected);
     let older = pi
@@ -173,7 +186,10 @@ async fn a_launched_pi_shows_its_session_follows_it_and_takes_prompts() {
 
     fixture.user("And now?");
     fixture.reply("Done.");
-    assert_eq!(next_upserts(&mut events, "Done.").await, ["And now?", "Done."]);
+    assert_eq!(
+        next_upserts(&mut events, "Done.").await,
+        ["And now?", "Done."]
+    );
 
     let ChatSendStatus::Prepared {
         ticket, revision, ..
@@ -189,8 +205,7 @@ async fn a_launched_pi_shows_its_session_follows_it_and_takes_prompts() {
     assert_eq!(status, ChatSendStatus::SentNotConfirmed);
     let captured = pi.captured.clone();
     wait_until(move || {
-        std::fs::read(&captured)
-            .is_ok_and(|bytes| bytes == b"\x1b[200~run the tests\x1b[201~\r")
+        std::fs::read(&captured).is_ok_and(|bytes| bytes == b"\x1b[200~run the tests\x1b[201~\r")
     })
     .await;
     pi.daemon.shutdown().await;
@@ -242,6 +257,9 @@ async fn without_a_sessions_folder_chat_says_where_it_looked() {
     let WsError::Unavailable(message) = refusal else {
         panic!("expected unavailable, got {refusal:?}");
     };
-    assert!(message.starts_with("Chat can't find pi's sessions folder."), "{message}");
+    assert!(
+        message.starts_with("Chat can't find pi's sessions folder."),
+        "{message}"
+    );
     pi.daemon.shutdown().await;
 }

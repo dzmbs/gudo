@@ -17,14 +17,14 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
-        Self::with_header(json!({"type": "session", "version": 3, "id": SESSION, "timestamp": "2026-11-08T19:38:29.000Z", "cwd": CWD}))
+        Self::with_header(
+            json!({"type": "session", "version": 3, "id": SESSION, "timestamp": "2026-11-08T19:38:29.000Z", "cwd": CWD}),
+        )
     }
 
     pub fn with_header(header: Value) -> Self {
         let agent_dir = tempfile::tempdir().unwrap();
-        let folder = agent_dir
-            .path()
-            .join("sessions/--fixture-project--");
+        let folder = agent_dir.path().join("sessions/--fixture-project--");
         std::fs::create_dir_all(&folder).unwrap();
         let path = folder.join(format!("2026-11-08T19-38-29-000Z_{SESSION}.jsonl"));
         let fixture = Self {
@@ -140,12 +140,18 @@ fn messages_thinking_and_tools_become_the_rows_chat_shows() {
     let read = tool_of(bodies[3]);
     assert_eq!(read.kind, TimelineToolKind::Read);
     assert_eq!(read.title, "/fixture/project/src/lib.rs");
-    assert!(read.input.contains("\"path\":\"/fixture/project/src/lib.rs\""));
+    assert!(
+        read.input
+            .contains("\"path\":\"/fixture/project/src/lib.rs\"")
+    );
     assert_eq!(read.status, TimelineToolStatus::Done);
     assert_eq!(read.duration_ms, Some(3));
     assert_eq!(read.output.as_ref().unwrap().preview, "fn main() {}");
     let shell = tool_of(bodies[4]);
-    assert_eq!((shell.kind, shell.title.as_str()), (TimelineToolKind::Shell, "cargo test"));
+    assert_eq!(
+        (shell.kind, shell.title.as_str()),
+        (TimelineToolKind::Shell, "cargo test")
+    );
     assert_eq!(shell.status, TimelineToolStatus::Failed);
     assert!(shaped.results.is_empty());
 }
@@ -157,7 +163,9 @@ fn compaction_errors_interruptions_and_model_changes_are_notices() {
     fixture.append(&json!({"type": "compaction", "id": "c1", "parentId": "e0000000", "timestamp": "x", "summary": "s", "firstKeptEntryId": "e0000000", "tokensBefore": 260445}));
     fixture.append(&json!({"type": "model_change", "id": "m1", "parentId": "c1", "timestamp": "x", "provider": "openai", "modelId": "gpt-5"}));
     fixture.message(json!({"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "overloaded", "timestamp": 5}));
-    fixture.message(json!({"role": "assistant", "content": [], "stopReason": "aborted", "timestamp": 6}));
+    fixture.message(
+        json!({"role": "assistant", "content": [], "stopReason": "aborted", "timestamp": 6}),
+    );
     let shaped = shaped(&fixture);
     let notices: Vec<_> = bodies(&shaped)
         .into_iter()
@@ -169,7 +177,10 @@ fn compaction_errors_interruptions_and_model_changes_are_notices() {
     assert_eq!(
         notices,
         [
-            (TimelineNoticeKind::Compacted, "Context compacted from 260,445 tokens"),
+            (
+                TimelineNoticeKind::Compacted,
+                "Context compacted from 260,445 tokens"
+            ),
             (TimelineNoticeKind::ModelChanged, "Model changed to gpt-5"),
             (TimelineNoticeKind::Error, "overloaded"),
             (TimelineNoticeKind::Interrupted, "Interrupted"),
@@ -187,7 +198,10 @@ fn going_back_in_the_tree_is_said_where_the_new_branch_starts() {
     let shaped = shaped(&fixture);
     assert!(matches!(
         bodies(&shaped)[2],
-        TimelineBody::Notice { kind: TimelineNoticeKind::Cleared, .. }
+        TimelineBody::Notice {
+            kind: TimelineNoticeKind::Cleared,
+            ..
+        }
     ));
     assert!(matches!(bodies(&shaped)[3], TimelineBody::User { text, .. } if text == "again"));
 }
@@ -212,13 +226,18 @@ fn an_edit_shows_the_start_of_its_change() {
 #[test]
 fn a_result_after_its_call_record_comes_as_a_result() {
     let fixture = Fixture::new();
-    fixture.message(json!({"role": "assistant", "stopReason": "toolUse", "timestamp": 1, "content": [
-        {"type": "toolCall", "id": "slow", "name": "bash", "arguments": {"command": "sleep 9"}}
-    ]}));
+    fixture.message(
+        json!({"role": "assistant", "stopReason": "toolUse", "timestamp": 1, "content": [
+            {"type": "toolCall", "id": "slow", "name": "bash", "arguments": {"command": "sleep 9"}}
+        ]}),
+    );
     let session = fixture.open();
     let end = session.end().unwrap();
     let shaped = session.newest(end, EPOCH).unwrap();
-    assert_eq!(tool_of(bodies(&shaped)[0]).status, TimelineToolStatus::Running);
+    assert_eq!(
+        tool_of(bodies(&shaped)[0]).status,
+        TimelineToolStatus::Running
+    );
 
     fixture.message(json!({"role": "toolResult", "toolCallId": "slow", "toolName": "bash", "content": [{"type": "text", "text": "done"}], "isError": false, "timestamp": 2}));
     let mut stream = RecordStream::at_boundary(end);
@@ -269,9 +288,11 @@ fn long_text_and_tool_output_read_back_in_full() {
     let fixture = Fixture::new();
     let long = "line\n".repeat(20_000);
     fixture.reply(&long);
-    fixture.message(json!({"role": "assistant", "stopReason": "toolUse", "timestamp": 1, "content": [
-        {"type": "toolCall", "id": "out", "name": "bash", "arguments": {"command": "yes"}}
-    ]}));
+    fixture.message(
+        json!({"role": "assistant", "stopReason": "toolUse", "timestamp": 1, "content": [
+            {"type": "toolCall", "id": "out", "name": "bash", "arguments": {"command": "yes"}}
+        ]}),
+    );
     let output = "y\n".repeat(10_000);
     fixture.message(json!({"role": "toolResult", "toolCallId": "out", "toolName": "bash", "content": [{"type": "text", "text": output}], "isError": false, "timestamp": 2}));
     let session = fixture.open();
@@ -300,11 +321,15 @@ fn an_unknown_format_or_another_session_says_so() {
     let older = refusal(json!({"type": "session", "version": 2, "id": SESSION, "cwd": CWD}));
     assert!(matches!(older, WsError::Unavailable(message) if message.contains("older format")));
     let newer = refusal(json!({"type": "session", "version": 4, "id": SESSION, "cwd": CWD}));
-    assert!(matches!(newer, WsError::Unavailable(message) if message.contains("Update the helper")));
+    assert!(
+        matches!(newer, WsError::Unavailable(message) if message.contains("Update the helper"))
+    );
     let other = refusal(json!({"type": "session", "version": 3, "id": "someone-else", "cwd": CWD}));
     assert!(matches!(other, WsError::Denied(_)));
     let headless = refusal(json!({"type": "message", "id": "x"}));
-    assert!(matches!(headless, WsError::Unavailable(message) if message.contains("session record")));
+    assert!(
+        matches!(headless, WsError::Unavailable(message) if message.contains("session record"))
+    );
 }
 
 #[test]

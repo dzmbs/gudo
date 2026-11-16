@@ -311,9 +311,7 @@ impl PiSession {
             Message::Assistant { content, .. } => content
                 .into_iter()
                 .enumerate()
-                .find_map(|(index, block)| {
-                    (handle.id() == block_id(&id, index)).then_some(block)
-                })
+                .find_map(|(index, block)| (handle.id() == block_id(&id, index)).then_some(block))
                 .and_then(|block| match block {
                     Block::Text { text } => Some(text),
                     Block::Thinking { thinking } => Some(thinking),
@@ -451,10 +449,7 @@ impl Shaper<'_> {
             }
             Entry::Compaction { id, tokens_before } => {
                 let text = match tokens_before {
-                    Some(tokens) => format!(
-                        "Context compacted from {} tokens",
-                        thousands(tokens)
-                    ),
+                    Some(tokens) => format!("Context compacted from {} tokens", thousands(tokens)),
                     None => "Context compacted".to_owned(),
                 };
                 self.previous = Some(id.clone());
@@ -476,7 +471,12 @@ impl Shaper<'_> {
                 self.previous = Some(id.clone());
                 let text = format!("Model changed to {model}");
                 self.shaped.model = Some(model);
-                self.push(offset, id, 0, notice(TimelineNoticeKind::ModelChanged, &text));
+                self.push(
+                    offset,
+                    id,
+                    0,
+                    notice(TimelineNoticeKind::ModelChanged, &text),
+                );
             }
             Entry::SessionInfo { name } => {
                 self.shaped.title = name.filter(|name| !name.trim().is_empty());

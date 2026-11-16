@@ -181,13 +181,11 @@ pub(crate) fn pi_session_file(folder: &Path, id: &str) -> Option<PathBuf> {
         return None;
     }
     let suffix = format!("_{id}.jsonl");
-    entries(folder)
-        .map(|(path, _)| path)
-        .find(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(&suffix))
-        })
+    entries(folder).map(|(path, _)| path).find(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(&suffix))
+    })
 }
 
 /// Kimi Code's sessions for `cwd`: (id, last written).

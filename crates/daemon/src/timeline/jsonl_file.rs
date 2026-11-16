@@ -16,9 +16,12 @@ pub(crate) struct JsonlFile {
     identity: (u64, u64),
 }
 
+/// Whole records with the offset each starts at.
+pub(crate) type Records = Vec<(u64, Vec<u8>)>;
+
 /// The complete records of one bounded read, and the record boundary before them.
 pub(crate) struct Window {
-    pub records: Vec<(u64, Vec<u8>)>,
+    pub records: Records,
     pub start: u64,
 }
 
@@ -79,7 +82,7 @@ impl JsonlFile {
 
     /// The complete records after where `stream` stopped, at most one bounded read of them, and
     /// whether more is written.
-    pub fn appended(&self, stream: &mut RecordStream) -> Result<(Vec<(u64, Vec<u8>)>, bool), WsError> {
+    pub fn appended(&self, stream: &mut RecordStream) -> Result<(Records, bool), WsError> {
         let length = self.length()?;
         let start = stream.scan_offset();
         if start > length {
@@ -109,7 +112,7 @@ impl JsonlFile {
     }
 
     /// The complete records from the boundary `start` up to `limit` bytes past it.
-    pub fn forward(&self, start: u64, limit: u64) -> Result<Vec<(u64, Vec<u8>)>, WsError> {
+    pub fn forward(&self, start: u64, limit: u64) -> Result<Records, WsError> {
         let end = self.length()?.min(start.saturating_add(limit));
         Ok(RecordStream::at_boundary(start).push(&self.read(start, end)?))
     }

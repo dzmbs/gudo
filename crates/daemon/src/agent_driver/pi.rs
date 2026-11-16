@@ -8,10 +8,10 @@ use proto::{PaneId, WsError};
 use tokio::sync::mpsc;
 
 use super::{
-    AgentCapabilities, AgentDriver, AgentSession, ApprovalAuthority, ApprovalDecision,
-    InputEvent, PendingApproval, StopDelivery, UnconfirmedSend,
+    AgentCapabilities, AgentDriver, AgentSession, ApprovalAuthority, ApprovalDecision, InputEvent,
+    PendingApproval, StopDelivery, UnconfirmedSend,
 };
-use crate::core::{Core, lock};
+use crate::core::Core;
 use crate::pane::Pane;
 
 pub(super) struct PiDriver;
@@ -21,7 +21,12 @@ impl AgentDriver for PiDriver {
         None
     }
 
-    fn approval_is_pending(&self, _core: &Core, _pane: PaneId, _request: &agents::RequestId) -> bool {
+    fn approval_is_pending(
+        &self,
+        _core: &Core,
+        _pane: PaneId,
+        _request: &agents::RequestId,
+    ) -> bool {
         false
     }
 
@@ -29,19 +34,10 @@ impl AgentDriver for PiDriver {
         InputEvent::Ignored
     }
 
+    // Send also needs the pane's exit fence open, which the caller checks under its lock: a pi
+    // started by hand has none.
     fn capabilities(&self) -> AgentCapabilities {
         AgentCapabilities::SEND | AgentCapabilities::ACKNOWLEDGED_SEND
-    }
-
-    fn current_capabilities(&self, core: &Core, pane: PaneId) -> AgentCapabilities {
-        let launched = core
-            .pane(pane)
-            .is_some_and(|entry| lock(&entry.pane.agent_input_gate).has_launch());
-        if launched {
-            self.capabilities()
-        } else {
-            AgentCapabilities(0)
-        }
     }
 
     fn check_prompt(&self, text: &str) -> Result<(), WsError> {

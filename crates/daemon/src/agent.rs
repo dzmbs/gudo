@@ -117,10 +117,10 @@ pub(crate) fn shown_summary(kind: AgentKind, blocker: &agents::Blocker) -> Strin
 /// Longest blocked summary, in characters (the adapters cut tool calls at 200 already).
 const SUMMARY_CHARS: usize = 512;
 
-/// The command that runs `kind`, looked up on `PATH`.
 /// How clients name a pi pane's agent.
 pub(crate) const PI_PROGRAM: &str = "pi";
 
+/// The command that runs `kind`, looked up on `PATH`.
 pub(crate) fn program(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "claude",
@@ -134,6 +134,7 @@ pub(crate) fn product_name(kind: AgentKind) -> &'static str {
     match kind {
         AgentKind::Claude => "Claude Code",
         AgentKind::Codex => "Codex",
+        AgentKind::Pi => "pi",
     }
 }
 

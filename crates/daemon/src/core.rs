@@ -3361,7 +3361,10 @@ fn detect_agent(core: &Core, entry: &PaneEntry) {
 }
 
 /// A pi the pane runs, as clients see an agent: its state as its own reports give it.
-fn pi_status(entry: &PaneEntry, report: Option<&agents::ProgramStatus>) -> Option<proto::AgentStatus> {
+fn pi_status(
+    entry: &PaneEntry,
+    report: Option<&agents::ProgramStatus>,
+) -> Option<proto::AgentStatus> {
     let runs_pi = lock(&entry.record)
         .resumable
         .as_ref()
@@ -3397,22 +3400,21 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
     let mut record = lock(&entry.record);
     match (running, record.resumable.as_mut()) {
         (Some(program), Some(agent)) if agent.program == program => {
+            // Its environment names its sessions folder, and a pane restored with `--continue`
+            // finds its session from the file written since it started.
             lock(&entry.resumable_process).get_or_insert((foreground.pid, SystemTime::now()));
             if agent.cwd.is_none() {
                 agent.cwd = crate::procinfo::process_cwd(foreground.pid)
                     .map(|cwd| cwd.to_string_lossy().into_owned());
             }
-            if agent.session_id.is_some() {
-                return;
-            }
-            if let Some(session_id) = program.session_from_argv(&foreground.argv) {
+            if agent.session_id.is_none()
+                && let Some(session_id) = program.session_from_argv(&foreground.argv)
+            {
                 agent.session_id = Some(session_id);
                 drop(record);
                 core.mark_dirty();
                 core.emit(Event::PaneMeta(entry.pane.id));
-                return;
             }
-            // A pane restored with `--continue`: its session file says which session it is.
         }
         (Some(program), _) => {
             record.resumable = Some(ResumableAgent {

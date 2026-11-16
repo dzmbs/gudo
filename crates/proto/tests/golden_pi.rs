@@ -3,9 +3,8 @@
 //! `golden.rs`: never edit an existing hex string; add a case instead.
 
 use proto::{
-    AgentKind, DaemonFeatures, LayoutOp, MoreDaemonFeatures, PaneId, PaneLaunch,
-    TimelineCursor, TimelineOp, TimelineSession, TimelineSnapshot, TimelineVersion,
-    WorkspaceRequest,
+    AgentKind, DaemonFeatures, LayoutOp, MoreDaemonFeatures, PaneId, PaneLaunch, TimelineCursor,
+    TimelineOp, TimelineSession, TimelineSnapshot, TimelineVersion, WorkspaceRequest,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -41,10 +40,7 @@ fn launching_pi_keeps_its_wire_bytes() {
     let encoded = postcard::to_allocvec(&op).unwrap();
     assert_eq!(hex(&encoded), "00040002020001022f77");
     assert_eq!(postcard::from_bytes::<LayoutOp>(&encoded).unwrap(), op);
-    assert_eq!(
-        op.launch().and_then(PaneLaunch::agent),
-        Some(AgentKind::Pi)
-    );
+    assert_eq!(op.launch().and_then(PaneLaunch::agent), Some(AgentKind::Pi));
 }
 
 #[test]
