@@ -281,31 +281,29 @@ pub async fn bootstrap(
         } else {
             UploadEncoding::Raw
         };
-        // Over a build that reports its version, stage first and compare.
-        let staged = probe
-            .installed
-            .as_ref()
-            .map(|_| staged_path(&relative_path));
+        // Staged next to the install first: it must run here, and must not be older than a
+        // build that reports its version.
+        let staged = staged_path(&relative_path);
         step(BootstrapStep::Uploading {
             size: binary.len() as u64,
             sent: 0,
         });
         let report = connection
-            .upload(
-                &format!("~/{}", staged.as_deref().unwrap_or(&relative_path)),
-                &binary,
-                0o755,
-                encoding,
-            )
+            .upload(&format!("~/{staged}"), &binary, 0o755, encoding)
             .await?;
         step(BootstrapStep::Uploading {
             size: report.size,
             sent: report.sent,
         });
-        if let (Some(staged), Some(installed)) = (&staged, &probe.installed) {
-            action = replace_unless_older(connection, staged, &relative_path, installed, options)
-                .await?;
-        }
+        action = install_staged(
+            connection,
+            &staged,
+            &relative_path,
+            probe.installed.as_ref(),
+            options,
+        )
+        .await?
+        .unwrap_or(action);
     }
 
     let mut notes = Vec::new();
@@ -410,15 +408,16 @@ fn staged_path(relative_path: &str) -> String {
     }
 }
 
-/// Moves the staged build over the installed one unless it is older (and no downgrade was
-/// asked for), in which case it is deleted and the installed build stays.
-async fn replace_unless_older(
+/// Moves the staged build into place once it ran here, unless it is older than the
+/// installed one (and no downgrade was asked for): then it is deleted, the installed build
+/// stays and the answer is [`InstallAction::KeptNewer`]. `None` means it was installed.
+async fn install_staged(
     connection: &Connection,
     staged: &str,
     relative_path: &str,
-    installed: &proto::DaemonInfo,
+    installed: Option<&proto::DaemonInfo>,
     options: &BootstrapOptions,
-) -> Result<InstallAction, SshError> {
+) -> Result<Option<InstallAction>, SshError> {
     let staged_quoted = format!("\"$HOME\"/{}", shell_quote(staged));
     let output = connection
         .exec(&sh_command(&format!(
@@ -433,18 +432,20 @@ async fn replace_unless_older(
         connection
             .exec(&sh_command(&format!("rm -f {staged_quoted}")))
             .await?;
-        return Err(SshError::Bootstrap(format!(
-            "the {} build does not run on this host: {}",
-            brand::DAEMON_BIN,
-            output.stdout_text().trim()
+        return Err(SshError::Bootstrap(cannot_run_message(
+            relative_path,
+            output.stdout_text().trim(),
         )));
     };
-    if supplied.is_older_than(installed) && !options.allow_downgrade {
+    if let Some(installed) = installed
+        && supplied.is_older_than(installed)
+        && !options.allow_downgrade
+    {
         tracing::info!(installed = %installed.build, supplied = %supplied.build, "keeping the newer installed daemon");
         connection
             .exec(&sh_command(&format!("rm -f {staged_quoted}")))
             .await?;
-        return Ok(InstallAction::KeptNewer);
+        return Ok(Some(InstallAction::KeptNewer));
     }
     connection
         .exec(&sh_command(&format!(
@@ -453,7 +454,24 @@ async fn replace_unless_older(
         )))
         .await?
         .check()?;
-    Ok(InstallAction::Upgraded)
+    Ok(None)
+}
+
+fn cannot_run_message(relative_path: &str, output: &str) -> String {
+    let folder = relative_path
+        .rsplit_once('/')
+        .map_or("", |(folder, _)| folder);
+    if output.contains("Permission denied") {
+        format!(
+            "this host does not let programs run from ~/{folder} (its file system may be \
+             mounted noexec): {output}"
+        )
+    } else {
+        format!(
+            "the {} build does not run on this host: {output}",
+            brand::DAEMON_BIN
+        )
+    }
 }
 
 /// The last JSON line of `build-info --json` output.

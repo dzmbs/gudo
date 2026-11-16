@@ -317,5 +317,39 @@ async fn an_older_helper_never_replaces_a_newer_install() {
         .unwrap();
 }
 
+/// A first install whose build cannot run on the host (a `noexec` home, the wrong
+/// architecture) is refused with the reason and leaves nothing installed.
+#[tokio::test]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
+async fn a_first_install_that_cannot_run_is_refused_and_removed() {
+    let _host = HOST.lock().await;
+    let connection = env().connect().await;
+    connection
+        .exec(&format!(
+            "systemctl --user disable --now {bin}.service 2>/dev/null; rm -f ~/.local/bin/{bin}",
+            bin = brand::DAEMON_BIN
+        ))
+        .await
+        .unwrap();
+    let cannot_run = b"#!/bin/sh\necho \"sh: 1: $0: Permission denied\" >&2\nexit 126\n";
+    let error = ssh::bootstrap(
+        &connection,
+        &fakes(cannot_run),
+        &BootstrapOptions::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&error, SshError::Bootstrap(message) if message.contains("noexec")),
+        "{error}"
+    );
+    let listing = connection.exec("ls -A ~/.local/bin").await.unwrap();
+    assert!(
+        !listing.stdout_text().contains(brand::DAEMON_BIN),
+        "{}",
+        listing.stdout_text()
+    );
+}
+
 /// The bootstrap tests share the host's one install path.
 static HOST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
