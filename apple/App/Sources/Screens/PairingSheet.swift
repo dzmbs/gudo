@@ -130,6 +130,7 @@ struct PairingSheet: View {
                 error = nil
                 focusField()
             }
+            .onChange(of: ticket) { error = nil }
             // Another link while the sheet is up replaces what it shows.
             .onChange(of: linkTicket) { _, newTicket in
                 guard !newTicket.isEmpty else { return }
@@ -276,10 +277,13 @@ struct PairingSheet: View {
                 ticketRelay(parsed)
             }
         } footer: {
-            if !linkTicket.isEmpty, ticket == linkTicket {
+            if !ticket.allSatisfy(\.isWhitespace), !Self.isTicket(ticket) {
+                footer(default: Text("This isn't a pairing ticket. Copy the whole ticket \(Text(verbatim: Self.pairCommand).font(DS.Font.literalSmall)) prints, or its link."))
+                    .accessibilityIdentifier("pairing-not-a-ticket")
+            } else if !linkTicket.isEmpty, ticket == linkTicket {
                 footer(default: Text("A link opened this ticket. Pair only with a host you set up: it will see what you type in its terminals and can show you web pages."))
             } else {
-                footer(default: Text("Run \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
+                footer(default: Text("Run \(Text(verbatim: Self.pairCommand).font(DS.Font.literalSmall)) on the host to print a ticket and its QR code. Tickets expire after 10 minutes."))
             }
         }
     }
@@ -365,7 +369,7 @@ struct PairingSheet: View {
         if live != nil, camera.isOff {
             return "You can also paste the ticket in the Ticket tab, or open the pairing link on this device."
         }
-        return "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: "\(Brand.daemonBinary) pair").font(DS.Font.literalSmall))."
+        return "Point the camera at the code, then check the host and pair. The host shows its code with \(Text(verbatim: Self.pairCommand).font(DS.Font.literalSmall))."
     }
 
     @ViewBuilder
@@ -387,11 +391,16 @@ struct PairingSheet: View {
 
     private var confirmTitle: String { mode == .ssh ? "Connect" : "Pair" }
 
+    /// The host command that prints a ticket, named as the first-run screens name it.
+    static var pairCommand: String { "\(Brand.commandLineTool) pair" }
+
+    static func isTicket(_ text: String) -> Bool { (try? PairingTicket(text)) != nil }
+
     private var canConfirm: Bool {
         guard !isBusy else { return false }
         switch mode {
         case .ssh: return flow.map { (try? $0.endpoint()) != nil } ?? (parsed != nil)
-        case .ticket: return !ticket.isEmpty
+        case .ticket: return Self.isTicket(ticket)
         case .scan: return false
         }
     }

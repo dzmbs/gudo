@@ -37,7 +37,7 @@ final class PairDeviceModel {
         }
         if !session.canManageDevices {
             return .unavailable(
-                "The helper on \(hostName) is too old to pair from here. Update it, or run \(Brand.daemonBinary) pair on \(hostName).",
+                "The helper on \(hostName) is too old to pair from here. Update it, or run \(PairingSheet.pairCommand) on \(hostName).",
                 canConnect: false)
         }
         return nil
@@ -140,6 +140,8 @@ struct PairDeviceSheet: View {
             ProgressView()
                 .frame(width: 220, height: 220)
         case .showing(let code):
+            // A phone's screen holds the code or the warning: the warning comes first.
+            if Self.isPhone { warning }
             QRCodeView(text: code.qrPayload, label: "QR code to pair a device with \(model.hostName)")
                 .frame(width: 220, height: 220)
                 .accessibilityIdentifier("pair-device-qr")
@@ -159,11 +161,7 @@ struct PairDeviceSheet: View {
             }
             .buttonStyle(.glass)
             .accessibilityIdentifier("pair-device-copy")
-            Text("A Mac pastes the link in Add Host › Ticket. Anyone with this code can control \(model.hostName), so show it only to your own devices.")
-                .font(DS.Font.rowSubtitle)
-                .foregroundStyle(DS.Palette.textSecondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            if !Self.isPhone { warning }
         case .expired:
             status("clock.badge.xmark", tint: DS.Palette.textSecondary, title: "This code expired", message: "Codes work for 10 minutes. Make a new one when the other device is ready.")
             Button("New Code") { Task { await model.makeCode(session) } }
@@ -179,6 +177,23 @@ struct PairDeviceSheet: View {
                     .accessibilityIdentifier("pair-device-connect")
             }
         }
+    }
+
+    private var warning: some View {
+        Text("A Mac pastes the link in Add Host › Ticket. Anyone with this code can control \(model.hostName), so show it only to your own devices.")
+            .font(DS.Font.rowSubtitle)
+            .foregroundStyle(DS.Palette.textSecondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("pair-device-warning")
+    }
+
+    private static var isPhone: Bool {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone
+        #else
+        false
+        #endif
     }
 
     private func status(_ systemImage: String, tint: ChromeStyle, title: String, message: String) -> some View {
@@ -217,11 +232,11 @@ private extension PairDeviceModel.Stage {
 enum PairingHint {
     #if os(iOS)
     static var message: String {
-        "Open \(Brand.name) on your Mac and choose Pair a Phone or iPad, or run \(Brand.commandLineTool) pair on Linux. Then scan the code."
+        "Open \(Brand.name) on your Mac and choose Pair a Phone or iPad, or run \(PairingSheet.pairCommand) on Linux. Then scan the code."
     }
     #else
     static var message: String {
-        "Run \(Brand.commandLineTool) pair on the other computer and paste the link here, or connect to any SSH host."
+        "Run \(PairingSheet.pairCommand) on the other computer and paste the link here, or connect to any SSH host."
     }
     #endif
 }
