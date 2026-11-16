@@ -455,7 +455,7 @@ private struct RolePicker: View {
                 Text(role.summary)
                     .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
-                    .lineLimit(2, reservesSpace: true)
+                    .lineLimit(3, reservesSpace: true)
                     .multilineTextAlignment(.leading)
             }
             .padding(DS.Space.gap10)
