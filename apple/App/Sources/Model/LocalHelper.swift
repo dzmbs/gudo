@@ -43,6 +43,7 @@ final class LocalHelper {
     @ObservationIgnored private var watchedSince: ContinuousClock.Instant?
     @ObservationIgnored private var respawn = HelperRespawn()
     @ObservationIgnored private var respawnTask: Task<Void, Never>?
+    @ObservationIgnored private var timeline = StartTimeline()
     /// A daemon the user runs on the folder serves This Mac: they (or launchd) start it again.
     @ObservationIgnored private var servesForeign = false
     /// The host became ready (each window opens it).
@@ -216,7 +217,7 @@ final class LocalHelper {
             // The old process lets go of the state folder before the new one takes it.
             let deadline = ContinuousClock.now + .seconds(5)
             while Self.runningEndpoint(in: stateDirectory) != nil, ContinuousClock.now < deadline {
-                try? await Task.sleep(for: .milliseconds(100))
+                try? await Task.sleep(for: Self.pollInterval)
             }
             start()
         }
@@ -284,7 +285,11 @@ final class LocalHelper {
 
     private func run() async throws -> String {
         guard let binary else { throw HelperError.notBundled }
-        if !isIsolated && !Brand.isDev { await retireLegacyHelper() }
+        timeline = StartTimeline()
+        if !isIsolated && !Brand.isDev {
+            await retireLegacyHelper()
+            timeline.mark("legacy helper check")
+        }
         var launched = true
         servesForeign = false
         let running = Self.runningEndpoint(in: stateDirectory)
@@ -292,21 +297,22 @@ final class LocalHelper {
         let plan = Self.plan(
             running: running, isAppHelper: running.map { Self.isAppHelper(pid: $0.pid) } ?? false,
             keepsRunning: keepsRunning, loginItemEnabled: loginItemEnabled, registeredIsCurrent: isRegistered(binary))
+        timeline.mark("plan \(plan)")
         switch plan {
         case .useForeign:
             launched = false
             servesForeign = true
             // A daemon the user runs on this folder (`service install`, `run`) serves This Mac.
-            // The app's login item could only fail to take the folder, again and again.
-            if loginItemEnabled {
-                try? await agent.unregister()
-                defaults.removeObject(forKey: Self.registeredKey)
-            }
+            // The app's login item could only fail to take the folder, again and again. It
+            // runs nothing, so nothing waits for it to go.
+            if loginItemEnabled { unregisterLoginItemLater() }
             Self.log.info("helper: using the daemon already running on the folder (pid \(running?.pid ?? 0))")
         case .launch:
             try await launch(binary)
         case .restartInPlace(let replaceIfRefused):
-            if await Self.restartInPlace(binary: binary, stateDirectory: stateDirectory) {
+            let restarted = await Self.restartInPlace(binary: binary, stateDirectory: stateDirectory)
+            timeline.mark("restart in place")
+            if restarted {
                 // The running helper now runs the build in the app (same process, so launchd
                 // keeps it), its sessions still running; or it already did. The login item is
                 // registered again the next time the helper is not running (`startLoginItem`).
@@ -322,10 +328,31 @@ final class LocalHelper {
             }
         }
         let endpoint = try await waitForEndpoint()
+        timeline.mark("helper listening")
         if launched { startedAt = .now }
         if let id = hosts.thisDeviceId, hosts.record(id)?.daemonId == endpoint.daemonId { return id }
         let ticket = try await Self.mintTicket(binary: binary, stateDirectory: stateDirectory)
-        return try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
+        let id = try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
+        timeline.mark("paired")
+        return id
+    }
+
+    /// Each step of starting the helper in the log (info, category `helper`): how long it took
+    /// and how long since the start began.
+    struct StartTimeline {
+        private let began = ContinuousClock.now
+        private var last = ContinuousClock.now
+        private(set) var steps: [(name: String, took: Duration)] = []
+
+        mutating func mark(_ step: String) {
+            let now = ContinuousClock.now
+            let took = Self.milliseconds(now - last), sinceStart = Self.milliseconds(now - began)
+            steps.append((step, now - last))
+            LocalHelper.log.info("helper start: \(step, privacy: .public) took \(took) ms, \(sinceStart) ms in")
+            last = now
+        }
+
+        private static func milliseconds(_ duration: Duration) -> Int { Int((duration / .milliseconds(1)).rounded()) }
     }
 
     /// How starting goes, given what runs on the state folder.
@@ -354,7 +381,7 @@ final class LocalHelper {
     private func retireLegacyHelper() async {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let legacy = home.appending(path: "Library/Application Support/\(Brand.Legacy.name)", directoryHint: .isDirectory)
-        guard FileManager.default.fileExists(atPath: legacy.appending(path: "daemon.key").path) else { return }
+        guard Self.legacyHelperNeedsRetiring(legacy: legacy, current: stateDirectory) else { return }
         let launchctl = URL(fileURLWithPath: "/bin/launchctl")
         // The old app's login item, and a helper installed with `service install`.
         for label in ["\(Brand.Legacy.bundleIdPrefix).app.hostd", "\(Brand.Legacy.bundleIdPrefix).hostd"] {
@@ -365,30 +392,47 @@ final class LocalHelper {
         if let old = Self.runningEndpoint(in: legacy) { kill(old.pid, SIGTERM) }
         let deadline = ContinuousClock.now + .seconds(5)
         while Self.runningEndpoint(in: legacy) != nil, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: Self.pollInterval)
         }
         Self.log.info("helper: retired the helper from before the rename")
+    }
+
+    /// Whether the helper from before the rename still has to be stopped: its folder holds a
+    /// key, and either it runs or this build's folder has none yet (the helper only moves the
+    /// old folder into one without a key, so an old key next to a new one stays for good).
+    nonisolated static func legacyHelperNeedsRetiring(legacy: URL, current: URL) -> Bool {
+        let files = FileManager.default
+        guard files.fileExists(atPath: legacy.appending(path: "daemon.key").path) else { return false }
+        return runningEndpoint(in: legacy) != nil || !files.fileExists(atPath: current.appending(path: "daemon.key").path)
     }
 
     private func launch(_ binary: URL) async throws {
         if keepsRunning, await startLoginItem(binary) { return }
         try startChild(binary)
+        timeline.mark("child started")
     }
 
     /// Registers the login item (again when the build changed) and waits for it to come up.
     /// False when it isn't allowed or doesn't start: the caller runs the helper as a child.
     private func startLoginItem(_ binary: URL) async -> Bool {
         do {
-            if agent.status == .enabled, !isRegistered(binary) { try await stopLoginItem() }
-            if agent.status != .enabled { try agent.register() }
+            if agent.status == .enabled, !isRegistered(binary) {
+                try await stopLoginItem()
+                timeline.mark("login item of another build removed")
+            }
+            if agent.status != .enabled {
+                try agent.register()
+                timeline.mark("login item registered")
+            }
         } catch {
             Self.log.error("login item: \(String(describing: error), privacy: .public)")
         }
         needsApproval = agent.status == .requiresApproval
         guard agent.status == .enabled else {
             Self.log.info("login item status \(String(describing: self.agent.status), privacy: .public): running as a child")
-            // Not left behind to start later and find the folder taken.
-            try? await agent.unregister()
+            // Not left behind to start later and find the folder taken. It runs nothing, so
+            // the child need not wait for it to go.
+            unregisterLoginItemLater()
             return false
         }
         noteRegistered(binary)
@@ -400,21 +444,39 @@ final class LocalHelper {
             let loaded = await Self.kickstartWhenLoaded(within: .milliseconds(1500)) {
                 (try? await Self.output(URL(fileURLWithPath: "/bin/launchctl"), ["kickstart", target])) != nil
             }
+            timeline.mark(loaded ? "login item kickstarted" : "launchd has no job for the login item")
             if !loaded, Self.runningEndpoint(in: stateDirectory) == nil {
                 Self.log.error("login item enabled but launchd has no job for it: running as a child")
-                try? await stopLoginItem()
+                unregisterLoginItemLater()
                 return false
             }
         }
         let deadline = ContinuousClock.now + .seconds(10)
         while ContinuousClock.now < deadline {
             if Self.runningEndpoint(in: stateDirectory) != nil { return true }
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: Self.pollInterval)
         }
         Self.log.error("login item registered but not running: running as a child")
+        // It may yet come up: it goes before the child takes the folder.
         try? await stopLoginItem()
         return false
     }
+
+    /// Unregisters a login item that runs nothing, without waiting for it.
+    private func unregisterLoginItemLater() {
+        defaults.removeObject(forKey: Self.registeredKey)
+        let agent = agent
+        Task {
+            do {
+                try await agent.unregister()
+            } catch {
+                Self.log.info("login item: unregistering: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    /// How often a start looks for the helper's endpoint.
+    static let pollInterval = Duration.milliseconds(25)
 
     /// Asks launchd to start the job until it knows it (a just-registered job loads a moment
     /// later), or `within` passes.
@@ -433,7 +495,7 @@ final class LocalHelper {
         defaults.removeObject(forKey: Self.registeredKey)
         let deadline = ContinuousClock.now + .seconds(5)
         while Self.runningEndpoint(in: stateDirectory) != nil, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(100))
+            try? await Task.sleep(for: Self.pollInterval)
         }
     }
 
@@ -507,7 +569,7 @@ final class LocalHelper {
         while ContinuousClock.now < deadline {
             if let endpoint = Self.runningEndpoint(in: stateDirectory) { return endpoint }
             if let child, !child.isRunning { throw HelperError.exited(child.terminationStatus) }
-            try await Task.sleep(for: .milliseconds(100))
+            try await Task.sleep(for: Self.pollInterval)
         }
         throw HelperError.didNotStart
     }

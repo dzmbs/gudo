@@ -222,9 +222,11 @@ final class AppModel {
         if let connection = hosts.connection(id) as? DaemonConnection {
             let dialledTooEarly = localHelper?.startedAt.flatMap { started in connection.timings.dialStarted.map { $0 < started } } ?? false
             switch connection.status {
-            case .reconnecting: connection.retry()
-            case .connecting(.dialing) where dialledTooEarly: connection.retry()
-            default: break
+            case .reconnecting, .connecting(.dialing) where dialledTooEarly:
+                Self.log.info("this Mac's helper: ready, dialing again, \(LaunchTimeline.sinceStart(), privacy: .public) after process start")
+                connection.retry()
+            default:
+                Self.log.info("this Mac's helper: ready, \(LaunchTimeline.sinceStart(), privacy: .public) after process start")
             }
         }
         for window in openWindows { window.openThisDevice(id) }

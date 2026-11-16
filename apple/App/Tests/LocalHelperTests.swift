@@ -107,5 +107,33 @@ final class LocalHelperTests: XCTestCase {
         XCTAssertGreaterThan(spread, .milliseconds(745))
         XCTAssertLessThan(spread, .milliseconds(750))
     }
+
+    /// A key left in the folder from before the rename stays once this build's folder has its
+    /// own: each launch must not stop login items and wait for a helper that is long gone.
+    func testTheHelperFromBeforeTheRenameIsRetiredOnlyWhileItMatters() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let legacy = folder.appending(path: "legacy", directoryHint: .isDirectory)
+        let current = folder.appending(path: "current", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: current, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        XCTAssertFalse(LocalHelper.legacyHelperNeedsRetiring(legacy: legacy, current: current), "nothing from before")
+        try Data("key".utf8).write(to: legacy.appending(path: "daemon.key"))
+        XCTAssertTrue(LocalHelper.legacyHelperNeedsRetiring(legacy: legacy, current: current), "not moved over yet")
+        try Data("key".utf8).write(to: current.appending(path: "daemon.key"))
+        XCTAssertFalse(LocalHelper.legacyHelperNeedsRetiring(legacy: legacy, current: current), "moved over, nothing runs")
+        let endpoint = #"{"daemon_id":"old","pid":\#(getpid())}"#
+        try Data(endpoint.utf8).write(to: legacy.appending(path: "endpoint.json"))
+        XCTAssertTrue(LocalHelper.legacyHelperNeedsRetiring(legacy: legacy, current: current), "the old helper still runs")
+    }
+
+    func testEachStepOfAStartIsTimed() {
+        var timeline = LocalHelper.StartTimeline()
+        timeline.mark("plan launch")
+        timeline.mark("helper listening")
+        XCTAssertEqual(timeline.steps.map(\.name), ["plan launch", "helper listening"])
+        XCTAssertTrue(timeline.steps.allSatisfy { $0.took >= .zero })
+    }
 }
 #endif
