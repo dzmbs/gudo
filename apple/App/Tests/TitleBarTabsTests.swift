@@ -8,11 +8,11 @@ import AppKit
 
 #if os(macOS)
 /// Counts the menu items AppKit makes, of every kind: the title bar builds one for each control
-/// it mirrors from an item's SwiftUI content. `formsMade` names the items whose menu form the bar
+/// it mirrors from an item's SwiftUI content. `formsMade` lists the items whose menu form the bar
 /// made again.
 enum MenuItemsMade {
     nonisolated(unsafe) static var count = 0
-    nonisolated(unsafe) static var formsMade: [String] = []
+    nonisolated(unsafe) static var formsMade: [NSToolbarItem] = []
     nonisolated(unsafe) private static var isInstalled = false
 
     static func install() {
@@ -33,7 +33,7 @@ enum MenuItemsMade {
             typealias Setter = @convention(c) (NSToolbarItem, Selector, NSMenuItem?) -> Void
             let original = unsafeBitCast(method_getImplementation(method), to: Setter.self)
             let naming: @convention(block) (NSToolbarItem, NSMenuItem?) -> Void = { item, form in
-                formsMade.append(item.label)
+                formsMade.append(item)
                 original(item, setter, form)
             }
             method_setImplementation(method, imp_implementationWithBlock(naming))
@@ -179,12 +179,14 @@ final class TitleBarTabsTests: XCTestCase {
             }
             let perSwitch = Double(MenuItemsMade.count) / Double(switches)
             print("menu items made per tab switch, sidebar shown \(sidebarShown): \(perSwitch)")
-            XCTAssertEqual(Set(MenuItemsMade.formsMade).intersection(controls), [], "sidebar shown: \(sidebarShown)")
-            // With the sidebar shown only the title's line and the Window menu change. The
+            let bar = Set((window.toolbar?.items ?? []).map(ObjectIdentifier.init))
+            let remade = MenuItemsMade.formsMade.filter { bar.contains(ObjectIdentifier($0)) }
+            XCTAssertEqual(Set(remade.map(\.label)).intersection(controls), [], "sidebar shown: \(sidebarShown)")
+            // With the sidebar shown only the title's line changes: one form of one item. The
             // strip's chips redraw as the selection moves, and the bar mirrors a hosting view in
             // an item too, so the strip's form is made again, a few items for each chip.
             if sidebarShown {
-                XCTAssertLessThanOrEqual(perSwitch, 3)
+                XCTAssertLessThanOrEqual(Double(remade.count) / Double(switches), 2)
             }
         }
     }
