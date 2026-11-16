@@ -218,7 +218,8 @@ pub(crate) fn restored_preamble(saved: Option<&SavedScreen>) -> Vec<u8> {
     preamble
 }
 
-/// `at` in this computer's time zone, `2026-11-08 23:04`.
+/// `at` in this computer's time zone, named because the reader may be elsewhere:
+/// `2026-11-08 23:04 UTC+1`.
 fn local_time(at: UnixMillis) -> String {
     // Typed by `localtime_r`: naming `time_t` is deprecated on musl, where it changes width.
     let Ok(seconds) = (at.0 / 1000).try_into() else {
@@ -231,13 +232,27 @@ fn local_time(at: UnixMillis) -> String {
         return String::new();
     }
     format!(
-        "{}-{:02}-{:02} {:02}:{:02}",
+        "{}-{:02}-{:02} {:02}:{:02} {}",
         local.tm_year + 1900,
         local.tm_mon + 1,
         local.tm_mday,
         local.tm_hour,
-        local.tm_min
+        local.tm_min,
+        utc_offset(local.tm_gmtoff)
     )
+}
+
+/// `UTC`, `UTC+1`, `UTC-5`, `UTC+5:30`.
+fn utc_offset(seconds_east: i64) -> String {
+    if seconds_east == 0 {
+        return "UTC".to_owned();
+    }
+    let sign = if seconds_east < 0 { '-' } else { '+' };
+    let minutes = seconds_east.unsigned_abs() / 60;
+    match minutes % 60 {
+        0 => format!("UTC{sign}{}", minutes / 60),
+        remainder => format!("UTC{sign}{}:{remainder:02}", minutes / 60),
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +269,16 @@ mod tests {
         assert_eq!(decode(b"not zstd"), None);
         let other_format = zstd::encode_all(&b"screen 9\n1\ntext"[..], 3).unwrap();
         assert_eq!(decode(&other_format), None);
+    }
+
+    #[test]
+    fn the_restored_time_names_its_zone() {
+        assert_eq!(utc_offset(0), "UTC");
+        assert_eq!(utc_offset(3600), "UTC+1");
+        assert_eq!(utc_offset(-5 * 3600), "UTC-5");
+        assert_eq!(utc_offset(5 * 3600 + 1800), "UTC+5:30");
+        assert_eq!(utc_offset(-(9 * 3600 + 1800)), "UTC-9:30");
+        assert!(local_time(UnixMillis(1_762_639_440_000)).contains(" UTC"));
     }
 
     #[test]
