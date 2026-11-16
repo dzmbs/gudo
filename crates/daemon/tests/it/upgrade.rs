@@ -524,3 +524,40 @@ async fn an_incompatible_owner_is_let_in_only_to_upgrade() {
     drop((client, stranger));
     daemon.shutdown().await;
 }
+
+/// A restart closes every connection saying so, and every client keeps trying in short dials
+/// until the next process answers, instead of backing off or waiting out a long dial.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_client_is_back_soon_after_the_daemon_restarts() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_udp_port();
+    let configure = move |config: &mut daemon::Config| {
+        config.bind = Some(format!("127.0.0.1:{port}").parse().unwrap());
+    };
+    let daemon = start_with(dir.path(), configure).await;
+    let mut first = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let mut second = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    for client in [&mut first, &mut second] {
+        client.attach_and_follow().await;
+    }
+    let connections = [first.connected, second.connected];
+
+    daemon.announce_restart();
+    daemon.shutdown().await;
+    // The next process takes a while to come up, as an exec into a new build does.
+    tokio::time::sleep(Duration::from_millis(3500)).await;
+    let restarted = Instant::now();
+    let daemon = start_with(dir.path(), configure).await;
+    for (client, before) in [&mut first, &mut second].into_iter().zip(connections) {
+        client
+            .until("reconnected", |client| client.connected > before)
+            .await;
+        assert!(
+            restarted.elapsed() < Duration::from_millis(2500),
+            "a client was back only {:?} after the daemon",
+            restarted.elapsed()
+        );
+    }
+    drop((first, second));
+    daemon.shutdown().await;
+}

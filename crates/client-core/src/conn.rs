@@ -45,6 +45,11 @@ const DIAL_DEADLINES: [Duration; 3] = [
     proto::IDLE_TIMEOUT,
 ];
 const MIN_BACKOFF: Duration = Duration::from_millis(100);
+/// After the daemon closed for a restart: each dial's deadline, the pause between dials, and
+/// how long to keep dialling this way before the usual backoff takes over.
+const RESTART_DIAL_DEADLINE: Duration = Duration::from_secs(1);
+const RESTART_REDIAL: Duration = Duration::from_millis(200);
+const RESTART_PATIENCE: Duration = Duration::from_secs(20);
 /// Failed dials in a row after which the next one starts over on a fresh endpoint (and again
 /// after as many more): a network change can leave an endpoint unable to reach anyone (a
 /// socket that could not be bound again, a path to an address that is gone), and redialling
@@ -409,11 +414,44 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
     let mut backoff = MIN_BACKOFF;
     let mut consecutive_timeouts = 0;
     let mut failed_dials = 0;
+    let mut restarting_until: Option<tokio::time::Instant> = None;
     loop {
         if *lock(&inner.paused) {
             inner.reconnect.notified().await;
             continue;
         }
+        // The daemon said it is restarting: dial in short tries until the new process
+        // answers, rather than waiting out a handshake sent while nothing listened.
+        if restarting_until.is_some_and(|until| tokio::time::Instant::now() < until) {
+            match dial_within(&inner, &endpoint, RESTART_DIAL_DEADLINE).await {
+                DialOutcome::Finished(Ok(live)) if live.link == *lock(&inner.link) => {
+                    restarting_until = None;
+                    backoff = MIN_BACKOFF;
+                    consecutive_timeouts = 0;
+                    failed_dials = 0;
+                    if serve(&inner, live).await == Ended::Restarting {
+                        restarting_until = Some(tokio::time::Instant::now() + RESTART_PATIENCE);
+                    }
+                    continue;
+                }
+                DialOutcome::Finished(Ok(live)) => {
+                    live.conn.close(0u32.into(), b"link changed");
+                }
+                DialOutcome::Finished(Err(ConnError::Refused(reason))) => {
+                    restarting_until = None;
+                    inner.emit(ClientEvent::Refused {
+                        reason: format!("{reason:?}"),
+                    });
+                    inner.reconnect.notified().await;
+                    continue;
+                }
+                DialOutcome::Finished(Err(_)) | DialOutcome::TimedOut => {}
+                DialOutcome::Interrupted => continue,
+            }
+            let _ = tokio::time::timeout(RESTART_REDIAL, inner.reconnect.notified()).await;
+            continue;
+        }
+        restarting_until = None;
         if inner.skips_backoff.swap(false, Ordering::SeqCst) {
             backoff = MIN_BACKOFF;
             consecutive_timeouts = 0;
@@ -450,23 +488,18 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
             }
             Ok(live) => {
                 failed_dials = 0;
-                let connected_at = tokio::time::Instant::now();
-                let reason = run(&inner, live).await;
-                *lock(&inner.connection) = None;
-                inner.ws.fail_pending();
-                inner.mp.fail_pending();
-                inner.art.fail_pending();
-                inner.assist.fail_pending();
-                inner.askpass.fail_pending();
-                inner.approvals.fail_pending();
-                forget_programs(&inner);
-                inner.emit(ClientEvent::Disconnected { reason });
-                if *lock(&inner.paused) {
-                    continue;
-                }
-                if connected_at.elapsed() >= STABLE_FOR {
-                    backoff = MIN_BACKOFF;
-                    continue;
+                match serve(&inner, live).await {
+                    Ended::Restarting => {
+                        restarting_until = Some(tokio::time::Instant::now() + RESTART_PATIENCE);
+                        backoff = MIN_BACKOFF;
+                        continue;
+                    }
+                    Ended::AfterStable => {
+                        backoff = MIN_BACKOFF;
+                        continue;
+                    }
+                    Ended::Paused => continue,
+                    Ended::Early => {}
                 }
             }
             Err(ConnError::Refused(reason)) => {
@@ -487,6 +520,52 @@ pub(crate) async fn supervise(inner: Arc<Inner>) {
         let _ = tokio::time::timeout(backoff, inner.reconnect.notified()).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
     }
+}
+
+/// How a connection that was up ended, for what the supervisor does next.
+#[derive(Debug, PartialEq, Eq)]
+enum Ended {
+    /// The daemon closed it to restart.
+    Restarting,
+    /// It had been up for [`STABLE_FOR`]: a drop, redialled at once.
+    AfterStable,
+    /// The client paused meanwhile.
+    Paused,
+    /// It ended soon after it started: backed off.
+    Early,
+}
+
+/// Runs a connection until it ends, then forgets what was pending on it.
+async fn serve(inner: &Arc<Inner>, live: Live) -> Ended {
+    let connected_at = tokio::time::Instant::now();
+    let conn = live.conn.clone();
+    let reason = run(inner, live).await;
+    *lock(&inner.connection) = None;
+    inner.ws.fail_pending();
+    inner.mp.fail_pending();
+    inner.art.fail_pending();
+    inner.assist.fail_pending();
+    inner.askpass.fail_pending();
+    inner.approvals.fail_pending();
+    forget_programs(inner);
+    inner.emit(ClientEvent::Disconnected { reason });
+    if *lock(&inner.paused) {
+        Ended::Paused
+    } else if closed_for_restart(&conn) {
+        Ended::Restarting
+    } else if connected_at.elapsed() >= STABLE_FOR {
+        Ended::AfterStable
+    } else {
+        Ended::Early
+    }
+}
+
+fn closed_for_restart(conn: &Connection) -> bool {
+    matches!(
+        conn.close_reason(),
+        Some(iroh::endpoint::ConnectionError::ApplicationClosed(close))
+            if close.error_code == proto::CLOSE_RESTARTING.into()
+    )
 }
 
 fn start_over_after(inner: &Inner, failed_dials: u32) {

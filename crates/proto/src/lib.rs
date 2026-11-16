@@ -163,6 +163,11 @@ pub const KEEP_ALIVE: std::time::Duration = std::time::Duration::from_secs(3);
 /// 30 s default.
 pub const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
+/// The QUIC application close code the daemon closes every connection with just before it
+/// restarts (an upgrade or `restart`): the client redials at once and keeps redialling briefly
+/// until the new process answers.
+pub const CLOSE_RESTARTING: u32 = 5;
+
 /// Unidirectional streams each side lets the other have open at once (a QUIC transport
 /// parameter). The daemon opens one per followed pane, so it stays well above the daemon's
 /// cap on followed panes; QUIC's default of 100 would stall the 101st.

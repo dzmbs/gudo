@@ -410,6 +410,12 @@ impl Daemon {
         self.core.upgrade.successor_adopts()
     }
 
+    /// Tells every connected client the daemon is about to restart, so each redials the next
+    /// process as soon as it answers. [`hand_off`](Self::hand_off) does this itself.
+    pub fn announce_restart(&self) {
+        self.core.close_for_restart();
+    }
+
     /// Stops serving for the next build of this program, which this process becomes with
     /// `exec`, and leaves every pane's program running for it to continue
     /// ([`start_inheriting`](Self::start_inheriting)): saves the layout, closes connections,
@@ -428,6 +434,7 @@ impl Daemon {
             }
         };
         self.core.shutting_down.store(true, Ordering::Release);
+        self.core.close_for_restart();
         for task in &self.tasks {
             task.abort();
         }

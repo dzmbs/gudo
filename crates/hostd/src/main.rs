@@ -369,6 +369,7 @@ fn run(
         let hand_off = if daemon.successor_adopts() {
             daemon.hand_off().await
         } else {
+            daemon.announce_restart();
             daemon.shutdown().await;
             None
         };

@@ -677,3 +677,39 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
         .await;
     client.wait_text(pane, "Restored after restart").await;
 }
+
+/// Every client sees an upgrade at once and is back within moments, not only the one that
+/// sent it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn other_clients_are_back_moments_after_an_upgrade() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let state = dir.path().join("state");
+    let hostd = run(&exe, &state, &dir.path().join("hostd.log"));
+    let mut owner = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    let shell = owner.attach_and_follow().await;
+    let mut other = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    other.client.attach(None);
+    other
+        .until("layout", |client| client.layout.is_some())
+        .await;
+    other.follow(shell).await;
+    let connections = other.connected;
+
+    let build = DaemonBuild::from_file(HOSTD, "hot upgrade".into()).unwrap();
+    owner
+        .client
+        .upgrade_daemon(build, None)
+        .await
+        .unwrap_or_else(|error| panic!("upgrade: {error}\n{}", hostd.log()));
+    let installed = Instant::now();
+    reconnected(&mut other, connections).await;
+    let back_after = installed.elapsed();
+    assert!(
+        back_after < Duration::from_secs(3),
+        "the other client was back only after {back_after:?}\n{}",
+        hostd.log()
+    );
+    other.type_line(shell, "echo still-typing");
+    other.wait_text(shell, "still-typing").await;
+}

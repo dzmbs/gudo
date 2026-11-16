@@ -492,6 +492,18 @@ impl Core {
         }
     }
 
+    /// Tells every client the daemon is restarting, so each redials the new process at once
+    /// instead of noticing the silence after the idle timeout.
+    pub fn close_for_restart(&self) {
+        let conns: Vec<_> = lock(&self.device_conns)
+            .drain()
+            .flat_map(|(_, conns)| conns)
+            .collect();
+        for (_, conn) in conns {
+            conn.close(proto::CLOSE_RESTARTING.into(), b"restarting");
+        }
+    }
+
     /// Forgets a connection recorded by [`device_connected`](Self::device_connected).
     pub fn device_disconnected(&self, device: proto::DeviceId, id: ConnId) {
         let mut all = lock(&self.device_conns);
