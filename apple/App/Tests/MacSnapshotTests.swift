@@ -608,17 +608,41 @@ final class MacSnapshotTests: XCTestCase {
         model.start()
         let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: CGSize(width: 1180, height: 760))
         for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
-        // The mock's empty Add Host and Join forms: a field, its note and the buttons.
         for route in [SheetRoute.pairing, .join] {
             model.sheet = route
             await pump(1.5)
             let sheet = try XCTUnwrap(window.attachedSheet, "\(route)")
-            XCTAssertLessThan(sheet.frame.height, 320, "\(route) has blank space under its form")
+            try assertFits(sheet, "\(route)")
             model.sheet = nil
             for _ in 0..<30 where window.attachedSheet != nil { await pump(0.1) }
         }
         window.close()
+        for mode in PairingSheet.Mode.available {
+            let window = makeWindow(ThemedRoot {
+                Color.clear.sheet(isPresented: .constant(true)) {
+                    PairingSheet(directory: model.hosts, live: nil, initialMode: mode).environment(model).environment(model.app)
+                }
+            }, size: CGSize(width: 1180, height: 760))
+            await pump(1.5)
+            try assertFits(try XCTUnwrap(window.attachedSheet), "Add Host \(mode)")
+            window.close()
+        }
         model.close()
+    }
+
+    /// The sheet's form shows every row, with no blank space under the last.
+    private func assertFits(_ sheet: NSWindow, _ name: String) throws {
+        let content = try XCTUnwrap(sheet.contentView)
+        let form = try XCTUnwrap(Self.scrollViews(in: content).max { $0.frame.height < $1.frame.height }, "\(name) has a form")
+        // A sheet shorter than its content centres it, cutting the title and the buttons.
+        let frame = form.convert(form.bounds, to: nil)
+        let buttonsLine = 28 + DS.Space.s + DS.Space.xl
+        XCTAssertGreaterThanOrEqual(frame.minY, buttonsLine - 1, "\(name) cuts off its buttons")
+        XCTAssertGreaterThanOrEqual(content.bounds.height - frame.maxY, DS.Space.xl * 2, "\(name) cuts off its title")
+        let shown = form.contentView.bounds.height - form.contentInsets.top - form.contentInsets.bottom
+        let rows = try XCTUnwrap(form.documentView).frame.height
+        XCTAssertLessThanOrEqual(rows, shown + 1, "\(name) cuts off its form (\(rows) in \(shown))")
+        XCTAssertLessThan(shown - rows, DS.Space.xxl, "\(name) has blank space under its form (\(rows) in \(shown))")
     }
 
     /// Files, Changes, Ports and Replays beside the focused pane (the default on the Mac).

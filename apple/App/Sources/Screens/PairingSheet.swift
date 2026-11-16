@@ -85,82 +85,89 @@ struct PairingSheet: View {
                 #endif
             }
         ) {
-            Form {
-                switch mode {
-                case .ssh:
-                    if let flow {
-                        SSHHostFormSections(flow: flow, submit: confirm).chromeRows()
-                        sshStatusSection.chromeRows()
-                    } else {
-                        sshSection.chromeRows()
-                    }
-                case .ticket: ticketSection.chromeRows()
-                case .scan: scanSection
-                }
-            }
-            .formStyle(.grouped)
-            .chromeGrouped()
             #if os(macOS)
-            // On the page above the form's cards, centred like a window's tab control, on the
-            // page's own surface so scrolled rows pass under it, never through it.
-            .safeAreaInset(edge: .top, spacing: 0) {
+            // On the page above the form, centred like a window's tab control. Outside the
+            // form, so the form's height, measured as the sheet opens, is its rows alone.
+            VStack(spacing: 0) {
                 methodPicker
                     .fixedSize()
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, DS.Space.s)
-                    .background(DS.Palette.groupedPage)
+                form.macFittedForm(maxHeight: macMaximumHeight, step: formStep)
             }
             #else
-            // Under the navigation bar, part of it: the form scrolls beneath both.
-            .safeAreaBar(edge: .top) {
-                methodPicker
-                    .padding(.horizontal, DS.Space.xl)
-                    .padding(.bottom, DS.Space.s)
-            }
+            form
             #endif
-            // What went wrong sits over the buttons, where the eye is after pressing Connect,
-            // however far the form is scrolled.
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let error, mode == .ssh, flow != nil {
-                    ConnectFailure(message: error, canKeep: flow?.canKeepHost == true, keep: keepHost)
-                }
-            }
-            .onAppear { focusField() }
-            .onChange(of: mode) {
-                error = nil
-                focusField()
-            }
-            .onChange(of: ticket) { error = nil }
-            // Another link while the sheet is up replaces what it shows.
-            .onChange(of: linkTicket) { _, newTicket in
-                guard !newTicket.isEmpty else { return }
-                ticket = newTicket
-                error = nil
-                mode = .ticket
-                focus = nil
-            }
-            .sensoryFeedback(DS.Haptic.success, trigger: pairedCount)
-            .modifier(OptionalHostKeyPrompts(prompts: live?.hostKeyPrompts))
         }
         #if os(iOS)
         // Full height: the host to confirm, the link's warning and any error sit under the
         // field, below a half sheet's fold on a phone.
         .phoneDetents([.large])
         #else
-        // Sized per mode only: the form fills what the title and buttons leave and scrolls.
-        .frame(width: 500, height: macHeight)
+        .frame(width: 500)
         .animation(DS.Motion.standard, value: mode)
         #endif
     }
 
-    #if os(macOS)
-    private var macHeight: CGFloat {
-        switch mode {
-        case .ssh: live == nil ? 340 : 640
-        case .ticket, .scan: 350
+    private var form: some View {
+        Form {
+            switch mode {
+            case .ssh:
+                if let flow {
+                    SSHHostFormSections(flow: flow, submit: confirm).chromeRows()
+                    sshStatusSection.chromeRows()
+                } else {
+                    sshSection.chromeRows()
+                }
+            case .ticket: ticketSection.chromeRows()
+            case .scan: scanSection
+            }
         }
+        .formStyle(.grouped)
+        .chromeGrouped()
+        #if os(iOS)
+        // Under the navigation bar, part of it: the form scrolls beneath both.
+        .safeAreaBar(edge: .top) {
+            methodPicker
+                .padding(.horizontal, DS.Space.xl)
+                .padding(.bottom, DS.Space.s)
+        }
+        #endif
+        // What went wrong sits over the buttons, where the eye is after pressing Connect,
+        // however far the form is scrolled.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let error, mode == .ssh, flow != nil {
+                ConnectFailure(message: error, canKeep: flow?.canKeepHost == true, keep: keepHost)
+            }
+        }
+        .onAppear { focusField() }
+        .onChange(of: mode) {
+            error = nil
+            focusField()
+        }
+        .onChange(of: ticket) { error = nil }
+        // Another link while the sheet is up replaces what it shows.
+        .onChange(of: linkTicket) { _, newTicket in
+            guard !newTicket.isEmpty else { return }
+            ticket = newTicket
+            error = nil
+            mode = .ticket
+            focus = nil
+        }
+        .sensoryFeedback(DS.Haptic.success, trigger: pairedCount)
+        .modifier(OptionalHostKeyPrompts(prompts: live?.hostKeyPrompts))
     }
+
+    #if os(macOS)
+    /// The form as tall as its rows up to this, then it scrolls: signing in over SSH grows by
+    /// rows the host sends.
+    private var macMaximumHeight: CGFloat { mode == .ssh && live != nil ? 540 : 480 }
     #endif
+
+    /// Changes that add or remove rows: the sheet may resize for these only.
+    private var formStep: [AnyHashable] {
+        [mode, isTailnet, (try? PairingTicket(ticket)) != nil, !linkTicket.isEmpty && ticket == linkTicket, error != nil]
+    }
 
     private var methodPicker: some View {
         Picker("Method", selection: $mode) {
