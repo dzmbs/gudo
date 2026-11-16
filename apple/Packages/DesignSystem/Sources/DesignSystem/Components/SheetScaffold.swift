@@ -87,6 +87,13 @@ public struct SheetScaffold<Content: View, Accessory: View>: View {
                             .hidden()
                             .accessibilityHidden(true)
                     }
+                    // Return types a new line in a multi-line field; ⌘↩ still confirms, as on iPad.
+                    if let primary, !primary.isBusy, primary.isEnabled {
+                        Button("", action: primary.action)
+                            .keyboardShortcut(.return, modifiers: .command)
+                            .hidden()
+                            .accessibilityHidden(true)
+                    }
                 }
                 .controlSize(.large)
                 .padding(.horizontal, DS.Space.xl)
