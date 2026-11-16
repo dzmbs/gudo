@@ -220,7 +220,10 @@ pub(crate) fn restored_preamble(saved: Option<&SavedScreen>) -> Vec<u8> {
 
 /// `at` in this computer's time zone, `2026-11-08 23:04`.
 fn local_time(at: UnixMillis) -> String {
-    let seconds = (at.0 / 1000) as libc::time_t;
+    // Typed by `localtime_r`: naming `time_t` is deprecated on musl, where it changes width.
+    let Ok(seconds) = (at.0 / 1000).try_into() else {
+        return String::new();
+    };
     // SAFETY: an all-zero `tm` is a valid value for `localtime_r` to overwrite.
     let mut local: libc::tm = unsafe { std::mem::zeroed() };
     // SAFETY: both pointers are valid for the call; `localtime_r` is the thread-safe variant.
