@@ -33,6 +33,25 @@ impl ExecOutput {
         String::from_utf8_lossy(&self.stdout).into_owned()
     }
 
+    fn has_exited(&self) -> bool {
+        self.exit_status.is_some() || self.exit_signal.is_some()
+    }
+
+    /// Adds one channel message; returns whether it closed the channel.
+    fn record(&mut self, message: ChannelMsg) -> bool {
+        match message {
+            ChannelMsg::Data { data } => self.stdout.extend_from_slice(&data),
+            ChannelMsg::ExtendedData { data, .. } => self.stderr.extend_from_slice(&data),
+            ChannelMsg::ExitStatus { exit_status } => self.exit_status = Some(exit_status),
+            ChannelMsg::ExitSignal { signal_name, .. } => {
+                self.exit_signal = Some(signal_name_str(&signal_name));
+            }
+            ChannelMsg::Close => return true,
+            _ => {}
+        }
+        false
+    }
+
     /// `Ok(self)` on success, else [`SshError::Remote`] with the status and stderr.
     ///
     /// # Errors
@@ -146,36 +165,31 @@ impl Connection {
             write.eof().await?;
             Ok::<_, SshError>(())
         };
-        let reader = async {
-            let mut output = ExecOutput::default();
-            let mut closed = false;
-            while let Some(message) = read.wait().await {
-                match message {
-                    ChannelMsg::Data { data } => output.stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, .. } => output.stderr.extend_from_slice(&data),
-                    ChannelMsg::ExitStatus { exit_status } => {
-                        output.exit_status = Some(exit_status);
-                    }
-                    ChannelMsg::ExitSignal { signal_name, .. } => {
-                        output.exit_signal = Some(signal_name_str(&signal_name));
-                    }
-                    ChannelMsg::Close => {
-                        closed = true;
-                        break;
-                    }
-                    _ => {}
-                }
+        tokio::pin!(writer);
+        let mut written = None;
+        let mut output = ExecOutput::default();
+        let mut closed = false;
+        while !closed {
+            tokio::select! {
+                result = &mut writer, if written.is_none() => written = Some(result),
+                message = read.wait() => match message {
+                    Some(message) => closed = output.record(message),
+                    None => break,
+                },
             }
-            if !closed && output.exit_status.is_none() && output.exit_signal.is_none() {
-                return Err(SshError::Disconnected(format!("while running {command:?}")));
+            // A command that exits without reading all of its input stops the server from
+            // taking more, and the server closes the channel only after our EOF.
+            if written.is_none() && output.has_exited() {
+                written = Some(Ok(()));
+                let _ = write.eof().await;
             }
-            Ok(output)
-        };
-        let (written, output) = tokio::join!(writer, reader);
-        let output = output?;
+        }
+        if !closed && !output.has_exited() {
+            return Err(SshError::Disconnected(format!("while running {command:?}")));
+        }
         // The command may exit without reading all of its input (that is its business),
         // so a write error only matters if it never reported a status.
-        if let Err(error) = written
+        if let Some(Err(error)) = written
             && output.exit_status.is_none()
         {
             return Err(error);

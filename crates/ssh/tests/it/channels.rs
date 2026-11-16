@@ -253,3 +253,32 @@ async fn jump_hosts_sign_in_with_their_own_credentials() {
         "{error}"
     );
 }
+
+#[tokio::test]
+#[cfg_attr(not(ssh_test_host), ignore = "needs GUDO_SSH_TEST_HOST (docs/SSH.md)")]
+async fn a_command_that_stops_reading_its_input_still_returns() {
+    let env = env();
+    let connection = env.connect().await;
+    let input = vec![b'x'; 32 << 20];
+    let output = tokio::time::timeout(
+        Duration::from_secs(30),
+        connection.exec_with_input("exit 3", input.as_slice()),
+    )
+    .await
+    .expect("the command's exit ends the exec")
+    .unwrap();
+    assert_eq!(output.exit_status, Some(3));
+
+    // An upload whose directory cannot be made fails with the reason instead of hanging.
+    let error = tokio::time::timeout(
+        Duration::from_secs(30),
+        connection.upload("/proc/gudo-test/file", &input, 0o644, UploadEncoding::Raw),
+    )
+    .await
+    .expect("a failed upload returns")
+    .unwrap_err();
+    assert!(
+        matches!(&error, SshError::Remote { stderr, .. } if stderr.contains("/proc/gudo-test")),
+        "{error}"
+    );
+}
