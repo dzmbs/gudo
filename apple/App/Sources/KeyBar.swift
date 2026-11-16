@@ -383,7 +383,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
             alt = .off
         }
         bandHeight.constant = compact
-            ? (hardwareMode == .hidden ? 0 : metrics.pillHeight + 12)
+            ? (hardwareMode == .hidden ? 0 : metrics.pillBandHeight)
             : metrics.bandHeight
         updateMenu()
         layoutBand()
@@ -618,7 +618,7 @@ final class KeyBar: UIInputView, UIInputViewAudioFeedback {
         var pillMetrics = metrics
         pillMetrics.capsuleHeight = metrics.pillHeight
         pillMetrics.padding = 4
-        pillMetrics.minimumSlot = 30
+        pillMetrics.minimumSlot = CapsuleMetrics.minimumTarget
         let keys: [CapsuleKey] = [escKey, ctrlKey]
         let slots = keys.map { pillMetrics.slotWidth(title: $0.title, symbol: $0.symbol) }
         let pillWidth = CapsuleView.width(slots: slots, metrics: pillMetrics)
@@ -1075,7 +1075,7 @@ private final class CircleView: UIView {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: -2, dy: -6).contains(point)
+        bounds.insetBy(dx: -2, dy: -CapsuleMetrics.touchOutset(forHeight: bounds.height)).contains(point)
     }
 }
 #endif

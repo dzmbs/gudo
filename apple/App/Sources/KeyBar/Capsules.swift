@@ -177,7 +177,7 @@ final class CapsuleView: UIView {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: 0, dy: -6).contains(point)
+        bounds.insetBy(dx: 0, dy: -CapsuleMetrics.touchOutset(forHeight: bounds.height)).contains(point)
     }
 
     /// A touch in the extended area or the end padding goes to the nearest key.
@@ -335,7 +335,7 @@ final class KeyStripView: UIView, UIScrollViewDelegate {
     }
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: 0, dy: -6).contains(point)
+        bounds.insetBy(dx: 0, dy: -CapsuleMetrics.touchOutset(forHeight: bounds.height)).contains(point)
     }
 
     /// A touch above, below or between keys goes to the nearest visible key.

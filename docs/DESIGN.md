@@ -132,7 +132,7 @@ tab strip at XXL, pane headers and the iPhone bar at XL.
 | Command palette width | 580 pt Mac / 640 pt touch | Spotlight: a title and its context on one line |
 | Chat reading column | 680 pt of text, centred; full width on iPhone | about 75 characters of body text |
 | Chat Send / Stop disc | 32 pt (`proseSendDisc`) inside a 44 pt target | the one primary action on the composer, weighted like a key |
-| Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 | keyboard key height |
+| Key bar row | 44 iPhone / 52 iPad, keys 34 / 40, hardware strip 28 drawn in a 44 pt band, its esc and ctrl 44 pt targets | keyboard key height |
 | Window padding | 4 pt (`Space.xs`), balanced | Ghostty `window-padding-balance`; wider than Ghostty's 2 pt so text never touches a split's line |
 
 Six radii, nothing in between, every one with continuous corners: chrome rounds a rectangle with
@@ -685,7 +685,7 @@ the capture from its own frame, since such a window gets no animation or display
 Keys read as part of the iOS 26 keyboard: no strip behind them, glass rounded rects at the
 keyboard's key height and radius, SF Pro labels at its size, wider gaps between groups (esc tab ·
 ctrl · arrows · symbols · profile), the latched Ctrl as prominent glass. Always dark, like the
-terminal's keyboard. With a hardware keyboard, the 28 pt strip (main's behaviour). Profiles,
+terminal's keyboard. With a hardware keyboard, the 28 pt strip (main's behaviour): esc, ctrl and ⋯ at the trailing edge, each key a 44 pt target (the slim pill takes touches 8 pt above and below what it draws, in a 44 pt band). Profiles,
 composer and snippets are main's (`App/Sources/KeyBar`), skinned through `KeyBarStyle`.
 
 ### iPhone

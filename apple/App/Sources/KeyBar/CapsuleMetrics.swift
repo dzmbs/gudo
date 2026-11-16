@@ -19,6 +19,17 @@ struct CapsuleMetrics: Equatable {
     var showsAlt: Bool
     /// Height of the slim `esc ⌃ ⋯` pill shown with a hardware keyboard.
     var pillHeight: CGFloat = 28
+    /// The least a key is to a finger, however slim it draws (the HIG's 44 pt).
+    static let minimumTarget: CGFloat = 44
+
+    /// The band around the slim pill: tall enough that its keys reach a full target above and
+    /// below what they draw.
+    var pillBandHeight: CGFloat { max(pillHeight + 12, Self.minimumTarget) }
+
+    /// How far a shape `height` tall takes touches beyond its top and bottom edges.
+    static func touchOutset(forHeight height: CGFloat) -> CGFloat {
+        max(6, (minimumTarget - height) / 2)
+    }
 
     /// Width buckets: compact < 500 pt, medium 500–900, wide ≥ 900.
     static func `for`(width: CGFloat, compactHeight: Bool, isPad: Bool) -> CapsuleMetrics {
