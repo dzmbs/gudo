@@ -1,3 +1,4 @@
+import DesignSystem
 import HostKit
 import PaneLayout
 import SwiftUI
@@ -64,7 +65,10 @@ final class SidebarRevealTests: XCTestCase {
         let first = try XCTUnwrap(model.groups.tabs.first)
         model.focus(first)
 
-        let host = NSHostingView(rootView: WorkspaceSidebar().environment(model).environment(model.app))
+        // A test window gets no display frames, so an animated scroll never moves; under Reduce
+        // Motion the list goes to the same place at once.
+        let host = NSHostingView(rootView: WorkspaceSidebar().environment(model).environment(model.app)
+            .environment(\.forcedChromeAccessibility, ChromeAccessibility(reduceMotion: true)))
         host.frame = CGRect(x: 0, y: 0, width: 280, height: 360)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

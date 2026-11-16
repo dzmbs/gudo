@@ -52,8 +52,12 @@ nonisolated public struct ChromeAccessibility: Equatable, Sendable {
 }
 
 public extension EnvironmentValues {
+    /// Settings a subtree is drawn with instead of the system's (screenshots and tests, where
+    /// the system's own cannot be set).
+    @Entry var forcedChromeAccessibility: ChromeAccessibility?
+
     var chromeAccessibility: ChromeAccessibility {
-        ChromeAccessibility(
+        forcedChromeAccessibility ?? ChromeAccessibility(
             reduceMotion: accessibilityReduceMotion,
             reduceTransparency: accessibilityReduceTransparency,
             increaseContrast: colorSchemeContrast == .increased,

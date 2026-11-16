@@ -158,13 +158,16 @@ private struct ActiveRowReveal: View {
     let scroll: SidebarScroll
     let proxy: ScrollViewProxy
     @Environment(WindowModel.self) private var model
+    @Environment(\.chromeAccessibility) private var accessibility
 
     var body: some View {
         Color.clear
             .onChange(of: model.destination == .terminal ? model.shownTab : nil) { _, ref in
                 guard let ref else { return }
+                // Under Reduce Motion the list goes there in place, as a highlight between rows does.
+                let animation = accessibility.travel(DS.Motion.standard)
                 // Once the list has laid out the row a new tab adds.
-                Task { @MainActor in geometry.reveal(ref, scroll: scroll, proxy: proxy) }
+                Task { @MainActor in geometry.reveal(ref, scroll: scroll, proxy: proxy, animation: animation) }
             }
     }
 }

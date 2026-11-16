@@ -637,8 +637,8 @@ enum SidebarReveal: Equatable {
 }
 
 extension SidebarGeometry {
-    /// Scrolls `proxy` so `ref`'s row shows whole, the least way, when it does not.
-    func reveal(_ ref: TabRef, scroll: SidebarScroll, proxy: ScrollViewProxy) {
+    /// Scrolls `proxy` so `ref`'s row shows whole, the least way, when it does not, in `animation`.
+    func reveal(_ ref: TabRef, scroll: SidebarScroll, proxy: ScrollViewProxy, animation: Animation?) {
         guard let item = items.values.first(where: { if case .row(let row, _) = $0 { row == ref } else { false } }) else { return }
         let header: String? = if case .row(_, .project(let project)) = item { SidebarItem.projectHeader(project).id } else { nil }
         let covered = header.flatMap { frames[$0]?.height } ?? 0
@@ -650,7 +650,7 @@ extension SidebarGeometry {
         // scrolled away can be stale, so they never veto the scroll.
         let anchor = move == .up && covered > 0
             ? SidebarReveal.anchor(for: move, covered: covered, viewport: scroll.bottom - scroll.top, rowHeight: rowHeight) : nil
-        withAnimation(DS.Motion.standard) { proxy.scrollTo(item.id, anchor: anchor) }
+        withAnimation(animation) { proxy.scrollTo(item.id, anchor: anchor) }
     }
 }
 

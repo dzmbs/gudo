@@ -76,7 +76,7 @@ struct TabBar: View {
             // travel, which leaves a chip in view where it is.
             let anchor = spans.anchor(revealing: ref)
             if animated {
-                withAnimation(DS.Motion.standard) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
+                withAnimation(accessibility.travel(DS.Motion.standard)) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
                 TabTimeline.mark(.scrolledIntoView)
             } else if anchor != nil {
                 scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor)

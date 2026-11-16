@@ -192,9 +192,12 @@ final class TabStripTests: XCTestCase {
             contentRect: NSRect(x: -30000, y: -30000, width: width, height: 60), styleMask: [.borderless], backing: .buffered,
             defer: false)
         window.isReleasedWhenClosed = false
+        // An offscreen window gets no display frames, so an animated scroll never moves; under
+        // Reduce Motion the strip goes to the same place at once.
         let strip = TabBar(workspace: workspace)
             .environment(model)
             .environment(AppModel.shared)
+            .environment(\.forcedChromeAccessibility, ChromeAccessibility(reduceMotion: true))
             .environment(\.tabChipFrames) { ref, frame in frames.byTab[ref] = frame }
         window.contentView = NSHostingView(rootView: strip)
         window.orderFrontRegardless()
