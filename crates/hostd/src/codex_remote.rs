@@ -9,19 +9,29 @@ use std::time::Duration;
 mod tests;
 
 pub(super) fn main(arguments: &[String]) -> i32 {
-    if run(arguments).is_err() {
-        eprintln!(
-            "Codex Chat could not start with this pane environment. No conversation was started."
-        );
+    if let Err(error) = run(arguments) {
+        eprintln!("{}", failure_message(&error));
     }
     1
+}
+
+fn failure_message(error: &io::Error) -> String {
+    format!(
+        "{} No conversation was started.",
+        super::launch_failure::describe("Codex", "codex", error)
+    )
 }
 
 fn run(arguments: &[String]) -> io::Result<()> {
     let socket = arguments
         .first()
         .ok_or_else(|| io::Error::other("missing launch socket"))?;
-    let mut connection = UnixStream::connect(socket)?;
+    let mut connection = UnixStream::connect(socket).map_err(|error| {
+        io::Error::other(format!(
+            "the {} helper did not answer ({error})",
+            brand::PRODUCT_NAME
+        ))
+    })?;
     connection.set_read_timeout(Some(Duration::from_secs(10)))?;
     connection.set_write_timeout(Some(Duration::from_secs(10)))?;
     let mode = if supports_native(OsStr::new("codex"))? {

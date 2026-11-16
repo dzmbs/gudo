@@ -6,8 +6,11 @@ use std::process::Command;
 pub(super) fn main(arguments: &[String]) -> i32 {
     let result: io::Result<()> =
         command(OsStr::new("claude"), arguments).and_then(|mut command| Err(command.exec()));
-    if result.is_err() {
-        eprintln!("Claude Code could not start with this pane environment.");
+    if let Err(error) = result {
+        eprintln!(
+            "{}",
+            super::launch_failure::describe("Claude Code", "claude", &error)
+        );
     }
     1
 }
@@ -22,9 +25,11 @@ fn command(program: &OsStr, arguments: &[String]) -> io::Result<Command> {
     if prefix.last().map(String::as_str) != Some("--settings") {
         return Err(io::Error::other("missing final settings option"));
     }
-    let supported = super::cli_version::read(program)
-        .ok()
-        .flatten()
+    let version = match super::cli_version::read(program) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
+        version => version.ok().flatten(),
+    };
+    let supported = version
         .and_then(|bytes| String::from_utf8(bytes).ok())
         .is_some_and(|version| agents::claude_supports_message_display(&version));
     let settings = if supported {
@@ -100,6 +105,14 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn a_missing_claude_is_not_installed_rather_than_too_old() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("claude");
+        let error = command(missing.as_os_str(), &arguments()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

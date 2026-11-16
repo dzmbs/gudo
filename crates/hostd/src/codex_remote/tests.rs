@@ -60,3 +60,20 @@ fn closed_output_does_not_turn_a_hung_version_query_into_an_unbounded_wait() {
     assert!(!supports_native(path.as_os_str()).unwrap());
     assert!(started.elapsed() < Duration::from_secs(5));
 }
+
+#[test]
+fn a_missing_codex_and_a_missing_helper_say_which_it_is() {
+    let directory = tempfile::tempdir().unwrap();
+    let missing = supports_native(directory.path().join("codex").as_os_str()).unwrap_err();
+    assert_eq!(
+        failure_message(&missing),
+        "Codex is not installed on this host: no `codex` on the PATH of a login shell. No conversation was started."
+    );
+    let socket = directory.path().join("launch.sock");
+    let unreachable = run(&[socket.display().to_string()]).unwrap_err();
+    let message = failure_message(&unreachable);
+    assert!(
+        message.starts_with("Codex could not start: the ") && message.contains("did not answer"),
+        "{message}"
+    );
+}

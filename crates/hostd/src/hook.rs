@@ -29,6 +29,7 @@ mod browser_upload;
 mod claude_display;
 mod cli_version;
 mod codex_remote;
+mod launch_failure;
 mod mcp;
 mod term_tools;
 
