@@ -44,6 +44,7 @@ struct WorkspaceView: View {
     @State private var frame = CGRect.zero
     /// Whether the sidebar shows, once its last show or hide has settled.
     @State private var sidebarRests = true
+    @State private var lastSidebarShown = SidebarShownMemo()
     @AppStorage(TerminalPreferences.Key.theme) private var themeName = TerminalPreferences.Default.theme
     @AppStorage(TerminalPreferences.Key.windowTheme) private var windowTheme = TerminalPreferences.WindowTheme.auto
     @AppStorage(ToastPosition.key) private var toastPosition = ToastPosition.standard
@@ -172,6 +173,14 @@ struct WorkspaceView: View {
         let card = ContentCard.isShown(style: paneStyle, isOn: paneContentCard, compact: false) && !model.isEditorFullScreen
         let width = page ?? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize)
         let gutter = shown && page != nil ? layout.gutter : 0
+        // Here rather than in `onChange`: the canvas must still have the size it had before the
+        // change, and hiding the sidebar widens the detail column in the same layout pass.
+        if lastSidebarShown.update(shown), model.destination == .terminal, !model.isEditorFullScreen, deck == nil {
+            let sidebar = width + (page != nil ? layout.gutter : 0)
+            model.arrangement.prepareTerminals(
+                resizingCanvasBy: CGSize(width: shown ? -sidebar : sidebar, height: stripRoom(shown: shown, pages: layout.isPages)),
+                within: DS.Motion.structuralSettle)
+        }
         return VStack(spacing: 0) {
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
@@ -210,14 +219,6 @@ struct WorkspaceView: View {
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
                 .clipShape(SidesOnly())
             }
-            .onChange(of: shown) { _, shown in
-                guard model.destination == .terminal, !model.isEditorFullScreen, deck == nil else { return }
-                let strip = showsTabBar && !model.isEditorFullScreen && !layout.isPages ? DS.Size.tabStrip : 0
-                let sidebar = width + (page != nil ? layout.gutter : 0)
-                model.arrangement.prepareTerminals(
-                    resizingCanvasBy: CGSize(width: shown ? -sidebar : sidebar, height: shown ? strip : -strip),
-                    within: DS.Motion.structuralSettle)
-            }
             .task(id: shown) {
                 try? await Task.sleep(for: .milliseconds(Int(DS.Motion.structuralSettle * 1000)))
                 guard !Task.isCancelled else { return }
@@ -254,6 +255,30 @@ struct WorkspaceView: View {
         #if os(macOS)
         .background(RepresentedDirectory(path: workspace.isRemote ? nil : workspace.session.activeTab.flatMap(workspace.absoluteDirectory(of:))))
         #endif
+    }
+
+    /// The height the canvas gains as the sidebar shows (the strip above the panes goes) or
+    /// loses as it hides. On the Mac the strip is the title bar's own row: the canvas keeps its
+    /// height.
+    private func stripRoom(shown: Bool, pages: Bool) -> CGFloat {
+        #if os(macOS)
+        return 0
+        #else
+        let strip = showsTabBar && !model.isEditorFullScreen && !pages ? DS.Size.tabStrip : 0
+        return shown ? strip : -strip
+        #endif
+    }
+}
+
+/// The sidebar's shown state as the window's body last saw it.
+@MainActor
+final class SidebarShownMemo {
+    private var shown: Bool?
+
+    /// Records `shown`; true when it changed since the last time.
+    func update(_ shown: Bool) -> Bool {
+        defer { self.shown = shown }
+        return self.shown.map { $0 != shown } ?? false
     }
 }
 
