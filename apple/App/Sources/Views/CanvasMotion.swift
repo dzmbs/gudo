@@ -25,6 +25,9 @@ struct CanvasMotion {
     private(set) var moving: Set<PaneId> = []
     /// Panes going from a window of their own back into the tree.
     private(set) var docking: Set<PaneId> = []
+    /// Panes lifting out of the tree into a window, or docking back: they change shape on the
+    /// way, so their stills scale with them.
+    private(set) var changingLayer: Set<PaneId> = []
     /// New panes, and the sliver each grows from.
     private(set) var seeds: [PaneId: CGRect] = [:]
     private(set) var departures: [Departure] = []
@@ -44,6 +47,7 @@ struct CanvasMotion {
                     moving.insert(leaf.pane)
                 }
                 if old.window != nil, leaf.window == nil { docking.insert(leaf.pane) }
+                if (old.window == nil) != (leaf.window == nil) { changingLayer.insert(leaf.pane) }
             } else if leaf.visible {
                 let givers = before.leaves.filter { $0.visible && $0.window == leaf.window && $0.frame.intersects(leaf.frame) }
                 seeds[leaf.pane] = Self.edge(of: leaf.frame, awayFrom: givers.map(\.frame))
@@ -73,6 +77,7 @@ struct CanvasMotion {
     func continuing(_ earlier: CanvasMotion, in after: CanvasLayout) -> CanvasMotion {
         var merged = self
         merged.docking.formUnion(earlier.docking.filter { after.leaf($0)?.window == nil })
+        merged.changingLayer.formUnion(earlier.changingLayer.filter { after.leaf($0) != nil })
         for (pane, seed) in earlier.seeds where merged.seeds[pane] == nil && after.leaf(pane)?.visible == true {
             merged.seeds[pane] = seed
         }
@@ -133,12 +138,16 @@ extension SplitLayout.Divider {
 
 /// Draws a view laid out at `frame` within `shown`, the rectangle it travels through: moved so
 /// its top-left corner rides `shown`'s, cut to `shown`, on `background` where it does not
-/// reach, under `still` while it has one. Only `shown` animates, so nothing inside lays out
-/// again on the way. Under Reduce Motion it stays at `frame`: a change only crossfades.
+/// reach, under `still` while it has one (at its own size, or with `scalesStill` scaled to fit
+/// `shown` whole). Only `shown` animates, so nothing inside lays out again on the way. Under
+/// Reduce Motion it stays at `frame`: a change only crossfades.
 struct PaneTravel: ViewModifier, Animatable {
     var shown: CGRect
     let frame: CGRect
     var still: CGImage?
+    /// The still keeps its proportions and fits `shown`: for a pane changing shape (lifting into
+    /// a window, docking back), whose still at its own size would be cut off or left short.
+    var scalesStill = false
     /// How far down the pane its terminal starts (its header): it travels too, so headers
     /// arriving on a first split make room in the spring.
     var stillTop: CGFloat = 0
@@ -163,6 +172,14 @@ struct PaneTravel: ViewModifier, Animatable {
         (CGSize(width: shown.minX, height: shown.minY), CGRect(origin: .zero, size: shown.size))
     }
 
+    /// The scale that fits a still of `still` points whole into `shown`: 1 within a pixel of its
+    /// own size, so it is crisp where the motion starts.
+    static func stillScale(still: CGSize, shown: CGSize) -> CGFloat {
+        guard still.width > 0, still.height > 0 else { return 1 }
+        let scale = min(shown.width / still.width, shown.height / still.height)
+        return abs(scale - 1) * max(still.width, still.height) < 1 ? 1 : max(scale, 0)
+    }
+
     func body(content: Content) -> some View {
         let place = Self.placement(frame: frame, shown: reduceMotion ? frame : shown)
         let shape = TravelShape(rect: place.clip, radius: radius, corners: chrome?.radii)
@@ -172,7 +189,12 @@ struct PaneTravel: ViewModifier, Animatable {
             }
             .overlay(alignment: .topLeading) {
                 if let still {
+                    let size = CGSize(width: CGFloat(still.width) / displayScale, height: CGFloat(still.height) / displayScale)
+                    let room = CGSize(width: place.clip.width, height: max(0, place.clip.height - stillTop))
+                    let scale = scalesStill ? Self.stillScale(still: size, shown: room) : 1
                     Image(decorative: still, scale: displayScale)
+                        .resizable()
+                        .frame(width: size.width * scale, height: size.height * scale)
                         .padding(.top, stillTop)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)

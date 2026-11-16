@@ -211,6 +211,7 @@ struct SplitTreeView: View {
                         .transaction(value: leaf.frame.size) { $0.animation = nil }
                         .modifier(ArrivingTravel(seed: seeds[leaf.pane], travel: PaneTravel(
                             shown: leaf.shownFrame, frame: leaf.frame, still: arrangement.still(of: leaf.pane),
+                            scalesStill: arrangement.motion.changingLayer.contains(leaf.pane),
                             stillTop: leaf.header, background: theme.background, radius: paneRadius(of: leaf),
                             chrome: Self.chrome(of: leaf, docking: arrangement.motion.docking))))
                         // A pane zooming over its neighbours, or shrinking back onto them,

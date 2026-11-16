@@ -642,8 +642,8 @@ minimizing only move and resize views in one `structural` spring, and no termina
 - **Float transition.** The pane lifts out of the tree to its window frame while the panes
   beside it expand into its space in the same spring, the lift beat and the shadow growing
   with it. Docking runs it backwards. The pane that changes layer travels as a still of its
-  last frame (a platform view neither scales nor fades with SwiftUI), crisp, at its own
-  pixel size; the panes making room keep their grids through the motion (their last frame
+  last frame (a platform view neither scales nor fades with SwiftUI), scaled with the
+  rectangle it travels through so it is whole on every frame, crisp where it starts; the panes making room keep their grids through the motion (their last frame
   stays, clipped or padded). Everything reflows once at rest: no flicker, no cols × rows
   overlay.
 - **Tray.** Minimize (⇧⌘M, the header's minimize button) sends a window to a row of glass capsules at the

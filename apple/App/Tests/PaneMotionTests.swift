@@ -500,6 +500,50 @@ final class PaneMotionTests: XCTestCase {
         XCTAssertTrue(Self.close(docked, [128, 128, 128], within: 3), "no shadow once in the tree: \(docked)")
     }
 
+    /// A pane lifting out into a window, or docking back, changes shape on the way: its still
+    /// scales with the rectangle it travels through, whole and never cut off, instead of
+    /// keeping its old size inside a frame of another shape.
+    func testALayerChangingPanesStillScalesWithItsFrame() throws {
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let shown = CGRect(x: 0, y: 0, width: 400, height: 200)
+        let size = CGSize(width: 200, height: 400)
+        let context = CGContext(
+            data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: size))
+        // Its last rows, at the bottom of the picture (Core Graphics counts up from there).
+        context.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: size.width, height: 40))
+        let still = try XCTUnwrap(context.makeImage())
+        let image = try Self.render(ZStack(alignment: .topLeading) {
+            Color.black
+            Color.black.frame(width: frame.width, height: frame.height)
+                .modifier(PaneTravel(shown: shown, frame: frame, still: still, scalesStill: true, background: .gray))
+        }.environment(\.displayScale, 1), size: frame.size)
+        XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 20, y: 190)), [0, 0, 255]), "its last rows show at the bottom")
+        XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 20, y: 40)), [255, 0, 0]), "its top at the top")
+        XCTAssertFalse(Self.close(Self.pixel(image, at: CGPoint(x: 150, y: 40)), [255, 0, 0]), "scaled to the frame's height")
+        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200, height: 400)), 1, "at its own size at the start")
+        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200.4, height: 400.4)), 1, "not blurred by rounding")
+    }
+
+    func testOnlyAPaneChangingLayerScalesItsStill() throws {
+        var session = Session()
+        let first = try XCTUnwrap(session.activeTab).focused
+        session.apply(.split(first, .horizontal))
+        let second = try XCTUnwrap(session.activeTab).focused
+        let tab = try XCTUnwrap(session.activeTab)
+        let tiled = CanvasLayout(
+            node: tab.root, floats: .none, zoomed: nil, focused: second, size: Self.size, gap: Self.gap,
+            header: PaneHeader.height, cell: nil, padding: 4)
+        session.apply(.float(second, frame: nil))
+        let floated = try XCTUnwrap(CanvasLayout(session: session, like: tiled))
+        XCTAssertEqual(CanvasMotion(from: tiled, to: floated).changingLayer, [second], "lifting")
+        XCTAssertEqual(CanvasMotion(from: floated, to: tiled).changingLayer, [second], "docking")
+        XCTAssertEqual(CanvasMotion(from: Self.canvas(Self.one), to: Self.canvas(Self.two)).changingLayer, [], "a split")
+    }
+
     /// Docking: the pane goes over the tiled panes and their lines while it lands, solid, and
     /// the line beside its slot shows only once it has.
     func testADockingPaneLandsOverTheDividersWhichWaitForIt() async throws {
