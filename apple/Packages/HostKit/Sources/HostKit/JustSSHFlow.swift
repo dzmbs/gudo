@@ -340,6 +340,7 @@ public final class JustSSHFlow {
     /// Adds the host and connects, or saves the edited host.
     public func connect() async {
         step = .connecting
+        canKeepHost = false
         do {
             let endpoint = try endpoint()
             let name = name.trimmingCharacters(in: .whitespaces)
@@ -350,11 +351,19 @@ public final class JustSSHFlow {
                 step = .connected(editingHostId)
                 return
             }
+            let wasSaved = hosts.savedSSH(endpoint) != nil
             let id = try hosts.connectSSH(
                 endpoint, name: name.isEmpty ? nil : name, password: typedPassword, rememberPassword: rememberPassword,
                 passphrase: typedPassphrase, rememberPassphrase: rememberPassphrase)
-            if let ssh = hosts.connection(id) as? SshConnection {
-                try await connected(ssh, hostId: id, endpoint: endpoint)
+            do {
+                if let ssh = hosts.connection(id) as? SshConnection {
+                    try await connected(ssh, hostId: id, endpoint: endpoint)
+                }
+            } catch {
+                // A host that never connected is not kept unless the user asks (`keepHost`).
+                if !wasSaved { hosts.remove(id) }
+                canKeepHost = !wasSaved
+                throw error
             }
             step = .connected(id)
         } catch {
@@ -362,13 +371,34 @@ public final class JustSSHFlow {
         }
     }
 
+    /// After a failed Connect: whether the host can be saved anyway (`keepHost`).
+    public private(set) var canKeepHost = false
+
+    /// Saves the host that failed to connect, without connecting; returns its id.
+    public func keepHost() throws -> String {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        let record = try hosts.saveSSH(
+            try endpoint(), name: name.isEmpty ? nil : name, password: typedPassword, rememberPassword: rememberPassword,
+            passphrase: typedPassphrase, rememberPassphrase: rememberPassphrase)
+        canKeepHost = false
+        return record.id
+    }
+
     /// Waits until authenticated, or fails at the first dial that cannot reach the host
-    /// (the session would otherwise redial forever while the sheet spins). The host stays
-    /// saved; the redial stops until the user tries again.
+    /// (the session would otherwise redial forever while the sheet spins), with one redial
+    /// allowed after the user trusted the host's key (the dial may have timed out while the
+    /// question was up).
     private func connected(_ ssh: SshConnection, hostId: String, endpoint: SSHEndpoint) async throws {
         let attempt = Task { try await ssh.connected() }
+        let trustedBefore = hosts.hostKeyPrompts.trustedCount
+        var redialedAfterTrust = false
         while true {
             if case .reconnecting(_, let reason) = ssh.status {
+                if !redialedAfterTrust, hosts.hostKeyPrompts.trustedCount > trustedBefore {
+                    redialedAfterTrust = true
+                    while case .reconnecting = ssh.status { try await Task.sleep(for: .milliseconds(100)) }
+                    continue
+                }
                 hosts.disconnect(hostId)
                 _ = try? await attempt.value
                 throw JustSSHError.unreachable(host: endpoint.host, reason: reason, tailscale: Tailscale.isTailnet(endpoint))
@@ -456,7 +486,7 @@ public enum JustSSHError: Error, Equatable, LocalizedError {
         case .badPort(let port): "\(port) is not a port (1 to 65535)"
         case .remote(let stderr): "The host refused: \(stderr)"
         // The screen adds the Tailscale hint (with its Open button) for tailnet hosts.
-        case .unreachable(let host, let reason, _): "Couldn't reach \(host): \(reason)"
+        case .unreachable(let host, let reason, _): "Couldn't connect to \(host). \(SshErrorText.plainReason(reason)) Check the address and that the host is on and accepts SSH, then try again."
         }
     }
 }

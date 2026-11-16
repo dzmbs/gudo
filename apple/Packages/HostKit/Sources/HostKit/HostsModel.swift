@@ -649,9 +649,31 @@ public final class HostsModel {
         _ endpoint: SSHEndpoint, name: String? = nil, password: String? = nil, rememberPassword: Bool = true,
         passphrase: String? = nil, rememberPassphrase: Bool = true, hostId: String? = nil
     ) throws -> String {
-        let existing = hostId.flatMap(record) ?? records.first {
-            $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port
+        let record = try saveSSH(
+            endpoint, name: name, password: password, rememberPassword: rememberPassword, passphrase: passphrase,
+            rememberPassphrase: rememberPassphrase, hostId: hostId)
+        disconnect(record.id)
+        if record.kind == .daemon {
+            try open(record.id)
+        } else {
+            _ = try openSSH(record, password: password, passphrase: passphrase)
+            touch(record.id)
         }
+        return record.id
+    }
+
+    /// The saved host `endpoint` names, if any.
+    public func savedSSH(_ endpoint: SSHEndpoint) -> HostRecord? {
+        records.first { $0.ssh?.host == endpoint.host && $0.ssh?.user == endpoint.user && $0.ssh?.port == endpoint.port }
+    }
+
+    /// Saves an SSH host without connecting: a new one, or the one `hostId` or `endpoint` names.
+    @discardableResult
+    public func saveSSH(
+        _ endpoint: SSHEndpoint, name: String? = nil, password: String? = nil, rememberPassword: Bool = true,
+        passphrase: String? = nil, rememberPassphrase: Bool = true, hostId: String? = nil
+    ) throws -> HostRecord {
+        let existing = hostId.flatMap(record) ?? savedSSH(endpoint)
         var record = existing ?? HostRecord(name: name ?? endpoint.alias ?? endpoint.host, kind: .ssh, ssh: endpoint)
         if existing == nil {
             record.nameSource = name == nil && endpoint.alias == nil ? .placeholder : .user
@@ -662,14 +684,7 @@ public final class HostsModel {
         record.ssh = endpoint
         try saveSecrets(for: record, password: password, rememberPassword: rememberPassword, passphrase: passphrase, rememberPassphrase: rememberPassphrase)
         upsert(record)
-        disconnect(record.id)
-        if record.kind == .daemon {
-            try open(record.id)
-        } else {
-            _ = try openSSH(record, password: password, passphrase: passphrase)
-            touch(record.id)
-        }
-        return record.id
+        return record
     }
 
     /// Saves an SSH host's changed login without connecting (Edit Host). A live plain-SSH

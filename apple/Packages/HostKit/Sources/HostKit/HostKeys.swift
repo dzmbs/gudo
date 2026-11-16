@@ -29,6 +29,9 @@ public final class HostKeyPrompts {
     public var presenters = 0
 
     @ObservationIgnored private var queue: [(Prompt, (Bool) -> Void)] = []
+    /// How many keys the user has trusted so far: a dial waiting on the prompt may have timed
+    /// out meanwhile, and one redial with the key now on record is expected.
+    @ObservationIgnored public private(set) var trustedCount = 0
 
     public init() {}
 
@@ -36,6 +39,7 @@ public final class HostKeyPrompts {
         guard !queue.isEmpty else { return }
         let (_, reply) = queue.removeFirst()
         pending = queue.first?.0
+        if trust { trustedCount += 1 }
         reply(trust)
     }
 

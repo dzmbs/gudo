@@ -254,4 +254,23 @@ nonisolated public enum SshErrorText {
         case .Closed: return "Closed"
         }
     }
+
+    /// Why a dial failed, as a sentence for people: the SSH library's words only when nothing
+    /// plainer fits.
+    public static func plainReason(_ reason: String) -> String {
+        let lowered = reason.lowercased()
+        let plain: [(matches: [String], sentence: String)] = [
+            (["channel send error", "closed the connection", "connection reset", "broken pipe", "eof"],
+             "The connection closed before signing in."),
+            (["connection refused"], "Nothing answered on the SSH port."),
+            (["timed out", "timeout"], "It didn't answer in time."),
+            (["no route to host", "network is unreachable", "host is down"], "This device has no route to it."),
+            (["nodename nor servname", "failed to lookup", "name or service not known", "dns"], "The name doesn't resolve to an address."),
+        ]
+        if let match = plain.first(where: { entry in entry.matches.contains { lowered.contains($0) } }) {
+            return match.sentence
+        }
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "The connection failed." : "The connection failed (\(trimmed))."
+    }
 }

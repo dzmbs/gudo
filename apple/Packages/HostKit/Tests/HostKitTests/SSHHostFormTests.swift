@@ -231,6 +231,47 @@ private struct Desk {
         #expect(desk.model.records.count == 1)
     }
 
+    @Test func aHostThatNeverConnectedIsNotKeptUnlessAskedFor() async throws {
+        let desk = try Desk()
+        let flow = JustSSHFlow(hosts: desk.model)
+        flow.destination = "127.0.0.1"
+        flow.user = "me"
+        flow.port = "1"
+        flow.auth = .password
+        await flow.connect()
+        guard case .failed(let reason) = flow.step else { Issue.record("connected: \(flow.step)"); return }
+        #expect(reason.contains("Nothing answered on the SSH port."), "\(reason)")
+        #expect(reason.contains("try again"))
+        #expect(desk.model.records.isEmpty, "no half-added host")
+        #expect(flow.canKeepHost)
+
+        let id = try flow.keepHost()
+        #expect(desk.model.record(id)?.ssh?.port == 1)
+        #expect(desk.model.connection(id) == nil, "kept without connecting")
+        #expect(!flow.canKeepHost)
+    }
+
+    @Test func aSavedHostThatFailsToConnectStaysSaved() async throws {
+        let desk = try Desk()
+        let endpoint = SSHEndpoint(user: "me", host: "127.0.0.1", port: 1, identity: .password)
+        desk.model.upsert(HostRecord(id: "s", name: "box", kind: .ssh, ssh: endpoint))
+        let flow = JustSSHFlow(hosts: desk.model)
+        flow.destination = "127.0.0.1"
+        flow.user = "me"
+        flow.port = "1"
+        flow.auth = .password
+        await flow.connect()
+        guard case .failed = flow.step else { Issue.record("connected: \(flow.step)"); return }
+        #expect(desk.model.record("s") != nil)
+        #expect(!flow.canKeepHost)
+    }
+
+    @Test func dialFailuresReadAsPlainWords() {
+        #expect(SshErrorText.plainReason("ssh: Channel send error") == "The connection closed before signing in.")
+        #expect(SshErrorText.plainReason("connecting to 10.0.0.1:22: Connection refused (os error 61)") == "Nothing answered on the SSH port.")
+        #expect(SshErrorText.plainReason("something odd") == "The connection failed (something odd).")
+    }
+
     @Test func passphraseProtectedAppKeys() async throws {
         let desk = try Desk()
         let key = try await desk.model.keys.generate(label: "laptop", type: .ed25519, passphrase: "secret")

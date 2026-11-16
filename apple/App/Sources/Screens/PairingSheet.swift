@@ -101,12 +101,14 @@ struct PairingSheet: View {
             .formStyle(.grouped)
             .chromeGrouped()
             #if os(macOS)
-            // On the page above the form's cards, centred like a window's tab control.
+            // On the page above the form's cards, centred like a window's tab control, on the
+            // page's own surface so scrolled rows pass under it, never through it.
             .safeAreaInset(edge: .top, spacing: 0) {
                 methodPicker
                     .fixedSize()
                     .frame(maxWidth: .infinity)
-                    .padding(.top, DS.Space.m)
+                    .padding(.vertical, DS.Space.s)
+                    .background(DS.Palette.groupedPage)
             }
             #else
             // Under the navigation bar, part of it: the form scrolls beneath both.
@@ -116,6 +118,13 @@ struct PairingSheet: View {
                     .padding(.bottom, DS.Space.s)
             }
             #endif
+            // What went wrong sits over the buttons, where the eye is after pressing Connect,
+            // however far the form is scrolled.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let error, mode == .ssh, flow != nil {
+                    ConnectFailure(message: error, canKeep: flow?.canKeepHost == true, keep: keepHost)
+                }
+            }
             .onAppear { focusField() }
             .onChange(of: mode) {
                 error = nil
@@ -361,7 +370,7 @@ struct PairingSheet: View {
 
     @ViewBuilder
     private func footer(default text: Text) -> some View {
-        if let error {
+        if let error, !(mode == .ssh && flow != nil) {
             Label(error, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(DS.Palette.error)
                 .accessibilityIdentifier("pairing-error")
@@ -424,6 +433,17 @@ struct PairingSheet: View {
             pair(ticket)
         case .scan:
             break
+        }
+    }
+
+    private func keepHost() {
+        guard let flow else { return }
+        do {
+            _ = try flow.keepHost()
+            pairedCount += 1
+            dismiss()
+        } catch {
+            self.error = SshErrorText.describe(error)
         }
     }
 
@@ -673,3 +693,36 @@ struct QRScannerView: UIViewControllerRepresentable {
     }
 }
 #endif
+
+/// A failed Connect, pinned over the sheet's buttons: what happened and what to do, and the
+/// choice to keep the host anyway.
+private struct ConnectFailure: View {
+    let message: String
+    let canKeep: Bool
+    let keep: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(DS.Palette.error)
+                .accessibilityHidden(true)
+            Text(message)
+                .foregroundStyle(DS.Palette.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if canKeep {
+                Button("Add Anyway", action: keep)
+                    .accessibilityHint("Saves the host without connecting")
+                    .accessibilityIdentifier("pairing-keep-host")
+            }
+        }
+        .font(DS.Font.rowSubtitle)
+        .padding(DS.Space.m)
+        .background(DS.Palette.groupedRow, in: .rect(cornerRadius: DS.Radius.control))
+        .padding(.horizontal, DS.Space.l)
+        .padding(.vertical, DS.Space.s)
+        .background(DS.Palette.groupedPage)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pairing-error")
+    }
+}
