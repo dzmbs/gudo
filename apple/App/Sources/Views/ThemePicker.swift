@@ -44,7 +44,7 @@ struct ThemePicker: View {
                 ForEach(sections, id: \.title) { section($0.title, $0.themes, id: "theme") }
                 if sections.allSatisfy(\.themes.isEmpty) {
                     Text("No themes match \u{201C}\(query)\u{201D}")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(DS.Palette.textSecondary)
                         .frame(maxWidth: .infinity)
                         .padding(.top, DS.Space.xxxl)
                 }
@@ -81,9 +81,9 @@ struct ThemePicker: View {
     private func section(_ title: String, _ themes: [TerminalTheme], id prefix: String) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.m) {
             HStack(spacing: DS.Space.s) {
-                Text(title).foregroundStyle(.secondary)
+                Text(title).foregroundStyle(DS.Palette.textSecondary)
                 if prefix == "theme" {
-                    Text("\(themes.count)").foregroundStyle(.tertiary).monospacedDigit()
+                    Text("\(themes.count)").foregroundStyle(DS.Palette.textTertiary).monospacedDigit()
                 }
             }
             .font(.footnote.weight(.semibold))
@@ -134,7 +134,7 @@ private struct ThemeTile: View {
             HStack(spacing: DS.Space.xs) {
                 Text(theme.name)
                     .font(.footnote.weight(isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .foregroundStyle(isSelected ? DS.Palette.text : DS.Palette.textSecondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if isSelected {

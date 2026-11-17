@@ -217,7 +217,7 @@ struct SettingsResultRow: View {
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.title)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(DS.Palette.text)
                 if let key = entry.key {
                     Text(key)
                         .font(DS.Font.literalSmall)
