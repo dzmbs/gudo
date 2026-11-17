@@ -1610,7 +1610,7 @@ impl Core {
         }
     }
 
-    /// The closed panes, oldest first (persisted with the layout).
+    #[cfg(test)]
     pub(crate) fn has_live_codex(&self) -> bool {
         self.pane_entries().iter().any(|(_, entry)| {
             lock(&entry.codex)
@@ -1619,6 +1619,7 @@ impl Core {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn has_live_agent_chat(&self) -> bool {
         self.has_live_codex()
             || (self.cfg.claude_chat_streaming
@@ -1632,6 +1633,7 @@ impl Core {
                 }))
     }
 
+    /// The closed panes, oldest first (persisted with the layout).
     pub fn closed_panes(&self) -> Vec<ClosedPane> {
         lock(&self.closed).iter().cloned().collect()
     }
@@ -2301,6 +2303,26 @@ impl Core {
         Ok(())
     }
 
+    /// Ends each pane whose Codex runs on an app-server this process owns: its connections
+    /// cannot cross `exec`, so the next build starts the pane again resuming the thread, as
+    /// after a restart (`restore`). The layout must be saved and the pane tasks stopped.
+    pub async fn end_live_codex_for_resume(&self) {
+        for (id, entry) in self.pane_entries() {
+            let Some(source) = lock(&entry.codex).take_if(|source| source.is_running()) else {
+                continue;
+            };
+            lock(&self.panes).remove(&id);
+            tracing::info!(pane = %id, "Codex starts again in the new build, resuming its thread");
+            let _ = tokio::task::spawn_blocking(move || {
+                if entry.pane.hand_off().is_ok() {
+                    entry.pane.pty().end_handed_off(HANGUP_GRACE);
+                }
+            })
+            .await;
+            source.stop().await;
+        }
+    }
+
     /// Stops every pane for the daemon build that replaces this process with `exec`
     /// (`handoff`), leaving its program running, and returns what that build needs to
     /// continue them. Pane tasks must be stopped already.
@@ -2324,6 +2346,7 @@ impl Core {
                 at_prompt: meta.at_prompt,
                 launched_at: entry.launched_at,
                 agent: lock(&entry.agent).as_ref().map(AgentRuntime::kind),
+                agent_input: lock(&entry.pane.agent_input_gate).to_carried(),
             });
         }
         carried
@@ -2368,6 +2391,10 @@ impl Core {
             self.ws.accounts.pin(agent.kind, session, account);
         }
         let accounts_changed = agent.is_some();
+        if let Some(launch) = carried.agent_input {
+            *lock(&pane.agent_input_gate) =
+                crate::agent_input::AgentInputGate::from_carried(launch);
+        }
         let entry = Arc::new(PaneEntry {
             pane,
             meta: Mutex::new(MetaState {

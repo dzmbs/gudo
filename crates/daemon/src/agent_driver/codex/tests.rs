@@ -567,3 +567,22 @@ async fn the_exit_fence_retires_the_pane_codex_source() {
     assert!(launch.await.unwrap_err().is_cancelled());
     raw.daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hand_off_ends_a_live_codex_pane_for_the_next_build_to_resume() {
+    let raw = crate::agent_input::chat_tests::raw_fixture().await;
+    let source = source();
+    let launch = tokio::spawn(std::future::pending::<()>());
+    *lock(&source.task) = Some(launch.abort_handle());
+    *lock(&raw.entry.codex) = Some(Arc::clone(&source));
+    let core = &raw.daemon.core;
+    let pid = raw.entry.pane.pty().pid();
+    core.end_live_codex_for_resume().await;
+    assert!(!source.is_running());
+    assert!(launch.await.unwrap_err().is_cancelled());
+    // SAFETY: signal 0 only checks whether the pane's program still exists.
+    assert_ne!(unsafe { libc::kill(pid as libc::pid_t, 0) }, 0);
+    let carried = core.hand_off_panes();
+    assert!(carried.iter().all(|pane| pane.id != raw.entry.pane.id));
+    crate::handoff::end_panes(core, std::time::Duration::ZERO);
+}

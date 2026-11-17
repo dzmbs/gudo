@@ -632,6 +632,11 @@ and only once), `mp::policy` unit test.
   the new build fails `build-info` or does not read its hand-off, else `restarting`; the
   command then waits for the same pid to record a new start in `endpoint.json`. There is no
   rollback check here: the file was put there by someone who can already run it.
+- **Agents across a hot upgrade**: an upgrade or `restart` is never refused for a running
+  agent. A launched agent's input fence (its launch id, pending or open) is carried, so Chat keeps
+  sending to it. A Codex that runs on a daemon-owned app-server is the exception that is not
+  carried: its connections end at `exec`, so the old build ends that pane after saving the layout
+  and the new one starts it again resuming its thread (docs/CHAT.md).
 - **What survives an update**: with a hot upgrade, everything: the programs in the panes, their
   terminals (screens, scrollback, modes, cursor), output offsets, sizes, titles, directories,
   shell state, and the layout. Clients redial by themselves (backoff ≤ 5 s) and resume their

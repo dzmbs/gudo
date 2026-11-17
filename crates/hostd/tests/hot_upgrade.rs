@@ -819,3 +819,92 @@ async fn an_app_update_keeps_chat_for_a_claude_started_by_hand() {
     assert_eq!(after.session.native_session, CLAUDE_ID, "{}", hostd.log());
     assert_eq!(after.items.len(), before.items.len());
 }
+
+/// Answers the version check a launch makes, then runs as `FAKE_CLAUDE` does.
+const LAUNCHED_CLAUDE: &str = r#"#!/bin/bash
+case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; esac
+echo claude-pid=$$
+"#;
+
+/// A Claude Code the helper launched, with Chat that sends to it, keeps running and keeps its
+/// Chat, Send included, when the app updates the helper.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_update_keeps_a_launched_claude_and_its_chat() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let transcript = dir.path().join("fixture.jsonl");
+    std::fs::write(&transcript, CLAUDE_TRANSCRIPT).unwrap();
+    let claude = tools.join("claude");
+    let body = FAKE_CLAUDE
+        .trim_start_matches("#!/bin/bash\n")
+        .replace("__ID__", CLAUDE_ID)
+        .replace("__TRANSCRIPT__", &transcript.display().to_string());
+    std::fs::write(&claude, format!("{LAUNCHED_CLAUDE}{body}")).unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let env = [(
+        "PATH",
+        format!(
+            "{}:{}",
+            tools.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    )];
+    let state = dir.path().join("state");
+    let hostd = run_with_env(&exe, &state, &dir.path().join("hostd.log"), &env);
+    let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id: pane, .. } = client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch: PaneLaunch::Agent {
+                agent: client_core::proto::AgentKind::Claude,
+                resume: None,
+                cwd: Some(work.display().to_string()),
+            },
+        })
+        .await
+    else {
+        panic!("new tab");
+    };
+    client.follow(pane).await;
+    client.wait_text(pane, "claude-ready").await;
+    let claude_pid: u32 = printed(&client.text(pane), "claude-pid")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let before = client
+        .client
+        .timeline_watch_capabilities(pane)
+        .await
+        .unwrap_or_else(|error| panic!("Chat: {error}\n{}", hostd.log()));
+    assert_eq!(before.snapshot.session.native_session, CLAUDE_ID);
+    assert!(
+        before
+            .capabilities
+            .contains(client_core::proto::AgentCapabilities::SEND),
+        "{:?}",
+        before.capabilities
+    );
+
+    let connections = client.connected;
+    replace(&exe, &std::fs::read(HOSTD).unwrap());
+    let output = restart_command(&exe, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    reconnected(&mut client, connections).await;
+    assert!(alive(claude_pid));
+    let after = client
+        .client
+        .timeline_watch_capabilities(pane)
+        .await
+        .unwrap_or_else(|error| panic!("Chat after the update: {error}\n{}", hostd.log()));
+    assert_eq!(after.snapshot.session.native_session, CLAUDE_ID);
+    assert_eq!(after.snapshot.items.len(), before.snapshot.items.len());
+    assert_eq!(after.capabilities, before.capabilities);
+}

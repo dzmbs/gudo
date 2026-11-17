@@ -56,6 +56,14 @@ pub(crate) struct AgentInputGate {
     last_prompt_seq: u64,
 }
 
+/// A launch's input fence as a hot upgrade carries it (`handoff`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CarriedLaunch {
+    Pending(String),
+    Open(String),
+}
+
 #[derive(Default)]
 enum AgentInputPhase {
     #[default]
@@ -112,6 +120,27 @@ impl AgentInputGate {
     pub(crate) fn pending(launch: String) -> Self {
         Self {
             phase: AgentInputPhase::Pending(launch),
+            ..Self::default()
+        }
+    }
+
+    /// The launch this pane's input belongs to, for the build a hot upgrade hands it to.
+    pub(crate) fn to_carried(&self) -> Option<CarriedLaunch> {
+        match &self.phase {
+            AgentInputPhase::Disabled => None,
+            AgentInputPhase::Pending(launch) => Some(CarriedLaunch::Pending(launch.clone())),
+            AgentInputPhase::Open(launch) => Some(CarriedLaunch::Open(launch.clone())),
+        }
+    }
+
+    /// The gate of an agent a hot upgrade carried over, still fenced to its launch.
+    pub(crate) fn from_carried(launch: CarriedLaunch) -> Self {
+        let phase = match launch {
+            CarriedLaunch::Pending(launch) => AgentInputPhase::Pending(launch),
+            CarriedLaunch::Open(launch) => AgentInputPhase::Open(launch),
+        };
+        Self {
+            phase,
             ..Self::default()
         }
     }

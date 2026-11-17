@@ -448,6 +448,7 @@ impl Daemon {
         self.endpoint.close().await;
         self.core.ws.editors.stop_all().await;
         self.core.ws.tunnel.shutdown();
+        self.core.end_live_codex_for_resume().await;
         let core = Arc::clone(&self.core);
         let carried = tokio::task::spawn_blocking(move || handoff::Carried {
             epoch: Some(core.epoch),

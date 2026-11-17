@@ -390,6 +390,19 @@ impl Live {
         lock(&self.state).is_chat_ready() && !self.fault.load(std::sync::atomic::Ordering::Acquire)
     }
 
+    /// Stops the relay and the app-server's group now and reaps it.
+    pub(crate) async fn stop(&self) {
+        for task in [&self.task, &self.history_task, &self.control_task] {
+            if let Some(task) = lock(task).take() {
+                task.abort();
+            }
+        }
+        let process = lock(&self.process).take();
+        if let Some(process) = process {
+            process::terminate(process).await;
+        }
+    }
+
     /// The app-server runs, or its launch is still within its bounded bootstrap.
     pub(crate) fn is_running(&self) -> bool {
         lock(&self.process).is_some()

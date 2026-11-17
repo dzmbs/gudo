@@ -452,9 +452,10 @@ Capture admits at most 64 panes and 16 active messages, with 256 KiB/message and
 budgets (including retained replay delta). A new message retires the oldest finished one when
 either is full, so a long turn keeps streaming; the last 1024 retired identities stay duplicates. The overlay has a
 separate 768 KiB conservative value budget and shares the existing push/snapshot budget. These
-are bounds, not latency or RSS acceptance. Hot relay handoff remains deferred. Upgrades/restarts
-are refused while a dedicated Claude launch using the enabled recipe is pending/open, as for
-owned Codex sources; the guard is conservative even when version selection falls back to Terminal.
+are bounds, not latency or RSS acceptance. A hot upgrade carries the launch's input fence (pending
+or open) with the pane, and the next build serves the display receiver on the saved port with the
+same token key, so Chat keeps reading and sending. A display stream cut by the upgrade loses
+usability for that turn only; the transcript carries it, and the next prompt streams again.
 
 ## Read-only diff foundation
 
@@ -774,10 +775,12 @@ than inventing completion. Session discovery does not guess identities for a liv
 
 Relay recovery/handoff, unsupported-version fallback before default enablement,
 richer item/output streaming, lifecycle stress/MCP/latency validation and simulator acceptance remain
-open. The isolated cold-recovery probe is not general recovery acceptance. Hot helper
-upgrade/restart is refused while this opt-in launch owns an active server/transport because relay
-handoff is not implemented. Existing Codex panes are never restarted or silently replaced to enable
-Chat. Claude MessageDisplay streaming is not implemented by this producer.
+open. The isolated cold-recovery probe is not general recovery acceptance. The app-server
+connections cannot cross a hot upgrade's `exec`, so the old build ends such a pane (the TUI, then
+the app-server's group) after saving the layout, and the next build starts it again as after a
+restart: `codex resume` of its thread, in the same pane. A turn running at that moment is
+interrupted; the rollout keeps what it did. Existing Codex panes are never restarted or silently
+replaced to enable Chat. Claude MessageDisplay streaming is not implemented by this producer.
 
 ## pi
 

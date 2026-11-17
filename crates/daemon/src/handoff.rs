@@ -32,6 +32,7 @@ use bytes::Bytes;
 use proto::{AgentKind, DeviceId, PaneId, PaneSize, Seq, SessionEpoch, SnapGen};
 use serde::{Deserialize, Serialize};
 
+use crate::agent_input::CarriedLaunch;
 use crate::core::Core;
 use crate::pane::{PaneHandOff, ResizeRecord};
 
@@ -94,6 +95,8 @@ struct PaneRecord {
     at_prompt: bool,
     launched_at_ms: u64,
     agent: Option<AgentKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent_input: Option<CarriedLaunch>,
 }
 
 /// A pane as one build hands it to the next.
@@ -107,6 +110,8 @@ pub(crate) struct CarriedPane {
     pub launched_at: SystemTime,
     /// The agent the pane ran (launched or detected), resumed in its unknown state.
     pub agent: Option<AgentKind>,
+    /// The launch a daemon-launched agent's input is fenced to, so Chat keeps sending to it.
+    pub agent_input: Option<CarriedLaunch>,
 }
 
 /// Everything a hand-off carries.
@@ -160,6 +165,7 @@ pub(crate) fn encode(carried: &Carried) -> io::Result<Vec<u8>> {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |since| since.as_millis() as u64),
             agent: pane.agent,
+            agent_input: pane.agent_input.clone(),
         });
     }
     let payload = Payload {
@@ -572,6 +578,7 @@ fn carried_pane(record: &PaneRecord, blobs: &[u8]) -> io::Result<CarriedPane> {
         at_prompt: record.at_prompt,
         launched_at: UNIX_EPOCH + Duration::from_millis(record.launched_at_ms),
         agent: record.agent,
+        agent_input: record.agent_input.clone(),
     })
 }
 
@@ -648,6 +655,7 @@ mod tests {
                 at_prompt: true,
                 launched_at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
                 agent: Some(AgentKind::Claude),
+                agent_input: Some(CarriedLaunch::Open("launch".into())),
             }],
         }
     }
@@ -678,6 +686,7 @@ mod tests {
         assert_eq!(pane.title, "vim");
         assert_eq!(pane.launched_at, carried.panes[0].launched_at);
         assert_eq!(pane.agent, Some(AgentKind::Claude));
+        assert_eq!(pane.agent_input, Some(CarriedLaunch::Open("launch".into())));
     }
 
     #[test]

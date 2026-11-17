@@ -107,12 +107,7 @@ pub(crate) async fn serve(
     mut send: SendStream,
     mut recv: RecvStream,
 ) {
-    let result = if owner && core.has_live_agent_chat() {
-        Err(fail(
-            UpgradeFailure::Forbidden,
-            "Live agent Chat cannot survive a helper restart yet.",
-        ))
-    } else if owner {
+    let result = if owner {
         install(&core, &header, downgrade, &mut send, &mut recv).await
     } else {
         core.mp.audit.append(
@@ -484,11 +479,6 @@ pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> Resta
     if !core.hooks.is_daemon_token(&call.restart.token) {
         tracing::warn!("refused a restart request with a bad token");
         return RestartReply::Refused("not allowed".into());
-    }
-    if core.has_live_agent_chat() {
-        return RestartReply::Refused(
-            "Live agent Chat cannot survive a helper restart yet.".into(),
-        );
     }
     let Some(exe) = core.cfg.exe.clone() else {
         return RestartReply::Refused("this daemon does not know its executable".into());
