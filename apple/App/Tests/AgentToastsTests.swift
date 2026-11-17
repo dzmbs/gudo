@@ -101,7 +101,9 @@ final class AgentToastsTests: XCTestCase {
         agent.summary = "claude finished"
         XCTAssertNil(AgentToasts.summary(for: agent))
         agent.summary = "[✓] Added retry handling | Tests pass\nDetailed output"
-        XCTAssertEqual(AgentToasts.summary(for: agent), "Added retry handling Tests pass")
+        XCTAssertEqual(AgentToasts.summary(for: agent), "Added retry handling. Tests pass.")
+        agent.summary = "Fixed the build · ready to merge? | 3 files"
+        XCTAssertEqual(AgentToasts.summary(for: agent), "Fixed the build. Ready to merge? 3 files.")
         agent.summary = "Action Required: Which branch should I use?"
         XCTAssertEqual(AgentToasts.summary(for: agent), "Which branch should I use?")
         agent.summary = nil

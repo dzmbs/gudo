@@ -80,8 +80,16 @@ final class AgentToasts {
                 !part.isEmpty && !genericLines.contains { $0.caseInsensitiveCompare(part) == .orderedSame }
                     && part != item.sessionTitle && part != item.hostName
             }
-        line = parts.joined(separator: " ")
+        line = parts.count > 1 ? parts.map(Self.sentence).joined(separator: " ") : parts.joined()
         return line.isEmpty ? nil : String(line.prefix(200))
+    }
+
+    /// One segment of a title as a sentence of the toast: capitalised, ending in a full stop
+    /// unless it already ends in punctuation.
+    private static func sentence(_ part: String) -> String {
+        let capitalised = part.prefix(1).uppercased() + part.dropFirst()
+        guard let last = capitalised.last, !".!?:…".contains(last) else { return capitalised }
+        return capitalised + "."
     }
 
     func update(_ items: [AgentItem], isShown: (AgentItem) -> Bool, now: Date = .now) {
