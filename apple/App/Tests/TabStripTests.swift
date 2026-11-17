@@ -151,6 +151,30 @@ final class TabStripTests: XCTestCase {
         }
     }
 
+    /// A selected chip that grows once it is in view (its title arrives, a longer name) is
+    /// brought whole into view again, clear of the edge's fade.
+    func testTheSelectedChipStaysWholeWhenItGrows() async throws {
+        MockPaneStatus.fixture = [:]
+        defer { MockPaneStatus.fixture = nil }
+        let (model, workspace) = try await stripModel(tabs: 10)
+        defer { model.close() }
+        for tab in workspace.session.tabs { workspace.apply(.rename(tab.id, "a")) }
+        let frames = ChipFrames()
+        let window = stripWindow(model: model, workspace: workspace, width: 700, frames: frames)
+        defer { window.close() }
+        let selected = try XCTUnwrap(model.groups.tabs.last)
+        model.focus(selected)
+        _ = try await settled(frames, count: 10)
+        workspace.apply(.rename(selected.tab, "a much longer name for this tab"))
+        _ = try await settled(frames, count: 10)
+        let scrollView = try XCTUnwrap(Self.scrollView(in: try XCTUnwrap(window.contentView)))
+        let shown = scrollView.convert(scrollView.bounds, to: nil)
+        let chip = try XCTUnwrap(frames.byTab[selected])
+        XCTAssertGreaterThan(chip.width, DS.Size.tabMinWidth + 20, "the chip grew")
+        XCTAssertGreaterThanOrEqual(chip.minX, shown.minX + DS.Size.tabStripFade - 1, "under the leading fade")
+        XCTAssertLessThanOrEqual(chip.maxX, shown.maxX + 1, "cut at the trailing edge")
+    }
+
     /// After the window narrows, the selected chip is brought back whole into view.
     func testTheSelectedChipStaysInViewWhenTheWindowNarrows() async throws {
         let (model, workspace) = try await stripModel(tabs: 14)

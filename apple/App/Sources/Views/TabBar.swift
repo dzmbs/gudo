@@ -25,7 +25,10 @@ struct TabBar: View {
         HStack(spacing: 0) {
             ScrollViewReader { scroller in
                 ScrollView(.horizontal) {
-                    chips(refs, active: active)
+                    chips(refs, active: active) { ref in
+                        // The selected chip grew or moved (its title arrived, a longer name): whole again.
+                        if ref == active { reveal(ref, with: scroller, onlyIfCut: true) }
+                    }
                         .coordinateSpace(name: StripSpans.space)
                         .animation(DS.Motion.standard, value: refs)
                 }
@@ -70,12 +73,13 @@ struct TabBar: View {
 
     /// Brings the selected chip whole into view by the least travel, once a chip just added has
     /// been laid out.
-    private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy, animated: Bool = true) {
+    private func reveal(_ ref: TabRef?, with scroller: ScrollViewProxy, animated: Bool = true, onlyIfCut: Bool = false) {
         guard let ref else { return }
         Task { @MainActor in
             // Where the spans know no better (a chip not yet measured), the scroll's own least
             // travel, which leaves a chip in view where it is.
             let anchor = spans.anchor(revealing: ref)
+            if onlyIfCut && anchor == nil { return }
             if animated {
                 withAnimation(accessibility.travel(DS.Motion.standard)) { scroller.scrollTo(StripSpans.ChipID(ref: ref), anchor: anchor) }
                 TabTimeline.mark(.scrolledIntoView)
@@ -92,7 +96,7 @@ struct TabBar: View {
         return model.groups.tabs.filter { $0 != arriving }
     }
 
-    private func chips(_ refs: [TabRef], active: TabRef?) -> some View {
+    private func chips(_ refs: [TabRef], active: TabRef?, moved: @escaping (TabRef) -> Void) -> some View {
         let groups = Dictionary(model.groups.groups.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let activeIndex = active.flatMap { refs.firstIndex(of: $0) }
         // Tabs name their host only while the window holds more than one host.
@@ -113,7 +117,7 @@ struct TabBar: View {
                 }
                 .id(StripSpans.ChipID(ref: ref))
                 .tabChipWidth()
-                .modifier(ChipSpanReport(ref: ref, spans: spans))
+                .modifier(ChipSpanReport(ref: ref, spans: spans, moved: moved))
                 .modifier(ChipFrameReport(ref: ref))
                 .motionTransition(.tab)
             }
@@ -167,6 +171,7 @@ final class StripSpans {
 private struct ChipSpanReport: ViewModifier {
     let ref: TabRef
     let spans: StripSpans
+    let moved: (TabRef) -> Void
 
     func body(content: Content) -> some View {
         content.onGeometryChange(for: ClosedRange<CGFloat>.self) { proxy in
@@ -174,6 +179,7 @@ private struct ChipSpanReport: ViewModifier {
             return frame.minX...frame.maxX
         } action: { span in
             spans.chips[ref] = span
+            moved(ref)
         }
     }
 }
