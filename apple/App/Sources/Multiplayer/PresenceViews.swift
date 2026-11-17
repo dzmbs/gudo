@@ -90,7 +90,7 @@ struct PanePresence: View {
     let pane: PaneId
 
     var body: some View {
-        if let session = workspace.multiplayer, !LaunchOptions.mock || MockMultiplayer.onPanes {
+        if let session = workspace.multiplayer, !workspace.showsSampleSharing || MockMultiplayer.onPanes {
             let people = session.people(in: pane.rawValue)
             let driver = session.holder(of: pane.rawValue)
             if !people.isEmpty || (driver != nil && driver != session.myPrincipal) {
@@ -163,7 +163,7 @@ struct MultiplayerPaneOverlay: View {
     }
 
     var body: some View {
-        if let session = workspace.multiplayer, session.me != nil, !LaunchOptions.mock || MockMultiplayer.onPanes {
+        if let session = workspace.multiplayer, session.me != nil, !workspace.showsSampleSharing || MockMultiplayer.onPanes {
             ZStack {
                 if let request = session.leaseRequests.first(where: { $0.paneId == pane.rawValue }) {
                     LeaseRequestCard(session: session, request: request)
@@ -463,7 +463,7 @@ struct MultiplayerWindowHooks: ViewModifier {
             .task(id: "\(workspace.hostId ?? "")/\(workspace.multiplayer?.me?.name ?? "")") {
                 // A paired device is "owner" on the host until it says who it is; others see
                 // this device's name instead.
-                guard !LaunchOptions.mock, let session = workspace.multiplayer, let me = session.me,
+                guard !workspace.showsSampleSharing, let session = workspace.multiplayer, let me = session.me,
                       session.isOwner, me.name == "owner" || me.name.isEmpty else { return }
                 await session.setName(Self.deviceName)
             }

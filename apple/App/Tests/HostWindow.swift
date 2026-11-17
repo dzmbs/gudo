@@ -146,8 +146,13 @@ final class HostWindow {
 
     // MARK: Controls
 
-    /// The sheet over the window, if one is up.
-    var sheet: NSWindow? { window.attachedSheet }
+    /// The sheet over the window, if one is up: the topmost, when a sheet has one of its own
+    /// (a confirmation over Share Session).
+    var sheet: NSWindow? {
+        var top = window.attachedSheet
+        while let next = top?.attachedSheet { top = next }
+        return top
+    }
 
     /// An accessibility element of the window: an AppKit view, or one of SwiftUI's own nodes,
     /// which answer the same messages without declaring the protocol.
@@ -226,8 +231,20 @@ final class HostWindow {
 
     func click(_ element: Element, button: WindowDriver.MouseButton = .left) async throws {
         let target = (inSheet(element) ? sheet : nil) ?? window
+        if !target.frame.contains(NSPoint(x: element.frame.midX, y: element.frame.midY)) {
+            // Scrolled out of sight: brought into view first, as a person scrolls to it.
+            let rect = target.convertFromScreen(element.frame)
+            let scrollViews = Self.allViews(under: target.contentView).compactMap { $0 as? NSScrollView }
+            if let scrollView = scrollViews.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }),
+               let document = scrollView.documentView
+            {
+                document.scrollToVisible(document.convert(rect, from: nil))
+            }
+            await pump(0.6)
+        }
         let frame = element.frame
         XCTAssertFalse(frame.isEmpty, "\(element) has a frame")
+        XCTAssertTrue(target.frame.contains(NSPoint(x: frame.midX, y: frame.midY)), "\(element.identifier ?? element.words) is in sight: \(frame) in \(target.frame)")
         let point = target.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
         // A sheet over the key window is key. One over a test window cannot become key while
         // the app is not active, and AppKit's own buttons in it take a first click only to
@@ -242,6 +259,11 @@ final class HostWindow {
         try await click(at: point, in: target, button: button)
     }
 
+    static func allViews(under view: NSView?) -> [NSView] {
+        guard let view else { return [] }
+        return [view] + view.subviews.flatMap { allViews(under: $0) }
+    }
+
     private func inSheet(_ element: Element) -> Bool {
         guard let sheet, let content = sheet.contentView else { return false }
         return Self.elements(under: content).contains { $0.object === element.object }
@@ -254,8 +276,8 @@ final class HostWindow {
         case .right: (.rightMouseDown, .rightMouseUp)
         case .middle: (.otherMouseDown, .otherMouseUp)
         }
-        nonisolated(unsafe) let press = try WindowDriver.mouseEvent(types.0, at: point, in: target, clickCount: 1)
-        nonisolated(unsafe) let release = try WindowDriver.mouseEvent(types.1, at: point, in: target, clickCount: 1)
+        nonisolated(unsafe) let press = try WindowDriver.mouseEvent(types.0, at: point, in: target, clickCount: 0)
+        nonisolated(unsafe) let release = try WindowDriver.mouseEvent(types.1, at: point, in: target, clickCount: 0)
         nonisolated(unsafe) let receiver = target
         let releaseLater = Timer(timeInterval: 0.1, repeats: false) { _ in
             MainActor.assumeIsolated {

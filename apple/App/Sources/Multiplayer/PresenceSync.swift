@@ -88,7 +88,7 @@ struct PresenceSyncModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .task(id: ObjectIdentifier(workspace)) {
-                guard !LaunchOptions.mock else { return }
+                guard !workspace.showsSampleSharing else { return }
                 MultiplayerSession.deviceClass = Self.deviceClass
                 workspace.multiplayer?.announceDevice()
                 await PresenceSync(workspace: workspace).run()

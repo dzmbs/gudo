@@ -192,7 +192,7 @@ struct KnockOverlay: View {
     let workspace: Workspace
 
     var body: some View {
-        let shown = !LaunchOptions.mock || MockMultiplayer.onPanes
+        let shown = !workspace.showsSampleSharing || MockMultiplayer.onPanes
         let session = workspace.multiplayer.flatMap { $0.isOwner && shown ? $0 : nil }
         ZStack(alignment: .bottom) {
             if let session, !session.knocks.isEmpty {

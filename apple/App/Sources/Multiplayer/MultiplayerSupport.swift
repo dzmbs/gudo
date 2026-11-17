@@ -8,20 +8,24 @@ import GudoCore
 extension Workspace {
     /// nil for this device and plain SSH hosts; a sample session under `-mock`.
     var multiplayer: MultiplayerSession? {
-        if LaunchOptions.mock { return MockMultiplayer.session }
+        if showsSampleSharing { return MockMultiplayer.session }
         return (host as? DaemonConnection)?.multiplayer
     }
+
+    /// `-mock` shows a sample of sharing in place of a host's, except on a real helper (tests
+    /// that share a session from the app's own windows).
+    var showsSampleSharing: Bool { LaunchOptions.mock && daemon == nil }
 
     var daemon: DaemonConnection? { host as? DaemonConnection }
 
     func isAgentPane(_ pane: PaneId) -> Bool {
-        if LaunchOptions.mock { return MockMultiplayer.agentPanes.contains(pane.rawValue) }
+        if showsSampleSharing { return MockMultiplayer.agentPanes.contains(pane.rawValue) }
         return daemon?.meta[pane]?.agent != nil
     }
 
     /// "Claude Code" for an agent pane.
     func agentName(_ pane: PaneId) -> String? {
-        if LaunchOptions.mock { return MockMultiplayer.agentPanes.contains(pane.rawValue) ? "Claude Code" : nil }
+        if showsSampleSharing { return MockMultiplayer.agentPanes.contains(pane.rawValue) ? "Claude Code" : nil }
         return daemon?.meta[pane]?.agent.map { AgentKind($0.kind).title }
     }
 }
