@@ -246,6 +246,19 @@ final class MacSnapshotTests: XCTestCase {
         return context.makeImage()
     }
 
+    /// The window server's picture of `window`, or its views' own drawing where that picture is
+    /// empty: a locked display hands back nothing for a sheet.
+    private static func picture(of window: NSWindow) throws -> NSBitmapImageRep {
+        if let image = windowImage(window.windowNumber) {
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            if let middle = bitmap.colorAt(x: bitmap.pixelsWide / 2, y: bitmap.pixelsHigh / 2), middle.alphaComponent > 0 { return bitmap }
+        }
+        let view = try XCTUnwrap(window.contentView?.superview)
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
     /// `CGWindowListCreateImage`, looked up at run time: the SDK marks it unavailable, and it is
     /// the one capture of an app's own window that asks no permission.
     private static func windowImage(_ number: Int) -> CGImage? {
@@ -653,8 +666,7 @@ final class MacSnapshotTests: XCTestCase {
 
     /// Cancel is a quiet bezel on the sheet's page, as on every Mac sheet, never a bright slab.
     private func assertQuietCancel(_ sheet: NSWindow) throws {
-        let image = try XCTUnwrap(Self.windowImage(sheet.windowNumber))
-        let bitmap = NSBitmapImageRep(cgImage: image)
+        let bitmap = try Self.picture(of: sheet)
         let scale = CGFloat(bitmap.pixelsWide) / sheet.frame.width
         func color(_ x: Int, _ y: Int) -> ThemeColor? {
             bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB).map { ThemeColor($0.redComponent, $0.greenComponent, $0.blueComponent) }
