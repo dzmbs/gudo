@@ -6067,6 +6067,7 @@ dependencies = [
  "flate2",
  "proto",
  "serde_json",
+ "tempfile",
  "uniffi_bindgen",
 ]
 

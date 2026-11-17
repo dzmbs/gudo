@@ -16,6 +16,7 @@
 //!
 //! See docs/APPLE-FFI.md.
 
+mod install;
 mod notices;
 
 use std::ffi::OsStr;
@@ -552,7 +553,7 @@ fn build_hostd_linux() -> Result<()> {
         ));
         let mut gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
         gzip.write_all(&data)?;
-        fs::write(&dest, gzip.finish()?)?;
+        install::write_into_place(&dest, &gzip.finish()?)?;
         eprintln!(
             "    {} ({:.1} MB) -> {} ({:.1} MB)",
             binary.display(),
@@ -563,7 +564,7 @@ fn build_hostd_linux() -> Result<()> {
     }
     // What the app bundles, so it can tell an older daemon without running the build.
     let manifest = format!("{{\n  \"builds\": [\n{}\n  ]\n}}\n", manifest.join(",\n"));
-    fs::write(out_dir.join("hostd-manifest.json"), manifest)?;
+    install::write_into_place(&out_dir.join("hostd-manifest.json"), manifest.as_bytes())?;
     eprintln!("bundle {} as app resources", out_dir.display());
     Ok(())
 }
@@ -594,7 +595,8 @@ fn build_hostd_macos() -> Result<()> {
         .join("release")
         .join(brand::CARGO_DAEMON_BIN);
     let dest = out_dir.join(brand::DAEMON_BIN);
-    fs::copy(&binary, &dest).with_context(|| format!("copying {}", binary.display()))?;
+    install::copy_into_place(&binary, &dest)
+        .with_context(|| format!("copying {}", binary.display()))?;
     eprintln!("    {} ({:.1} MB)", dest.display(), size_mb(&dest));
     Ok(())
 }

@@ -86,8 +86,13 @@ main() {
   say "Checksum OK"
 
   mkdir -p "$dir"
-  chmod 755 "$tmp/$file"
-  mv -f "$tmp/$file" "$dir/gudo-hostd"
+  # Renamed into place from the same directory: a running gudo-hostd keeps its file, and the
+  # new one is never written into a file something executes.
+  staged="$dir/.gudo-hostd.new.$$"
+  trap 'rm -rf "$tmp"; rm -f "$staged"' EXIT INT TERM
+  cp "$tmp/$file" "$staged"
+  chmod 755 "$staged"
+  mv -f "$staged" "$dir/gudo-hostd"
   say "Installed $dir/gudo-hostd"
   "$dir/gudo-hostd" build-info 2>/dev/null || true
 

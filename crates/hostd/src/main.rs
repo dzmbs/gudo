@@ -545,7 +545,10 @@ fn adopt_legacy_install(state_dir: &Path) -> Result<()> {
         return Ok(());
     }
     let new = exe.with_file_name(brand::DAEMON_BIN);
-    std::fs::copy(&exe, &new).with_context(|| format!("installing {}", new.display()))?;
+    let staged = exe.with_file_name(format!(".{}.new", brand::DAEMON_BIN));
+    std::fs::copy(&exe, &staged)
+        .and_then(|_| std::fs::rename(&staged, &new))
+        .with_context(|| format!("installing {}", new.display()))?;
     log_line!("handing over to the {} service", brand::DAEMON_BIN);
     service::hand_over(&new, state_dir)?;
     std::process::exit(0)

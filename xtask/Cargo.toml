@@ -16,5 +16,8 @@ proto.workspace = true
 serde_json.workspace = true
 uniffi_bindgen.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
