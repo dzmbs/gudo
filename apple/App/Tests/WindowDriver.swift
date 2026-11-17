@@ -45,7 +45,40 @@ final class WindowDriver {
     /// A started mock window `width` wide, with its first pane up.
     static func start(width: CGFloat, height: CGFloat = 700) async throws -> WindowDriver {
         try XCTSkipUnless(LaunchOptions.mock, "renders the mock workspace")
-        let model = WindowModel(app: .shared)
+        let driver = open(width: width, height: height)
+        let model = driver.model
+        _ = await driver.wait { model.workspace?.focusedPane != nil }
+        // The mock hosts and the settings outlive a window: one tab and the strip on to start
+        // from, whatever came before.
+        TabPlacement.showsTabBar = true
+        model.closeTabs(Array(model.groups.tabs.dropFirst()), undoable: false)
+        model.recentlyClosed.removeAll()
+        await driver.pump(1.0)
+        return driver
+    }
+
+    /// A window on the paired host `hostId` with the host's own tools (files, ports, links),
+    /// sidebar hidden, its first shell live and holding the keyboard.
+    static func start(host hostId: String, width: CGFloat = 1180, height: CGFloat = 760) async throws -> WindowDriver {
+        let driver = open(width: width, height: height, liveTools: true)
+        let model = driver.model
+        model.isSidebarShown = false
+        model.show(.host(hostId))
+        // On screen behind another app's window: an offscreen test window's scene is in the background.
+        model.isOnScreen = true
+        await driver.expect("a live shell on the host", timeout: 20) {
+            guard let workspace = model.workspace, workspace.hostId == hostId, let id = workspace.focusedPane,
+                  let pane = workspace.pane(id) else { return false }
+            return pane.connection == .live && pane.view.window != nil
+        }
+        if let workspace = model.workspace, let id = workspace.focusedPane, let pane = workspace.pane(id) {
+            driver.window.makeFirstResponder(pane.view)
+        }
+        return driver
+    }
+
+    private static func open(width: CGFloat, height: CGFloat, liveTools: Bool = false) -> WindowDriver {
+        let model = WindowModel(app: .shared, liveTools: liveTools)
         model.start()
         let frame = NSRect(x: -30000, y: -30000, width: width, height: height)
         let window = OffscreenWindow(
@@ -63,15 +96,7 @@ final class WindowDriver {
         window.contentViewController = controller
         window.setFrame(frame, display: false)
         window.orderFrontRegardless()
-        let driver = WindowDriver(model: model, window: window, chips: chips)
-        _ = await driver.wait { model.workspace?.focusedPane != nil }
-        // The mock hosts and the settings outlive a window: one tab and the strip on to start
-        // from, whatever came before.
-        TabPlacement.showsTabBar = true
-        model.closeTabs(Array(model.groups.tabs.dropFirst()), undoable: false)
-        model.recentlyClosed.removeAll()
-        await driver.pump(1.0)
-        return driver
+        return WindowDriver(model: model, window: window, chips: chips)
     }
 
     func close() {

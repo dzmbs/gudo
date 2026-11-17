@@ -406,8 +406,9 @@ final class WindowModel {
     /// The size of the area the active tab's panes fill (the external display scales to it).
     var terminalArea = CGSize.zero
 
-    /// `agents` replaces the mock feed under `-mock` (in-process tests of the live feed).
-    init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil) {
+    /// `agents` replaces the mock feed under `-mock` (in-process tests of the live feed);
+    /// `liveTools` gives such a test the host's own files, changes, ports and links.
+    init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil, liveTools: Bool = false) {
         self.app = app
         self.isPresentation = isPresentation
         Self.made += 1
@@ -422,41 +423,47 @@ final class WindowModel {
         } else {
             usage = LiveUsageFeed(app: app)
         }
+        var live: (hosts: LiveHostDirectory, status: LivePaneStatus, feed: LiveAgentFeed)?
         if LaunchOptions.mock {
             hosts = MockHostDirectory()
             agents = mockAgents ?? MockAgentFeed()
             paneStatus = MockPaneStatus()
-            files = MockFileSource()
-            diffs = MockDiffSource()
             editors = EditorPanes { _ in MockEditorSource() }
-            ports = MockPortSource()
-            links = MockLinkSource()
         } else {
-            let live = LiveHostDirectory(app: app)
-            hosts = live
-            let feed = LiveAgentFeed(hosts: app.hosts)
-            agents = feed
-            let status = LivePaneStatus()
-            paneStatus = status
-            let files = LiveFileSource(app: app)
-            let diffs = LiveDiffSource(app: app)
+            let made = (hosts: LiveHostDirectory(app: app), status: LivePaneStatus(), feed: LiveAgentFeed(hosts: app.hosts))
+            live = made
+            hosts = made.hosts
+            agents = made.feed
+            paneStatus = made.status
             editors = EditorPanes { [weak app] member in
                 guard let app else { return MockEditorSource() }
                 return LiveEditorSource(app: app, pinned: member)
             }
-            let ports = LivePortSource(app: app)
-            let links = LiveLinkSource(app: app)
-            self.files = files
-            self.diffs = diffs
-            self.ports = ports
-            self.links = links
-            live.window = self
-            status.window = self
-            feed.window = self
-            files.window = self
-            diffs.window = self
-            ports.window = self
-            links.window = self
+        }
+        var toolSources: (files: LiveFileSource, diffs: LiveDiffSource, ports: LivePortSource, links: LiveLinkSource)?
+        if LaunchOptions.mock, !liveTools {
+            files = MockFileSource()
+            diffs = MockDiffSource()
+            ports = MockPortSource()
+            links = MockLinkSource()
+        } else {
+            let made = (files: LiveFileSource(app: app), diffs: LiveDiffSource(app: app), ports: LivePortSource(app: app), links: LiveLinkSource(app: app))
+            toolSources = made
+            files = made.files
+            diffs = made.diffs
+            ports = made.ports
+            links = made.links
+        }
+        if let live {
+            live.hosts.window = self
+            live.status.window = self
+            live.feed.window = self
+        }
+        if let toolSources {
+            toolSources.files.window = self
+            toolSources.diffs.window = self
+            toolSources.ports.window = self
+            toolSources.links.window = self
         }
         git.window = self
         browsers.onPopup = { [weak self] opener, url in self?.openPopup(url, from: opener) }
