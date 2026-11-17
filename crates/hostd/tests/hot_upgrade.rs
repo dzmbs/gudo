@@ -713,3 +713,109 @@ async fn other_clients_are_back_moments_after_an_upgrade() {
     other.type_line(shell, "echo still-typing");
     other.wait_text(shell, "still-typing").await;
 }
+
+const CLAUDE_ID: &str = "0b3bb01e-c7ff-4c07-b983-2dc15e6e1755";
+const CLAUDE_TRANSCRIPT: &str =
+    include_str!("../../daemon/tests/fixtures/timeline/claude-2.1.318.jsonl");
+
+/// Writes its transcript where Claude Code does, reports it through the hooks a hand-started
+/// Claude Code runs, and waits as `claude`.
+const FAKE_CLAUDE: &str = r#"#!/bin/bash
+dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+transcript="$dir/__ID__.jsonl"
+cp "__TRANSCRIPT__" "$transcript"
+for event in SessionStart UserPromptSubmit; do
+  printf '{"hook_event_name":"%s","session_id":"__ID__","transcript_path":"%s","cwd":"%s","source":"startup","prompt":"hi"}' \
+    "$event" "$transcript" "$PWD" | "$GUDO_HOOK" claude "$event"
+done
+echo claude-ready
+exec -a claude /bin/sleep 600
+"#;
+
+/// A Claude Code typed into a shell keeps its Chat across an app update: the build that takes
+/// the pane over finds the same conversation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_update_keeps_chat_for_a_claude_started_by_hand() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let build =
+        |var: &str| std::env::var_os(var).map_or_else(|| PathBuf::from(HOSTD), PathBuf::from);
+    let (from, to) = (
+        build("GUDO_TEST_UPGRADE_FROM"),
+        build("GUDO_TEST_UPGRADE_TO"),
+    );
+    let exe = install(dir.path());
+    replace(&exe, &std::fs::read(&from).unwrap());
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let transcript = dir.path().join("fixture.jsonl");
+    std::fs::write(&transcript, CLAUDE_TRANSCRIPT).unwrap();
+    let claude = tools.join("claude");
+    std::fs::write(
+        &claude,
+        FAKE_CLAUDE
+            .replace("__ID__", CLAUDE_ID)
+            .replace("__TRANSCRIPT__", &transcript.display().to_string()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let state = dir.path().join("state");
+    let hostd = run(&exe, &state, &dir.path().join("hostd.log"));
+    let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id: pane, .. } = client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch: PaneLaunch::Shell {
+                cwd: Some(work.display().to_string()),
+            },
+        })
+        .await
+    else {
+        panic!("new tab");
+    };
+    client.follow(pane).await;
+    client.type_line(pane, &claude.display().to_string());
+    client.wait_text(pane, "claude-ready").await;
+    client
+        .until("the pane is an agent", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+    let before = client
+        .client
+        .timeline_watch(pane)
+        .await
+        .unwrap_or_else(|error| panic!("Chat: {error}\n{}", client.text(pane)));
+    assert_eq!(before.session.native_session, CLAUDE_ID, "{}", hostd.log());
+    assert!(!before.items.is_empty());
+
+    let connections = client.connected;
+    replace(&exe, &std::fs::read(&to).unwrap());
+    let output = restart_command(&exe, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    reconnected(&mut client, connections).await;
+    client
+        .until("the pane is an agent again", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+    let after = client
+        .client
+        .timeline_watch(pane)
+        .await
+        .unwrap_or_else(|error| panic!("Chat after the update: {error}\n{}", hostd.log()));
+    assert_eq!(after.session.native_session, CLAUDE_ID, "{}", hostd.log());
+    assert_eq!(after.items.len(), before.items.len());
+}
