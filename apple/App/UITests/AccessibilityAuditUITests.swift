@@ -50,14 +50,17 @@ final class AccessibilityAuditUITests: XCTestCase {
     private let sidebarAudit: XCUIAccessibilityAuditType = [.sufficientElementDescription, .hitRegion]
 
     func testProjects() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad")
         try audit("projects", ["-sidebarShown", "YES"], types: sidebarAudit, region: sidebar)
     }
 
     func testTabHistory() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad")
         try audit("tab-history", ["-sidebarShown", "YES"], types: sidebarAudit, region: sidebar)
     }
 
     func testTabSelection() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "the sidebar is iPad")
         try audit("tab-selection", ["-sidebarShown", "YES"], types: sidebarAudit, region: sidebar)
     }
 

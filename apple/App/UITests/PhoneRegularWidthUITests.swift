@@ -31,6 +31,8 @@ final class PhoneRegularWidthUITests: XCTestCase {
             "-mock", "-screen", "splits", "-sidebarShown", "YES", "-restoreLastTarget", "NO", "-resetWindows", "YES",
         ] + extra
         app.launch()
+        // Narrower than this, the sidebar gives way to the terminal by design (`SidebarWidthFit`).
+        try XCTSkipIf(app.windows.firstMatch.frame.width < 900, "a phone too narrow in landscape for the sidebar")
         let settings = app.buttons["open-settings"].firstMatch
         let new = app.descendants(matching: .any)["new-tab"].firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 20), "Settings in the sidebar's bar")
