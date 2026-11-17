@@ -141,6 +141,10 @@ public final class DaemonConnection: HostConnection {
     /// How many times this connection has (re)connected to a daemon.
     public private(set) var connectionCount = 0
     @ObservationIgnored private var attachSession: UInt64?
+    /// Panes the daemon said are gone while this device still follows them. A helper started
+    /// afresh numbers its panes from the start again, so its layout can hold one of these ids
+    /// for a new pane, which is then followed anew.
+    @ObservationIgnored private var closedPanes: Set<PaneId> = []
     @ObservationIgnored private var lastView: (UInt64?, [UInt64])?
     @ObservationIgnored private var lastActivities: [UInt64: PaneActivity] = [:]
     @ObservationIgnored private var attempt: UInt32 = 0
@@ -507,6 +511,23 @@ public final class DaemonConnection: HostConnection {
         for (pane, report) in reports { programs.set(report, for: pane) }
     }
 
+    /// Follows again each pane the daemon closed whose id its layout now shows for a new pane.
+    /// The daemon may already stream it (this device asked before it heard of the close) while
+    /// the core drops what it sends: the stream is opened afresh, from a snapshot.
+    private func followReusedPanes() {
+        guard !closedPanes.isEmpty else { return }
+        let session = layout.session
+        let shown = session.panes.union(session.floats.flatMap(\.panes))
+        closedPanes.formIntersection(router.panes.map(PaneId.init))
+        let reused = closedPanes.intersection(shown)
+        closedPanes.subtract(reused)
+        for pane in reused {
+            Self.log.info("pane \(pane.rawValue) is new on host=\(self.hostId, privacy: .public); following it")
+            client?.unsubscribe(paneId: pane.rawValue)
+            client?.subscribe(paneId: pane.rawValue)
+        }
+    }
+
     func handle(_ event: ClientEvent) {
         switch event {
         case .paneMeta(let meta):
@@ -591,6 +612,7 @@ public final class DaemonConnection: HostConnection {
             let wasCached = self.layout.isCached
             self.layout.receive(layout)
             if wasCached { reconcileCache() }
+            followReusedPanes()
             if timings.firstLayout == nil, let start = timings.dialStarted { timings.firstLayout = .now - start }
             if attaching {
                 attaching = false
@@ -602,6 +624,7 @@ public final class DaemonConnection: HostConnection {
         case .paneSizing(let state):
             sizing.set(state, for: PaneId(state.paneId))
         case .paneClosed(let pane):
+            if router.panes.contains(pane) { closedPanes.insert(PaneId(pane)) }
             sizing.set(nil, for: PaneId(pane))
             runAgain.set(nil, for: PaneId(pane))
             meta.set(nil, for: PaneId(pane))
