@@ -657,15 +657,29 @@ final class LiveAgentFeed: AgentFeed {
     /// Waits (up to a minute) for a new agent pane to report idle, then types `prompt` into it.
     static func typeWhenReady(_ prompt: String, pane: UInt64, daemon: DaemonConnection, timeout: Duration = .seconds(60)) async throws {
         let deadline = ContinuousClock.now + timeout
-        while ContinuousClock.now < deadline {
-            if let agent = daemon.meta[PaneId(pane)]?.agent, case .idle = agent.state { break }
+        var refusedUntil: ContinuousClock.Instant?
+        while true {
+            if let agent = daemon.meta[PaneId(pane)]?.agent, case .idle = agent.state {
+                do {
+                    _ = try await daemon.workspace.client().prompt(paneId: pane, text: prompt, submit: true)
+                    return
+                } catch MultiplayerError.Forbidden(let message) {
+                    // The agent reports idle as its pane opens, before it holds the terminal and
+                    // the host takes its input; a refusal that lasts is a real one.
+                    let refusalEnds = refusedUntil ?? ContinuousClock.now + inputGrace
+                    refusedUntil = refusalEnds
+                    guard ContinuousClock.now < min(refusalEnds, deadline) else { throw MultiplayerError.Forbidden(message: message) }
+                }
+            }
+            guard ContinuousClock.now < deadline else {
+                throw WorkspaceError.Unavailable(message: "the agent did not become ready in time")
+            }
             try await Task.sleep(for: .milliseconds(200))
         }
-        guard let agent = daemon.meta[PaneId(pane)]?.agent, case .idle = agent.state else {
-            throw WorkspaceError.Unavailable(message: "the agent did not become ready in time")
-        }
-        _ = try await daemon.workspace.client().prompt(paneId: pane, text: prompt, submit: true)
     }
+
+    /// How long a new agent's input may be refused before the refusal counts.
+    static let inputGrace = Duration.seconds(10)
 
     /// The item's host and pane, read from its id ("host/pane", history "host/a<attention>"):
     /// every Inbox row asks, so it must not rebuild the whole feed.
