@@ -80,6 +80,16 @@ final class HostWindow {
         }
     }
 
+    /// Whether `condition` came true within `timeout`.
+    func waitUntil(timeout: Duration, _ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
     func pump(_ seconds: Double) async {
         try? await Task.sleep(for: .seconds(seconds))
     }

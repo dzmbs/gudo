@@ -55,9 +55,7 @@ final class HostsScreenTests: XCTestCase {
     func testRenameFromTheRowsMenu() async throws {
         let window = try XCTUnwrap(window), hostId = try XCTUnwrap(hostId)
         _ = try await window.waitForElement(row)
-        menus.choice = ["Rename…"]
-
-        try await window.click(row, button: .right)
+        try await choose("Rename…")
 
         let alert = try await waitForAlert()
         let field = try XCTUnwrap(HostWindow.descendant(of: alert.contentView) { $0 is NSTextField && ($0 as? NSTextField)?.isEditable == true } as? NSTextField)
@@ -75,9 +73,7 @@ final class HostsScreenTests: XCTestCase {
     func testRemoveAsksFirstThenForgetsTheHost() async throws {
         let window = try XCTUnwrap(window), hostId = try XCTUnwrap(hostId)
         _ = try await window.waitForElement(row)
-        menus.choice = ["Remove Host…"]
-
-        try await window.click(row, button: .right)
+        try await choose("Remove Host…")
 
         let confirm = try await window.waitForElement("confirm-removeHost", inSheet: true)
         XCTAssertNotNil(AppModel.shared.hosts.record(hostId), "nothing is removed before the answer")
@@ -91,9 +87,7 @@ final class HostsScreenTests: XCTestCase {
     func testADisconnectedHostSaysWhenItWasLastUsed() async throws {
         let window = try XCTUnwrap(window), hostId = try XCTUnwrap(hostId)
         try await window.until("connected first", timeout: .seconds(15)) { self.rowWords().contains("Connected") }
-        menus.choice = ["Disconnect"]
-
-        try await window.click(row, button: .right)
+        try await choose("Disconnect")
 
         try await window.until("the link is closed") { AppModel.shared.hosts.connection(hostId)?.status.isLive != true }
         try await window.until("the row says when it was last used") { self.rowWords().contains("Last used") }
@@ -116,6 +110,18 @@ final class HostsScreenTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// Right-clicks the host's row and chooses `title` from its menu. A busy machine can take
+    /// the click before the row is ready for it: the menu is opened again until it shows.
+    private func choose(_ title: String) async throws {
+        let window = try XCTUnwrap(window)
+        for _ in 0..<3 {
+            menus.choice = [title]
+            try await window.click(row, button: .right)
+            if await window.waitUntil(timeout: .seconds(3), { self.menus.chosen == [title] }) { return }
+        }
+        XCTFail("the row's menu offers \(title): opened \(menus.titles), chose \(menus.chosen)")
+    }
 
     private func waitForAlert() async throws -> NSWindow {
         let window = try XCTUnwrap(window)
