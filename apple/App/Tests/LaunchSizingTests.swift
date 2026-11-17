@@ -147,6 +147,10 @@ final class TestDaemon {
         throw XCTSkip("the daemon did not come up")
     }
 
+    func signal(_ signal: Int32) {
+        kill(process.processIdentifier, signal)
+    }
+
     func stop() {
         process.terminate()
         process.waitUntilExit()

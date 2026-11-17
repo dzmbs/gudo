@@ -550,7 +550,7 @@ final class WindowModel {
 
     /// The window's host as the chrome names it: the host's name, or this device.
     var hostName: String {
-        if LaunchOptions.mock { return connectionOverride == nil ? Self.deviceName : "studio" }
+        if LaunchOptions.mock, !(workspace?.host is DaemonConnection) { return connectionOverride == nil ? Self.deviceName : "studio" }
         guard let id = workspace?.hostId else { return showsNoHost ? "No Host" : Self.deviceName }
         return app.hosts.record(id)?.name ?? id
     }
