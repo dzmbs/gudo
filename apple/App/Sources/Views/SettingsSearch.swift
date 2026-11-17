@@ -25,7 +25,7 @@ nonisolated struct SettingsEntry: Identifiable, Hashable, Sendable {
 
 /// The groups of Settings (the iOS form's sections; on the Mac, inside its panes).
 nonisolated enum SettingsSection: String, Sendable {
-    case appearance, tabs, font, cursor, splits, links, browser, keyboard, appLock, passwords, sshKeys, voice, notifications, bell, accounts, agentTools, git, network, devices, thisMac, about
+    case appearance, tabs, font, cursor, splits, links, fileLinks, browser, keyboard, appLock, passwords, sshKeys, voice, notifications, bell, accounts, agentTools, git, network, devices, thisMac, about
 
     var title: String {
         switch self {
@@ -35,6 +35,7 @@ nonisolated enum SettingsSection: String, Sendable {
         case .cursor: "Cursor"
         case .splits: "Splits"
         case .links: "Links"
+        case .fileLinks: "File Links"
         case .browser: "Browser"
         case .keyboard: "Keyboard"
         case .appLock: "App Lock"
@@ -57,7 +58,7 @@ nonisolated enum SettingsSection: String, Sendable {
     var pane: SettingsPane {
         switch self {
         case .appearance, .tabs: .appearance
-        case .font, .cursor, .splits, .links: .terminal
+        case .font, .cursor, .splits, .links, .fileLinks: .terminal
         case .appLock, .passwords, .sshKeys: .privacy
         case .browser: .browser
         case .keyboard, .voice: .keyboard
@@ -94,6 +95,7 @@ enum SettingsIndex {
             .init(id: "cursor-style-blink", title: "Cursor Blink", key: "cursor-style-blink", section: .cursor, synonyms: ["blinking", "caret"]),
             .init(id: "unfocused-split-opacity", title: "Unfocused Pane Opacity", key: "unfocused-split-opacity", section: .splits, synonyms: ["dim", "split", "fade"]),
             .init(id: "resize-overlay", title: "Size Overlay", key: "resize-overlay", section: .splits, synonyms: ["resize", "columns", "rows"]),
+            .init(id: "open-file-links", title: "Open File Links In", section: .fileLinks, synonyms: ["path", "file", "editor", "vs code", "click", "open"]),
             .init(id: "macos-option-as-alt", title: "Option Sends Meta", key: "macos-option-as-alt", section: .keyboard, synonyms: ["alt", "meta", "option", "esc"]),
             .init(id: "app-lock", title: "Require Face ID", section: .appLock, synonyms: ["face id", "touch id", "optic id", "passcode", "password", "lock", "privacy", "security"]),
             .init(id: "app-lock-grace", title: "Lock", section: .appLock, synonyms: ["lock", "background", "timeout", "minutes", "immediately"]),
