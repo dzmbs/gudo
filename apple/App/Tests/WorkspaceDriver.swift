@@ -16,14 +16,16 @@ import XCTest
 /// AppKit gives the first click in an inactive app's window to the window alone.
 @MainActor
 final class WorkspaceDriver {
-    /// Off screen, yet key and shown as far as AppKit and SwiftUI ask it: an occluded window's
-    /// title bar items are never laid out.
+    /// Off screen, yet key and shown as far as AppKit and SwiftUI ask it while open: an occluded
+    /// window's title bar items are never laid out. Closed, it says so, so later tests looking
+    /// for an open window never find it.
     final class OffscreenWindow: NSWindow {
+        var isOpen = true
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-        override var canBecomeKey: Bool { true }
-        override var isKeyWindow: Bool { true }
-        override var occlusionState: NSWindow.OcclusionState { .visible }
-        override var isVisible: Bool { true }
+        override var canBecomeKey: Bool { isOpen }
+        override var isKeyWindow: Bool { isOpen }
+        override var occlusionState: NSWindow.OcclusionState { isOpen ? .visible : [] }
+        override var isVisible: Bool { isOpen }
     }
 
     enum Button { case left, right }
@@ -93,6 +95,7 @@ final class WorkspaceDriver {
     func close() {
         model.isPaletteShown = false
         model.sheet = nil
+        (window as? OffscreenWindow)?.isOpen = false
         window.close()
         model.close()
         AppActivity.pretendActive(false)

@@ -48,6 +48,7 @@ final class SettingsDriver {
     }
 
     func close() {
+        (window as? WorkspaceDriver.OffscreenWindow)?.isOpen = false
         window.close()
         AppActivity.pretendActive(false)
         savedDefaults.restore()
