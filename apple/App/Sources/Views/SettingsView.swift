@@ -9,6 +9,7 @@ import GudoCore
 /// form in a sheet.
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.chromeAccessibility) private var accessibility
     #if os(macOS)
     @State private var navigation: SettingsNavigation
     /// The panes list holds the keyboard as the window opens; the search only once clicked.
@@ -240,11 +241,11 @@ struct SettingsView: View {
         Task { @MainActor in
             // The form (iOS) or the pane (Mac) replaces the results first.
             try? await Task.sleep(for: .milliseconds(150))
-            withAnimation(DS.Motion.standard) { proxy.scrollTo(entry.id, anchor: .center) }
+            withAnimation(accessibility.travel(DS.Motion.standard)) { proxy.scrollTo(entry.id, anchor: .center) }
             highlight = entry.id
             // Once more after the search bar has closed and the form settled.
             try? await Task.sleep(for: .milliseconds(350))
-            withAnimation(DS.Motion.standard) { proxy.scrollTo(entry.id, anchor: .center) }
+            withAnimation(accessibility.travel(DS.Motion.standard)) { proxy.scrollTo(entry.id, anchor: .center) }
             try? await Task.sleep(for: .seconds(1.6))
             if highlight == entry.id { highlight = nil }
             if jump == entry { jump = nil }

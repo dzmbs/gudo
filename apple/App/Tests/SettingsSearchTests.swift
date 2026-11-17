@@ -1,10 +1,11 @@
 #if os(macOS)
 import AppKit
+import DesignSystem
 import XCTest
 @testable import App
 
-/// Every row a search can land on is in the search's index, and every setting is found by its
-/// own title.
+/// Every row a search can land on is in the search's index, every setting is found by its own
+/// title, and a result clicked opens its pane scrolled to the row.
 @MainActor
 final class SettingsSearchTests: XCTestCase {
     private static let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -44,6 +45,23 @@ final class SettingsSearchTests: XCTestCase {
             if let key = entry.key {
                 XCTAssertTrue(SettingsIndex.search(key).contains(entry), "\(entry.title) by its Ghostty key \(key)")
             }
+        }
+    }
+
+    /// Typed in the window's search and clicked: the result's pane opens with its row in sight,
+    /// even a row far below the pane's top. Under Reduce Motion the form jumps there at once
+    /// (a window off screen runs no scrolling animation, so the test takes that path).
+    func testClickingAResultOpensItsPaneScrolledToTheRow() async throws {
+        let settings = try await SettingsDriver.open(SettingsNavigation(pane: .about), accessibility: ChromeAccessibility(reduceMotion: true))
+        defer { settings.close() }
+        await settings.click(settings.searchField)
+        await settings.type("opens with")
+        await settings.expect("one result") { settings.sidebarItems.count == 1 }
+        await settings.click(settings.sidebarItems.first)
+        await settings.expect("Appearance opens") { settings.navigation.pane == .appearance }
+        await settings.expect("scrolled down to Opens With, the last row") {
+            guard let form = settings.form else { return false }
+            return form.contentView.bounds.minY + form.contentInsets.top > 100
         }
     }
 }

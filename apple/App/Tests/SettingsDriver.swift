@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import DesignSystem
 import SwiftUI
 import XCTest
 @testable import App
@@ -23,7 +24,8 @@ final class SettingsDriver {
     }
 
     static func open(
-        _ navigation: SettingsNavigation = SettingsNavigation(), size: CGSize = defaultSize
+        _ navigation: SettingsNavigation = SettingsNavigation(), size: CGSize = defaultSize,
+        accessibility: ChromeAccessibility? = nil
     ) async throws -> SettingsDriver {
         try XCTSkipUnless(LaunchOptions.mock, "needs the mock hosts (TEST_RUNNER_GUDO_MOCK=1)")
         let savedDefaults = SavedDefaults()
@@ -33,7 +35,8 @@ final class SettingsDriver {
             backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.toolbarStyle = .unified
-        let controller = NSHostingController(rootView: SettingsView(navigation: navigation))
+        let controller = NSHostingController(rootView: SettingsView(navigation: navigation)
+            .environment(\.forcedChromeAccessibility, accessibility))
         controller.sceneBridgingOptions = [.toolbars, .title]
         window.contentViewController = controller
         window.setFrame(frame, display: false)
