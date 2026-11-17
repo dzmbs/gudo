@@ -177,7 +177,12 @@ enum Command {
 #[derive(Subcommand)]
 enum ServiceAction {
     /// Install and start (systemd --user on Linux, a LaunchAgent on macOS).
-    Install,
+    Install {
+        /// Only write (and on Linux enable) the service; the running daemon goes on and the
+        /// service starts it at the next login.
+        #[arg(long)]
+        no_start: bool,
+    },
     /// Stop and remove.
     Uninstall,
     /// Start the daemon as a launchd job that runs until logout, unless one already runs on
@@ -315,7 +320,14 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Service { action } => match action {
-            ServiceAction::Install => service::install(&state_dir),
+            ServiceAction::Install { no_start } => service::install(
+                &state_dir,
+                if no_start {
+                    service::Start::AtNextLogin
+                } else {
+                    service::Start::Now
+                },
+            ),
             ServiceAction::Uninstall => service::uninstall(),
             ServiceAction::Start {
                 json,

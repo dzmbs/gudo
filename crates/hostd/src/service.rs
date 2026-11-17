@@ -100,21 +100,31 @@ fn retire_legacy() -> Result<()> {
     Ok(())
 }
 
+/// Whether installing the service also (re)starts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Start {
+    Now,
+    /// At the next login only: the daemon already running (handed over to this build) goes on.
+    AtNextLogin,
+}
+
 /// Installs and (re)starts the service, replacing one installed under the earlier name.
-pub fn install(state_dir: &Path) -> Result<()> {
-    retire_legacy()?;
-    install_exe(&exe()?, state_dir)
+pub fn install(state_dir: &Path, start: Start) -> Result<()> {
+    if start == Start::Now {
+        retire_legacy()?;
+    }
+    install_exe(&exe()?, state_dir, start)
 }
 
 /// Run by a daemon upgraded in place under the earlier name's service: starts the service
 /// for `exe` (the same build under today's name), then stops the old one, ending this process.
 pub fn hand_over(exe: &Path, state_dir: &Path) -> Result<()> {
-    install_exe(exe, state_dir)?;
+    install_exe(exe, state_dir, Start::Now)?;
     retire_legacy()
 }
 
 #[cfg(target_os = "linux")]
-fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
+fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
     let path = unit_path()?;
     let unit = format!(
         "[Unit]\n\
@@ -137,8 +147,10 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     write_unit(&path, &unit, Path::new("systemctl"))?;
     let unit = format!("{}.service", brand::DAEMON_BIN);
     run(Command::new("systemctl").args(["--user", "enable", &unit]))?;
-    // Restart rather than start, so reinstalling over a new binary (an upgrade) runs it.
-    run(Command::new("systemctl").args(["--user", "restart", &unit]))?;
+    if start == Start::Now {
+        // Restart rather than start, so reinstalling over a new binary (an upgrade) runs it.
+        run(Command::new("systemctl").args(["--user", "restart", &unit]))?;
+    }
     println!("installed {}", path.display());
     println!(
         "To keep it running after you log out (and start it at boot on a server), run once:\n  \
@@ -207,7 +219,7 @@ fn retire_legacy() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
+fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
     let path = plist_path()?;
     let logs = home()?.join("Library/Logs").join(brand::MAC_DIR_NAME);
     std::fs::create_dir_all(&logs)?;
@@ -238,6 +250,10 @@ fn install_exe(exe: &Path, state_dir: &Path) -> Result<()> {
     );
     std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
     std::fs::write(&path, plist)?;
+    if start == Start::AtNextLogin {
+        println!("installed {}; it starts at the next login", path.display());
+        return Ok(());
+    }
     let domain = gui_domain();
     let _ = Command::new("launchctl")
         .args(["bootout", &format!("{domain}/{}", brand::SERVICE_LABEL)])
