@@ -163,6 +163,8 @@ public struct StatusPill: View {
         }
         .font(DS.Font.badge.monospacedDigit())
         .foregroundStyle(state.color)
+        .lineLimit(1)
+        .fixedSize()
         .padding(.horizontal, 7)
         .padding(.vertical, 3)
         .background(DS.Palette.container(state.color), in: .rounded(DS.Radius.chip))
