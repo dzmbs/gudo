@@ -1,5 +1,6 @@
 #if os(macOS)
 import DesignSystem
+import HostKit
 import SwiftUI
 
 /// Settings ▸ This Mac: the helper that gives This Mac files, changes, ports, the editor and
@@ -18,6 +19,21 @@ struct ThisMacSettingsSection: View {
                     Text(status(helper)).foregroundStyle(DS.Palette.textSecondary)
                 }
                 .accessibilityIdentifier("settings-this-mac-status")
+                if helper.isEnabled && helper.state != .off {
+                    LabeledContent {
+                        Text(runningVersion ?? "Unknown").foregroundStyle(DS.Palette.textSecondary)
+                    } label: {
+                        Text("Helper Version")
+                        if let carried = helper.appBuild?.summary {
+                            Text("This app carries \(carried).")
+                        }
+                    }
+                    .accessibilityIdentifier("settings-this-mac-version")
+                    if case .needsRestart = helper.update {
+                        Button("Update Helper") { helper.replaceOlderHelper() }
+                            .accessibilityIdentifier("settings-this-mac-update")
+                    }
+                }
                 Toggle("Keep Sessions Running After You Quit", isOn: $keepsRunning)
                     .disabled(!helper.isEnabled || helper.isIsolated)
                     .onChange(of: keepsRunning) { _, keep in
@@ -78,10 +94,17 @@ struct ThisMacSettingsSection: View {
     private func status(_ helper: LocalHelper) -> String {
         switch helper.state {
         case .off: helper.binary == nil ? "Not included in this build" : "Stopped"
-        case .starting: "Starting…"
-        case .running: "Running"
+        case .starting: helper.update == .updating ? "Updating…" : "Starting…"
+        case .running: if case .needsRestart = helper.update { "Running an older build" } else { "Running" }
         case .failed(let reason): reason
         }
+    }
+
+    /// What the running helper said it is when This Mac connected.
+    private var runningVersion: String? {
+        let hosts = AppModel.shared.hosts
+        guard let id = hosts.thisDeviceId, let info = (hosts.connection(id) as? DaemonConnection)?.daemonInfo else { return nil }
+        return HelperBuild.summary(version: info.version, build: info.build)
     }
 
     private func footer(_ helper: LocalHelper) -> String {

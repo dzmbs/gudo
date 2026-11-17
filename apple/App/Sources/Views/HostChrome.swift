@@ -53,6 +53,11 @@ struct HostNotices: View {
                 } else if let advice = app.hosts.helperAdvice(hostId), advice.kind != .update || !updateDismissed {
                     HelperUpdateNotice(hostId: hostId, advice: advice) { updateDismissed = true }
                 }
+                #if os(macOS)
+                if isThisDevice, let helper = app.localHelper {
+                    ThisMacHelperNotice(helper: helper)
+                }
+                #endif
                 if let notes = app.hosts.installNotes[hostId] {
                     notice(systemImage: "info.circle", tint: DS.Palette.info) {
                         HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
@@ -192,6 +197,54 @@ private struct HelperUpdateNotice: View {
         }
     }
 }
+
+#if os(macOS)
+/// This Mac runs an older helper that cannot hand its sessions over: one button replaces it,
+/// and a quiet toast says when This Mac moved onto the app's helper.
+private struct ThisMacHelperNotice: View {
+    let helper: LocalHelper
+    @Environment(WindowModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            switch helper.update {
+            case .needsRestart(let failure):
+                HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(DS.Palette.error)
+                    Text(failure ?? "This Mac runs an older helper. Updating it restarts running commands.")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("this-mac-helper-message")
+                    Button("Update Helper") { helper.replaceOlderHelper() }
+                        .buttonStyle(.primaryGlass)
+                        .controlSize(.small)
+                        .accessibilityIdentifier("this-mac-update-helper")
+                }
+                .padding(.horizontal, DS.Space.l)
+                .padding(.vertical, DS.Space.s)
+                .floatingPanel(cornerRadius: DS.Radius.panel)
+                .motionTransition(.toast(from: .top))
+            case .updating:
+                HStack(spacing: DS.Space.s) {
+                    Spinner(color: DS.Palette.working)
+                        .frame(width: 12, height: 12)
+                    Text("Updating helper…")
+                }
+                .padding(.horizontal, DS.Space.l)
+                .padding(.vertical, DS.Space.s)
+                .floatingPanel(cornerRadius: DS.Radius.panel)
+                .motionTransition(.toast(from: .top))
+            case .updated, nil:
+                Color.clear.frame(width: 0, height: 0)
+            }
+        }
+        .onChange(of: helper.updatedCount) {
+            let version = helper.appBuild.map { " \($0.version)" } ?? ""
+            model.toasts.show(Toast("This Mac runs helper\(version)", systemImage: "checkmark.circle.fill", style: .success))
+        }
+    }
+}
+#endif
 
 /// A pane whose host link dropped keeps its last content. The window-wide reconnect card dims the
 /// tab; this marks the pane for VoiceOver and tests, and when only this pane is stale (the host is
