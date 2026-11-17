@@ -213,6 +213,17 @@ struct InboxUsageStrip: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DS.Palette.base)
                 .overlay(alignment: .top) { Hairline() }
+                // Rows fade out on their way under the strip rather than end in a cut line.
+                .background(alignment: .top) {
+                    Rectangle()
+                        .fill(DS.Palette.base)
+                        // Solid for its last quarter, so nothing of a cut glyph shows by the rule.
+                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.75)], startPoint: .top, endPoint: .bottom)) // style-exempt: a mask, only its alpha counts
+                        .frame(height: DS.Space.xxl)
+                        .offset(y: -DS.Space.xxl)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("inbox-usage")
             }
