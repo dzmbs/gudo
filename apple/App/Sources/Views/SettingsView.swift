@@ -309,8 +309,8 @@ struct SettingsMenuItem: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Settings…") { openWindow(id: SettingsWindow.id) }
-            .keyboardShortcut(",", modifiers: .command)
+        Button(MenuCommand.settings.title) { openWindow(id: SettingsWindow.id) }
+            .keyboardShortcut(MenuCommand.settings.shortcut)
     }
 }
 #endif

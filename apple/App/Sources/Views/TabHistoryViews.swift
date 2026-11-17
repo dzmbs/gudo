@@ -222,8 +222,8 @@ struct HistoryMenuItems: View {
                 }
             }
         }
-        Button("Show All Recently Closed…") { model?.showRecentlyClosed() }
-            .keyboardShortcut("y")
+        Button(MenuCommand.showAllRecentlyClosed.title) { model?.showRecentlyClosed() }
+            .keyboardShortcut(MenuCommand.showAllRecentlyClosed.shortcut)
             .disabled(model?.recentlyClosed.tabs.isEmpty ?? true)
     }
 }

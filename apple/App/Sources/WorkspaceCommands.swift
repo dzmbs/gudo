@@ -32,13 +32,11 @@ struct WorkspaceCommands: Commands {
         #else
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
-        }
-        // In place of the system's Close, which closes nothing a tab holds and has no key.
-        CommandGroup(replacing: .saveItem) {
-            Button("Close Tab") { model?.closeCurrentTab() }
-                .keyboardShortcut("w", modifiers: [.command, .option])
-            Button("Close Window") { NSApp.keyWindow?.performClose(nil) }
-                .keyboardShortcut("w", modifiers: [.command, .shift])
+            // After Close Pane: a window without documents has no Save group to take the place of.
+            Button(MenuCommand.closeTab.title) { model?.closeCurrentTab() }
+                .keyboardShortcut(MenuCommand.closeTab.shortcut)
+            Button(MenuCommand.closeWindow.title) { NSApp.keyWindow?.performClose(nil) }
+                .keyboardShortcut(MenuCommand.closeWindow.shortcut)
         }
         CommandGroup(after: .appInfo) {
             CheckForUpdatesButton(updater: AppUpdater.shared)
@@ -73,7 +71,7 @@ struct WorkspaceCommands: Commands {
             Button("Open in New Window") {
                 if let model, let tool = model.focusedToolLeaf { model.moveToolToWindow(tool) }
             }
-                .keyboardShortcut(ToolMember.Tool.newWindowShortcut)
+                .keyboardShortcut(MenuCommand.openToolInNewWindow.shortcut)
                 .disabled(model?.focusedToolLeaf == nil || model?.hasToolWindows != true)
             #endif
         }
@@ -111,13 +109,13 @@ struct WorkspaceCommands: Commands {
             HistoryMenuItems(model: model)
         }
         CommandMenu("Git") {
-            Button("Run Script") { model?.git.runDefault() }
-                .keyboardShortcut("r")
+            Button(MenuCommand.runScript.title) { model?.git.runDefault() }
+                .keyboardShortcut(MenuCommand.runScript.shortcut)
                 // Sheets and tool leaves with their own ⌘R (Diff, Browser reload) keep it.
                 .disabled(editorHasKeys || model?.sheet != nil || model?.activeMixed?.focusedTool != nil)
             Divider()
-            Button("Open Pull Request on GitHub") { model?.git.openOnGitHub() }
-                .keyboardShortcut("g", modifiers: [.command, .control])
+            Button(MenuCommand.openPullRequest.title) { model?.git.openOnGitHub() }
+                .keyboardShortcut(MenuCommand.openPullRequest.shortcut)
                 .disabled(editorHasKeys)
             Button("Merge Pull Request…") { model?.git.requestMerge() }
             Button("Re-run Failed Checks") { model?.git.rerunFailed() }
@@ -160,6 +158,45 @@ struct WorkspaceCommands: Commands {
                 .keyboardShortcut(action.shortcut)
                 .disabled(editorHasKeys && !action.passesEditor)
         }
+    }
+}
+
+/// The menu commands with a key that are not `WorkspaceAction`s, named once for the menus and
+/// Keyboard Shortcuts.
+enum MenuCommand: CaseIterable {
+    case closeTab, closeWindow, settings, runScript, openPullRequest, showAllRecentlyClosed, openToolInNewWindow
+
+    var title: String {
+        switch self {
+        case .closeTab: "Close Tab"
+        case .closeWindow: "Close Window"
+        case .settings: "Settings…"
+        case .runScript: "Run Script"
+        case .openPullRequest: "Open Pull Request on GitHub"
+        case .showAllRecentlyClosed: "Show All Recently Closed…"
+        case .openToolInNewWindow: "Open in New Window"
+        }
+    }
+
+    var shortcut: KeyboardShortcut {
+        switch self {
+        case .closeTab: KeyboardShortcut("w", modifiers: [.command, .option])
+        case .closeWindow: KeyboardShortcut("w", modifiers: [.command, .shift])
+        case .settings: KeyboardShortcut(",", modifiers: .command)
+        case .runScript: KeyboardShortcut("r")
+        case .openPullRequest: KeyboardShortcut("g", modifiers: [.command, .control])
+        case .showAllRecentlyClosed: KeyboardShortcut("y")
+        case .openToolInNewWindow: ToolMember.Tool.newWindowShortcut
+        }
+    }
+
+    /// The commands this platform's menus hold.
+    static var available: [MenuCommand] {
+        #if os(macOS)
+        allCases
+        #else
+        [.settings, .runScript, .openPullRequest, .showAllRecentlyClosed]
+        #endif
     }
 }
 

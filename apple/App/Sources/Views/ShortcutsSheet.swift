@@ -7,37 +7,61 @@ struct ShortcutsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
-    private var sections: [(String, [WorkspaceAction])] {
+    /// One listed command and every key that runs it.
+    struct Entry {
+        let title: String
+        let shortcuts: [KeyboardShortcut]
+
+        init(_ action: WorkspaceAction) {
+            title = action.title
+            shortcuts = action.shortcuts
+        }
+
+        init(_ command: MenuCommand) {
+            title = command.title
+            shortcuts = [command.shortcut]
+        }
+    }
+
+    /// Every command with a key, in the menus' groups: the app's actions and the menus' own.
+    static var sections: [(title: String, entries: [Entry])] {
         let agents: [WorkspaceAction] = [.newAgent, .inbox, .jumpToWaitingAgent]
+        let window = WorkspaceAction.windowActions.filter { !agents.contains($0) } + (WindowRequest.isSupported ? [.newWindow] : [])
+        func menu(_ commands: [MenuCommand]) -> [Entry] {
+            commands.filter(MenuCommand.available.contains).map(Entry.init)
+        }
         return [
-            ("Agents", agents),
-            ("Window", WorkspaceAction.windowActions.filter { !agents.contains($0) } + (WindowRequest.isSupported ? [.newWindow] : [])),
-            ("Tabs", [.newTab, .newTabOnHost] + WorkspaceAction.tabActions),
-            ("Hosts", WorkspaceAction.hostActions),
-            ("Panes", [.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions),
-            ("Floating Windows", WorkspaceAction.floatActions),
-            ("Drawing", WorkspaceAction.drawActions),
-            ("Browser", WorkspaceAction.browserActions),
-            ("Font", WorkspaceAction.fontActions),
+            ("Agents", agents.map(Entry.init)),
+            ("Window", window.map(Entry.init) + menu([.closeWindow, .settings])),
+            ("Tabs", ([.newTab, .newTabOnHost, .newProject] + WorkspaceAction.tabActions + WorkspaceAction.historyActions).map(Entry.init)
+                + menu([.closeTab, .showAllRecentlyClosed])),
+            ("Hosts", WorkspaceAction.hostActions.map(Entry.init)),
+            ("Panes", ([.splitRight, .splitDown, .splitWithHost, .closePane] + WorkspaceAction.paneActions).map(Entry.init)
+                + menu([.openToolInNewWindow])),
+            ("Floating Windows", WorkspaceAction.floatActions.map(Entry.init)),
+            ("Drawing", WorkspaceAction.drawActions.map(Entry.init)),
+            ("Browser", WorkspaceAction.browserActions.map(Entry.init)),
+            ("Font", WorkspaceAction.fontActions.map(Entry.init)),
+            ("Git", menu([.runScript, .openPullRequest])),
         ]
     }
 
-    /// One row per action name, with every key that runs it (⌘K and ⇧⌘P are one Command Palette).
-    static func rows(_ actions: [WorkspaceAction]) -> [(title: String, keys: [[String]])] {
+    /// One row per name, with every key that runs it (⌘K and ⇧⌘P are one Command Palette).
+    static func rows(_ entries: [Entry]) -> [(title: String, keys: [[String]])] {
         var rows: [(title: String, keys: [[String]])] = []
-        for action in actions {
-            let keys = action.shortcuts.map(\.symbols)
-            if let index = rows.firstIndex(where: { $0.title == action.title }) {
+        for entry in entries {
+            let keys = entry.shortcuts.map(\.symbols)
+            if let index = rows.firstIndex(where: { $0.title == entry.title }) {
                 for key in keys where !rows[index].keys.contains(key) { rows[index].keys.append(key) }
             } else {
-                rows.append((action.title, keys))
+                rows.append((entry.title, keys))
             }
         }
         return rows
     }
 
-    private func matches(_ action: WorkspaceAction) -> Bool {
-        query.isEmpty || action.title.localizedCaseInsensitiveContains(query)
+    private func matches(_ entry: Entry) -> Bool {
+        query.isEmpty || entry.title.localizedCaseInsensitiveContains(query)
     }
 
     var body: some View {
@@ -71,8 +95,8 @@ struct ShortcutsSheet: View {
 
     private var list: some View {
         GroupedList {
-            ForEach(sections, id: \.0) { title, actions in
-                let shown = Self.rows(actions.filter(matches))
+            ForEach(Self.sections, id: \.title) { title, entries in
+                let shown = Self.rows(entries.filter(matches))
                 if !shown.isEmpty {
                     Section {
                         ForEach(shown, id: \.title) { row in
