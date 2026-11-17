@@ -515,12 +515,24 @@ fn build_stamp() -> Result<(String, u64)> {
     }
 }
 
+/// Helpers report the product version (`brand::VERSION`, from `MARKETING_VERSION`), which the
+/// apps show and compare, so a helper build never reports 0.0.0.
+fn ensure_product_version() -> Result<()> {
+    ensure!(
+        brand::VERSION != "0.0.0" && !brand::VERSION.is_empty(),
+        "no product version: set MARKETING_VERSION in apple/project.yml or GUDO_VERSION"
+    );
+    eprintln!("==> version {}", brand::VERSION);
+    Ok(())
+}
+
 fn build_hostd_linux() -> Result<()> {
     let out_dir = root()
         .join("apple/build/hostd")
         .join(brand::BUILD_DIRECTORY);
     fs::create_dir_all(&out_dir)?;
     let (build_id, built_unix) = build_stamp()?;
+    ensure_product_version()?;
     eprintln!("==> build {build_id} ({built_unix})");
     let mut manifest = Vec::new();
     for arch in ["aarch64", "x86_64"] {
@@ -575,6 +587,7 @@ fn build_hostd_macos() -> Result<()> {
         .join(brand::BUILD_DIRECTORY);
     fs::create_dir_all(&out_dir)?;
     let (build_id, built_unix) = build_stamp()?;
+    ensure_product_version()?;
     eprintln!("==> cargo build {} ({build_id})", MACOS.target);
     run(cargo()
         .args([
