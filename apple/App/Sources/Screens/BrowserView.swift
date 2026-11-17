@@ -74,6 +74,7 @@ struct BrowserView: View {
     /// Keeps the start page hidden until the requested page loads or fails.
     @State private var leavingStart = false
     @State private var isFieldHovered = false
+    @State private var barWidth: CGFloat = 0
     @FocusState private var isEditing: Bool
     @Environment(\.openURL) private var openURL
     #if os(iOS)
@@ -238,21 +239,7 @@ struct BrowserView: View {
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal, DS.Space.xs)
-            if let onPointOut {
-                Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
-                    .help("Point Out to Agent")
-                    .accessibilityIdentifier("browser-point-out")
-            }
-            if let onReplays {
-                Button("Replays", systemImage: "play.rectangle.on.rectangle", action: onReplays)
-                    .help("Replays")
-                    .accessibilityIdentifier("browser-replays")
-            }
-            if let onNewTab {
-                Button("New Browser Tab", systemImage: "plus", action: onNewTab)
-                    .help("New Browser Tab")
-                    .accessibilityIdentifier("browser-new-tab")
-            }
+            if !isBarNarrow { pageActions }
             moreMenu
             if let onClose {
                 Button("Close Page", systemImage: "xmark", action: onClose)
@@ -264,12 +251,41 @@ struct BrowserView: View {
         .labelStyle(.iconOnly)
         .padding(.horizontal, DS.Space.s)
         .frame(height: DS.Size.tabBar)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidth = $0 }
         .background(DS.Palette.base)
         .overlay(alignment: .bottom) { Hairline() }
     }
 
+    /// Narrower than this (a page in a narrow leaf), Point Out, Replays and New Browser Tab
+    /// move into More, so the address keeps room to be read.
+    private static let fullBarWidth: CGFloat = 480
+
+    private var isBarNarrow: Bool { barWidth > 0 && barWidth < Self.fullBarWidth }
+
+    @ViewBuilder private var pageActions: some View {
+        if let onPointOut {
+            Button("Point Out to Agent", systemImage: "hand.point.up.left", action: onPointOut)
+                .help("Point Out to Agent")
+                .accessibilityIdentifier("browser-point-out")
+        }
+        if let onReplays {
+            Button("Replays", systemImage: "play.rectangle.on.rectangle", action: onReplays)
+                .help("Replays")
+                .accessibilityIdentifier("browser-replays")
+        }
+        if let onNewTab {
+            Button("New Browser Tab", systemImage: "plus", action: onNewTab)
+                .help("New Browser Tab")
+                .accessibilityIdentifier("browser-new-tab")
+        }
+    }
+
     private var moreMenu: some View {
         Menu("More", systemImage: "ellipsis") {
+            if isBarNarrow {
+                pageActions
+                Divider()
+            }
             if let url = page.url, !isBlank {
                 ShareLink(item: url)
                 Button("Copy Address", systemImage: "doc.on.doc") { FilesPasteboard.copy(url.absoluteString) }

@@ -279,6 +279,14 @@ final class ToolPanesHostTests: XCTestCase {
         try await driver.click(at: center(of: buttons[buttons.count - 4]))
         try await until("Replays opens beside the page") { model.activeMixed?.focusedTool?.tool == .replays }
         _ = try await shown("Fixture Two")
+
+        // Between the terminal and the replay the page's bar is narrow: its own buttons move
+        // into More (tried last), and the address stays readable.
+        try await until("the bar keeps Back, Forward, Reload, More and Close") { try self.barButtons().count == 5 }
+        let field = try await addressField()
+        let address = try await shown("localhost")
+        XCTAssertTrue(field.convert(field.bounds, to: nil).contains(center(of: address)), "the address is read in its field")
+
         _ = try await shown("Open")
         _ = try await shown("Click")
 
@@ -298,6 +306,12 @@ final class ToolPanesHostTests: XCTestCase {
         try await until("→ goes to the click") { try self.isHighlighted(click) && !self.isHighlighted(open) }
         try await driver.press(KeyboardShortcut(.leftArrow, modifiers: []))
         try await until("← back to the start") { try self.isHighlighted(open) && !self.isHighlighted(click) }
+
+        // The narrow bar's More holds the page's own buttons.
+        driver.menus.choice = ["New Browser Tab"]
+        try await driver.click(at: center(of: try barButtons()[3]))
+        XCTAssertEqual(driver.menus.chosen, ["New Browser Tab"], "More: \(driver.menus.last)")
+        try await until("the menu's New Browser Tab opens a page") { model.activeMixed?.isBrowserOnly == true }
     }
 
     // MARK: Helpers
