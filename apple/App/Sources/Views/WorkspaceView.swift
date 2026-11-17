@@ -1048,12 +1048,10 @@ struct LazyMenuButton<Items: View>: View {
     }
 
     private func open() {
-        // NSMenu raises for a view in no window, and the raise unwinds through SwiftUI's own
-        // handling of the click.
         guard let view = [anchor.view, toolbarItemView].compactMap({ $0 }).first(where: { $0.window != nil }) else { return }
         let menu = Self.menu(of: items(), in: environment)
         let below = view.isFlipped ? view.bounds.maxY + DS.Space.xs : view.bounds.minY - DS.Space.xs
-        menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.minX, y: below), in: view)
+        menu.popUpIfShown(at: NSPoint(x: view.bounds.minX, y: below), in: view)
     }
 
     static func menu(of items: Items, in environment: EnvironmentValues) -> NSMenu {

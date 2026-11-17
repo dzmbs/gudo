@@ -521,7 +521,7 @@ extension PaneDrawing {
             if let title = section.title { popup.addItem(.sectionHeader(title: title)) }
             entries.forEach(popup.addItem)
         }
-        popup.popUp(positioning: nil, at: point, in: view)
+        popup.popUpIfShown(at: point, in: view)
     }
 
     /// Fetched as the menu opens; picking a version restores it.

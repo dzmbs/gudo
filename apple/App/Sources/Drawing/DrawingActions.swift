@@ -289,7 +289,7 @@ extension PaneDrawing {
         sheet.popoverPresentationController?.sourceRect = anchor
         presenter.present(sheet, animated: true)
         #else
-        guard let view = pane?.view else { return false }
+        guard let view = pane?.view, view.window != nil else { return false }
         NSSharingServicePicker(items: [file]).show(relativeTo: anchor, of: view, preferredEdge: .minY)
         #endif
         return true
