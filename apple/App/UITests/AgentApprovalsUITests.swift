@@ -67,15 +67,16 @@ final class AgentApprovalsUITests: XCTestCase {
     /// New Agent with `prompt` (no worktree); waits for the agent's own tab.
     private func startAgent(_ prompt: String) {
         palette("New Agent")
-        let field = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
-        field.typeText(prompt)
+        // The worktree's name and branch rows go with it, bringing the prompt into view.
         let worktree = app.switches["task-worktree"].firstMatch
         XCTAssertTrue(worktree.waitForExistence(timeout: 5))
         if worktree.value as? String == "1" {
             worktree.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         }
+        let field = app.descendants(matching: .any).matching(identifier: "launch-prompt").firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText(prompt)
         let before = panes.allElementsBoundByIndex.map(\.identifier)
         element("launch-start").tap()
         XCTAssertTrue(field.waitForNonExistence(timeout: 20))
