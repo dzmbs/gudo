@@ -36,17 +36,32 @@ final class SettingsWindowTests: XCTestCase {
         XCTAssertFalse(window.firstResponder is NSText, "the search field took the keyboard as Settings opened: \(String(describing: window.firstResponder))")
     }
 
-    /// A click or a key still puts the keyboard in the search.
+    /// A click or a key in the Settings window still puts the keyboard in the search; the key
+    /// that opened Settings from another window does not.
     func testOnlyTheUsersClickOrKeyFocusesTheSearch() throws {
+        let settings = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        let terminal = NSWindow(contentRect: NSRect(x: -30000, y: -30000, width: 200, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        settings.isReleasedWhenClosed = false
+        terminal.isReleasedWhenClosed = false
+        settings.orderFrontRegardless()
+        terminal.orderFrontRegardless()
+        defer {
+            settings.close()
+            terminal.close()
+        }
+        func key(_ type: NSEvent.EventType, in window: NSWindow, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: type, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48))
+        }
         let click = try XCTUnwrap(NSEvent.mouseEvent(
-            with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            with: .leftMouseDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: settings.windowNumber, context: nil,
             eventNumber: 0, clickCount: 1, pressure: 1))
-        let key = try XCTUnwrap(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0, windowNumber: 0, context: nil,
-            characters: "f", charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3))
-        XCTAssertTrue(SettingsView.isUserEvent(click))
-        XCTAssertTrue(SettingsView.isUserEvent(key))
-        XCTAssertFalse(SettingsView.isUserEvent(nil), "a window settling its keyboard")
+        XCTAssertTrue(SettingsView.isUserEvent(click, in: settings))
+        XCTAssertTrue(SettingsView.isUserEvent(try key(.keyDown, in: settings), in: settings))
+        XCTAssertTrue(SettingsView.isUserEvent(try key(.keyUp, in: settings), in: settings), "Tab's release, current as focus moves")
+        XCTAssertFalse(SettingsView.isUserEvent(try key(.keyDown, in: terminal, modifiers: .command), in: settings), "⌘, typed in a terminal")
+        XCTAssertFalse(SettingsView.isUserEvent(nil, in: settings), "a window settling its keyboard")
     }
 }
 #endif

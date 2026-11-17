@@ -26,6 +26,8 @@ enum WorkspaceShortcuts {
     private static func handle(_ event: NSEvent) -> Bool {
         if selectionKey(event) { return true }
         guard event.modifierFlags.contains(.command), let window = NSApp.keyWindow, window.attachedSheet == nil else { return false }
+        // Settings' keys are its own and the menus': never the terminal window's behind it.
+        if window === SettingsWindow.window { return false }
         // A VS Code pane has the keyboard: only the shortcuts that lead back out are the app's,
         // taken before the page could (the workbench would claim ⌘1 and ⌘W for itself).
         if let model = ActiveWindow.model(editingIn: window) {

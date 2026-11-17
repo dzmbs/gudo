@@ -31,13 +31,18 @@ struct SettingsView: View {
     @State private var highlight: String?
     @State private var jump: SettingsEntry?
     #if os(macOS)
+    /// The result ↑ and ↓ have picked and Return opens.
+    @State private var pickedResult = 0
+    @State private var window = SettingsWindowHandle()
     private static let sidebarWidth: CGFloat = 220
 
-    /// Whether `event` is the user's own click or key, rather than AppKit settling a new window.
-    static func isUserEvent(_ event: NSEvent?) -> Bool {
-        switch event?.type {
-        case .leftMouseDown, .leftMouseUp, .keyDown: true
-        default: false
+    /// Whether `event` is the user's own click or key in `window`, rather than AppKit settling a
+    /// new window (perhaps while the key that opened it, typed in another window, is current).
+    static func isUserEvent(_ event: NSEvent?, in window: NSWindow?) -> Bool {
+        guard let event, let window, event.window === window else { return false }
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .keyDown, .keyUp: return true
+        default: return false
         }
     }
 
@@ -54,7 +59,7 @@ struct SettingsView: View {
             // then the panes), no toggle; the pane's title in the titlebar over the form.
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
-                    SettingsSearchField(query: $query, focus: $focus)
+                    SettingsSearchField(query: $query, focus: $focus, move: movePick, submit: openPickedResult)
                         .padding(.horizontal, DS.Space.m)
                         .padding(.top, DS.Space.xs)
                         .padding(.bottom, DS.Space.s)
@@ -65,9 +70,9 @@ struct SettingsView: View {
                         // Results replace the panes while searching; the search stays.
                         let results = SettingsIndex.search(query)
                         List {
-                            ForEach(results) { entry in
+                            ForEach(Array(results.enumerated()), id: \.element.id) { index, entry in
                                 Button { jump = entry } label: { SettingsResultRow(entry: entry) }
-                                    .buttonStyle(.plain)
+                                    .buttonStyle(.row(selected: index == pickedResult))
                             }
                         }
                         .overlay { if results.isEmpty { SettingsNoResults(query: query) } }
@@ -103,9 +108,20 @@ struct SettingsView: View {
             }
             .defaultFocus($focus, .panes)
             // AppKit hands a new window's keyboard to its first text field: the search takes it
-            // only from a click or a key.
+            // only from a click or a key in this window.
             .onChange(of: focus) { _, focused in
-                if focused == .search, !Self.isUserEvent(NSApp.currentEvent) { focus = .panes }
+                // The field takes the keyboard in steps; ⌘F's request holds for all of them.
+                if focused == .search, !window.searchWasAsked, !Self.isUserEvent(NSApp.currentEvent, in: window.window) { focus = .panes }
+            }
+            .onChange(of: query) { pickedResult = 0 }
+            .background {
+                HostingWindowReader { found in
+                    window.window = found
+                    if let found { SettingsWindow.window = found }
+                }
+            }
+            .onChange(of: SettingsLink.shared.searchRequests) {
+                window.focusSearchField()
             }
             .onAppear(perform: followLink)
             .onChange(of: SettingsLink.shared.pending) { followLink() }
@@ -174,6 +190,20 @@ struct SettingsView: View {
         path = [page]
         #endif
     }
+
+    #if os(macOS)
+    private func movePick(by offset: Int) {
+        let count = SettingsIndex.search(query).count
+        guard count > 0 else { return }
+        pickedResult = min(max(pickedResult + offset, 0), count - 1)
+    }
+
+    private func openPickedResult() {
+        let results = SettingsIndex.search(query)
+        guard results.indices.contains(pickedResult) else { return }
+        jump = results[pickedResult]
+    }
+    #endif
 
     #if os(iOS)
     private var form: some View {
@@ -273,6 +303,8 @@ final class SettingsLink {
     var pending: SettingsPage?
     /// Bumped to have a window bring the Mac Settings window forward.
     private(set) var openRequests = 0
+    /// Bumped to put the keyboard in the Mac Settings window's search (⌘F).
+    private(set) var searchRequests = 0
 
     func open(_ page: SettingsPage) {
         pending = page
@@ -287,12 +319,42 @@ final class SettingsLink {
     func bringForward() {
         openRequests += 1
     }
+
+    func focusSearch() {
+        searchRequests += 1
+    }
     #endif
 }
 
 #if os(macOS)
 enum SettingsWindow {
     static let id = "settings"
+    /// The Settings window while it is open.
+    static weak var window: NSWindow?
+
+    /// A window command typed while Settings has the keyboard, done in Settings and never in the
+    /// terminal window behind it: closing a pane or a tab closes Settings, Find goes to its
+    /// search (System Settings' ⌘F). False when Settings is not in front or the command is not
+    /// one of these.
+    static func perform(_ action: WorkspaceAction) -> Bool {
+        guard let window, NSApp.keyWindow === window else { return false }
+        switch action {
+        case .closePane:
+            window.performClose(nil)
+        case .find:
+            SettingsLink.shared.focusSearch()
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// Close Tab while Settings has the keyboard closes Settings; false when it is not in front.
+    static func closeIfInFront() -> Bool {
+        guard let window, NSApp.keyWindow === window else { return false }
+        window.performClose(nil)
+        return true
+    }
 }
 
 /// Opens the Settings window when `SettingsLink` asks (only a view can open a window).
@@ -865,6 +927,10 @@ private enum SettingsFocus: Hashable {
 private struct SettingsSearchField: View {
     @Binding var query: String
     var focus: FocusState<SettingsFocus?>.Binding
+    /// ↑ (-1) or ↓ (1) through the results.
+    let move: (Int) -> Void
+    /// Return: open the picked result.
+    let submit: () -> Void
 
     var body: some View {
         HStack(spacing: DS.Space.row) {
@@ -873,6 +939,15 @@ private struct SettingsSearchField: View {
             TextField("Search", text: $query)
                 .textFieldStyle(.plain)
                 .focused(focus, equals: .search)
+                .onSubmit(submit)
+                .onKeyPress(.downArrow) {
+                    move(1)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    move(-1)
+                    return .handled
+                }
                 .onKeyPress(.escape) {
                     query = ""
                     return .handled
@@ -887,6 +962,59 @@ private struct SettingsSearchField: View {
         .padding(.horizontal, DS.Space.s)
         .frame(height: 28)
         .fieldSurface(isFocused: focus.wrappedValue == .search)
+    }
+}
+#endif
+
+#if os(macOS)
+/// The Settings window, held weakly (the window owns the view), and when ⌘F last asked for
+/// its search.
+@MainActor
+final class SettingsWindowHandle {
+    weak var window: NSWindow?
+    private var searchAskedAt: ContinuousClock.Instant?
+
+    /// Whether ⌘F asked for the search a moment ago: the field takes the keyboard in steps, and
+    /// the request holds for all of them.
+    var searchWasAsked: Bool {
+        searchAskedAt.map { ContinuousClock.now - $0 < .seconds(1) } ?? false
+    }
+
+    /// Puts the keyboard in the window's own search field (not a page's toolbar search). Done
+    /// through AppKit: a focus state set from code does not reach a field the window has not
+    /// focused before.
+    func focusSearchField() {
+        guard let window, let root = window.contentView else { return }
+        searchAskedAt = .now
+        func field(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.isEditable, !(field is NSSearchField) { return field }
+            return view.subviews.lazy.compactMap(field(in:)).first
+        }
+        if let field = field(in: root) { window.makeFirstResponder(field) }
+    }
+}
+
+/// Reports the window its view moves into.
+private struct HostingWindowReader: NSViewRepresentable {
+    let found: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> ReaderView { ReaderView(found: found) }
+    func updateNSView(_ view: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        let found: (NSWindow?) -> Void
+
+        init(found: @escaping (NSWindow?) -> Void) {
+            self.found = found
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            found(window)
+        }
     }
 }
 #endif

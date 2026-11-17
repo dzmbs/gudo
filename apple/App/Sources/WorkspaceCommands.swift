@@ -33,7 +33,9 @@ struct WorkspaceCommands: Commands {
         CommandGroup(after: .newItem) {
             buttons(WorkspaceAction.fileActions)
             // After Close Pane: a window without documents has no Save group to take the place of.
-            Button(MenuCommand.closeTab.title) { model?.closeCurrentTab() }
+            Button(MenuCommand.closeTab.title) {
+                if !SettingsWindow.closeIfInFront() { model?.closeCurrentTab() }
+            }
                 .keyboardShortcut(MenuCommand.closeTab.shortcut)
             Button(MenuCommand.closeWindow.title) { NSApp.keyWindow?.performClose(nil) }
                 .keyboardShortcut(MenuCommand.closeWindow.shortcut)
@@ -149,6 +151,9 @@ struct WorkspaceCommands: Commands {
     private func buttons(_ actions: [WorkspaceAction]) -> some View {
         ForEach(actions, id: \.self) { action in
             Button(action.title) {
+                #if os(macOS)
+                if SettingsWindow.perform(action) { return }
+                #endif
                 if let workspace {
                     action.perform(on: workspace, window: model ?? ActiveWindow.model(for: workspace))
                 } else if let model, let workspace = model.workspace {
