@@ -985,7 +985,8 @@ final class SettingsWindowHandle {
     /// through AppKit: a focus state set from code does not reach a field the window has not
     /// focused before.
     func focusSearchField() {
-        guard let window, let root = window.contentView else { return }
+        // A closed Settings window would take the field editor its fields share.
+        guard let window, window.isVisible, let root = window.contentView else { return }
         searchAskedAt = .now
         func field(in view: NSView) -> NSTextField? {
             if let field = view as? NSTextField, field.isEditable, !(field is NSSearchField) { return field }
