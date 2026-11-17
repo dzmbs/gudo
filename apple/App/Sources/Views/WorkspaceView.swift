@@ -445,7 +445,8 @@ struct NewTabButton: View {
     var body: some View {
         if canOpen {
             #if os(macOS)
-            LazyMenuButton("New", systemImage: "plus") { newItems }
+            // Only in the tab strip on the Mac.
+            LazyMenuButton("New", systemImage: "plus", placement: .content) { newItems }
                 .help("New Terminal (⌘T) or New Agent (⇧⌘N)")
                 .accessibilityIdentifier("new-tab")
             #else
@@ -1022,29 +1023,47 @@ struct TitleBarHosted<Content: View>: NSViewRepresentable {
 /// changes: for the pane menu, which names the other tabs, and the + menu in the tab strip, on
 /// every tab switch. An empty menu stays one stable item, and its menu is current when it opens.
 struct LazyMenuButton<Items: View>: View {
+    /// A bar's item draws a menu button as a control of its own, its label's views out of any
+    /// window. In a view's own content, such as the tab strip's hosting view, a menu button is
+    /// drawn the same way, so there it is a plain button whose label stays in the window.
+    enum Placement {
+        case barItem, content
+    }
+
     let title: String
     let systemImage: String
+    let placement: Placement
     @ViewBuilder let items: () -> Items
     @Environment(\.self) private var environment
     @State private var anchor = MenuAnchor()
 
-    init(_ title: String, systemImage: String, @ViewBuilder items: @escaping () -> Items) {
+    init(_ title: String, systemImage: String, placement: Placement = .barItem, @ViewBuilder items: @escaping () -> Items) {
         self.title = title
         self.systemImage = systemImage
+        self.placement = placement
         self.items = items
     }
 
     var body: some View {
-        // A menu of its own with nothing in it draws and reads exactly as the menu did.
-        Menu {
-        } label: {
-            Label(title, systemImage: systemImage)
-                .labelStyle(.iconOnly)
-                .background(MenuAnchorView(anchor: anchor))
-        } primaryAction: {
-            open()
+        switch placement {
+        case .barItem:
+            // A menu of its own with nothing in it draws and reads exactly as the menu did.
+            Menu {
+            } label: {
+                label
+            } primaryAction: {
+                open()
+            }
+            .menuIndicator(.hidden)
+        case .content:
+            Button(action: open) { label }
         }
-        .menuIndicator(.hidden)
+    }
+
+    private var label: some View {
+        Label(title, systemImage: systemImage)
+            .labelStyle(.iconOnly)
+            .background(MenuAnchorView(anchor: anchor))
     }
 
     private func open() {
