@@ -403,7 +403,8 @@ struct InboxView: View {
         let rows = order(feed.items.filter(filter.includes)).filter { $0.id != item.id }
         let all = order(feed.items.filter(filter.includes))
         let index = all.firstIndex { $0.id == item.id } ?? 0
-        focused = rows.indices.contains(index) ? rows[index].id : rows.last?.id
+        // With no other row the keyboard stays on this agent, in the section it moves to.
+        focused = rows.indices.contains(index) ? rows[index].id : rows.last?.id ?? item.id
     }
 
     private func open(_ item: AgentItem) {
