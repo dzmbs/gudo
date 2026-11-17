@@ -79,6 +79,9 @@ final class PaneSearchFocusTests: XCTestCase {
     }
 
     func testClickingAnotherSplitWithTheBarOpenTypesIntoThatPane() async throws {
+        #if os(iOS)
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .phone, "a phone shows one pane of a split")
+        #endif
         let workspace = try XCTUnwrap(model.workspace)
         let first = try terminalView()
         WorkspaceAction.splitRight.perform(on: workspace, window: model)
