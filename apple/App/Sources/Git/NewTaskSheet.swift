@@ -434,7 +434,7 @@ private struct RunnerPicker: View {
     }
 }
 
-private enum LaunchStatus: Equatable {
+private enum LaunchStatus: Hashable {
     case noHost
     case shell
     case checking(AgentKind)
@@ -449,6 +449,16 @@ private enum LaunchStatus: Equatable {
         case .shell, .checking, .ready: true
         }
     }
+
+    /// The other states the host's answer can turn this one into.
+    var otherAnswers: [LaunchStatus] {
+        switch self {
+        case .checking(let agent), .ready(let agent, _), .offPath(let agent, _), .missing(let agent):
+            [.checking(agent), .ready(agent, path: nil), .offPath(agent, path: ""), .missing(agent)].filter { $0 != self }
+        case .noHost, .shell:
+            []
+        }
+    }
 }
 
 /// The same height in every state, so the host's answer never moves the form.
@@ -459,6 +469,19 @@ private struct LaunchStatusRow: View {
     let onInstall: (String) -> Void
 
     var body: some View {
+        // Each answer's row laid out unseen: the tallest holds the height, so a title that wraps
+        // beside a button once the host answers never moves the form.
+        ZStack(alignment: .topLeading) {
+            ForEach(status.otherAnswers, id: \.self) { answer in
+                LaunchStatusRow(status: answer, hostName: hostName, guide: guide, onInstall: { _ in }).row
+                    .hidden()
+                    .accessibilityHidden(true)
+            }
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: DS.Space.m) {
             icon
                 .frame(width: 20, height: 20)
