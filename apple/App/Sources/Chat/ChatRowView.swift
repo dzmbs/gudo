@@ -332,8 +332,12 @@ struct ChatRowView: View {
         }
         return Button(action: toggle) {
             HStack(spacing: DS.Space.xs) {
-                Text(verbatim: ChatToolGroups.actions(tools)).foregroundStyle(DS.Palette.textSecondary)
-                    .lineLimit(1).truncationMode(.tail)
+                ViewThatFits(in: .horizontal) {
+                    ForEach(ChatToolGroups.shortenedActions(tools), id: \.self) { actions in
+                        Text(verbatim: actions).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                .foregroundStyle(DS.Palette.textSecondary)
                 if let outcome = ChatToolGroups.outcome(tools) {
                     Text(verbatim: "(" + outcome + ")").foregroundStyle(DS.Palette.error)
                         .lineLimit(1).fixedSize()

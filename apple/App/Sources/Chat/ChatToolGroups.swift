@@ -55,6 +55,21 @@ nonisolated enum ChatToolGroups {
 
     /// What the calls did, "Ran 3 commands, read 2 files".
     static func actions(_ tools: [TimelineTool]) -> String {
+        sentence(phrases(tools))
+    }
+
+    /// The actions, then shorter forms for a line too narrow for them: whole phrases dropped from
+    /// the end and the calls they covered counted, "Ran 3 commands, read a file +1".
+    static func shortenedActions(_ tools: [TimelineTool]) -> [String] {
+        let phrases = phrases(tools)
+        guard !phrases.isEmpty else { return [""] }
+        return (1...phrases.count).reversed().map { kept in
+            let left = phrases.dropFirst(kept).reduce(0) { $0 + $1.count }
+            return sentence(phrases.prefix(kept)) + (left > 0 ? " +\(left)" : "")
+        }
+    }
+
+    private static func phrases(_ tools: [TimelineTool]) -> [(phrase: Phrase, count: Int)] {
         var order: [Phrase] = []
         var counts: [Phrase: Int] = [:]
         for tool in tools {
@@ -62,7 +77,11 @@ nonisolated enum ChatToolGroups {
             if counts[phrase] == nil { order.append(phrase) }
             counts[phrase, default: 0] += 1
         }
-        let text = order.map { $0.words(counts[$0] ?? 0) }.joined(separator: ", ")
+        return order.map { ($0, counts[$0] ?? 0) }
+    }
+
+    private static func sentence(_ phrases: some Collection<(phrase: Phrase, count: Int)>) -> String {
+        let text = phrases.map { $0.phrase.words($0.count) }.joined(separator: ", ")
         return text.prefix(1).uppercased() + text.dropFirst()
     }
 

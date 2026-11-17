@@ -30,6 +30,19 @@ final class ChatToolGroupsTests: XCTestCase {
         XCTAssertNil(ChatToolGroups.outcome(Array(tools.prefix(1))))
     }
 
+    func testANarrowLineDropsWholePhrasesAndCountsTheCallsItLeavesOut() throws {
+        let tools = try [
+            tool("a", kind: "Shell"), tool("b", kind: "Shell", status: "Failed"), tool("c", kind: "Read"),
+            tool("d", kind: "Shell"), tool("e", kind: "Search"),
+        ].map(toolBody)
+        XCTAssertEqual(ChatToolGroups.shortenedActions(tools), [
+            "Ran 3 commands, read a file, searched once",
+            "Ran 3 commands, read a file +1",
+            "Ran 3 commands +2",
+        ])
+        XCTAssertEqual(ChatToolGroups.shortenedActions(Array(tools.prefix(2))), ["Ran 2 commands"])
+    }
+
     func testExpandingAGroupShowsEveryCallUnderItsLine() throws {
         let rows = try [tool("a", kind: "Shell"), tool("b", kind: "Search")]
         let identifier = try XCTUnwrap(ChatToolGroups.fold(rows, expanded: []).first?.id)
