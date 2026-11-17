@@ -995,6 +995,13 @@ final class MacSnapshotTests: XCTestCase {
         try await settings("settings-acknowledgements-scrolled", SettingsNavigation(pane: .about, path: [.acknowledgements]), scrolledBy: 260)
     }
 
+    /// Every pane at the size Settings opens at, to check nothing is cut off.
+    func testSettingsPanes() async throws {
+        for pane in SettingsPane.allCases {
+            try await settings("settings-pane-\(pane.rawValue)", SettingsNavigation(pane: pane), size: SettingsDriver.defaultSize)
+        }
+    }
+
     /// Agent accounts: Settings › Agents with the hosts, one host's accounts, and a pane under
     /// the Work account (its header names it; Work is at its limit, so the suggestion shows).
     func testAccounts() async throws {
@@ -1481,9 +1488,12 @@ final class MacSnapshotTests: XCTestCase {
         window.close()
     }
 
-    private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation(), scrolledBy offset: CGFloat = 0) async throws {
+    private func settings(
+        _ name: String, _ navigation: SettingsNavigation = SettingsNavigation(), scrolledBy offset: CGFloat = 0,
+        size: CGSize = CGSize(width: 820, height: 560)
+    ) async throws {
         guard wanted(name) else { return }
-        let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: CGSize(width: 820, height: 560))
+        let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: size)
         // Settings is read in its own key window: its title in full colour.
         (window as? OffscreenWindow)?.looksKey = true
         await pump(1.5)
