@@ -115,6 +115,30 @@ struct HeldInputTests {
         #expect(inputs(client()).isEmpty)
     }
 
+    @Test func aHelperStartedAgainGetsTheInputUnderItsRestoreNoteAndFreshPrompt() async throws {
+        let (connection, client) = try connection()
+        let (backend, states) = pane(1, on: connection, client: client())
+        try goLive(client(), epoch: 1, resumed: false, panes: [1: ["$ make", "done", "$ "]])
+        client().send(.disconnected(reason: "helper killed"))
+        type("ls\r", into: backend)
+
+        try goLive(client(), epoch: 2, resumed: false, panes: [1: ["$ make", "done", "$ ", "Restored after restart", "$ "]])
+        try await eventually("sent") { states.all.last == .sent }
+        #expect(inputs(client()) == ["ls\r"])
+    }
+
+    @Test func aHelperStartedAgainUnderANoteStillDropsKeysWhenTheScreenAboveIsAnother() async throws {
+        let (connection, client) = try connection()
+        let (backend, states) = pane(1, on: connection, client: client())
+        try goLive(client(), epoch: 1, resumed: false, panes: [1: ["Allow rm -rf build? (y/n)"]])
+        client().send(.disconnected(reason: "helper killed"))
+        type("y\r", into: backend)
+
+        try goLive(client(), epoch: 2, resumed: false, panes: [1: ["Allow git push? (y/n)", "Restored after restart", "$ "]])
+        try await eventually("dropped") { states.all.last == .dropped(.screenChanged) }
+        #expect(inputs(client()).isEmpty)
+    }
+
     @Test func inputBeforeTheFirstConnectionIsTypeAheadIntoABlankPane() async throws {
         let (connection, client) = try connection()
         let (backend, states) = pane(1, on: connection, client: client())

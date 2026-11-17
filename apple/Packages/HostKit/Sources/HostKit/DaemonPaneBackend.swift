@@ -799,6 +799,29 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
             if let epoch, epoch == now { return true }
             return current() == screen || screen.allSatisfy(\.isWhitespace)
         }
+
+        /// A helper started again shows the screen typed at under its restore note.
+        func isRestored(epoch now: UInt64?) -> Bool {
+            guard let epoch, epoch != now else { return false }
+            return Self.isRestored(screen, as: current())
+        }
+
+        /// The rows a restored pane adds below its saved screen: the daemon's restore label and
+        /// its new shell's prompt (at most three rows, `MAX_PROMPT_ROWS` in the daemon).
+        static let restoredRowsBelow = 1...4
+
+        /// `shown` is `typedAt` as a helper started again restores it: all its rows (the last
+        /// ones of a full screen that scrolled), then only its restore label and a fresh prompt.
+        static func isRestored(_ typedAt: String, as shown: String) -> Bool {
+            let typedRows = typedAt.split(separator: "\n", omittingEmptySubsequences: false)
+            let shownRows = shown.split(separator: "\n", omittingEmptySubsequences: false)
+            return restoredRowsBelow.contains { below in
+                let kept = shownRows.count - below
+                let keepsAll = kept == typedRows.count
+                let scrolled = kept > 0 && kept < typedRows.count && shownRows.count >= typedRows.count
+                return (keepsAll || scrolled) && shownRows.prefix(kept).elementsEqual(typedRows.suffix(kept))
+            }
+        }
     }
 
     /// Whether the daemon has sent this pane's state on this connection.
@@ -816,9 +839,9 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
 
     /// Input typed while the host is down (not connected yet, or the link dropped) is held from
     /// then on, read against `screen()`, and `onChange` follows it. It is sent once the pane is
-    /// back on the same daemon run, or on a new run whose screen reads the same; otherwise, or
-    /// after `holdLimit`, or past `holdBytes`, it is dropped. Never queued in the core, so a
-    /// new run never receives keys meant for the old one.
+    /// back on the same daemon run, or on a new run whose screen reads the same or restores it
+    /// under its note; otherwise, or after `holdLimit`, or past `holdBytes`, it is dropped.
+    /// Never queued in the core, so a new run never receives keys meant for the old one.
     public func followHeldInput(
         screen: @escaping @Sendable () -> String, onChange: @escaping @Sendable (HeldInputState) -> Void
     ) {
@@ -892,7 +915,7 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 .tooMuch
             } else if let since = current.since, ContinuousClock.now - since >= holdLimit {
                 .tookTooLong
-            } else if !current.matches(epoch: epoch) {
+            } else if !current.matches(epoch: epoch) && !current.isRestored(epoch: epoch) {
                 .screenChanged
             } else if !router.admitsInput(pane.rawValue) {
                 .notAllowed
@@ -911,7 +934,11 @@ nonisolated public final class DaemonPaneBackend: PredictionFeed, SharedPaneTap,
                 }
             }
             if claimsSize { claimLocalSize() }
-            for input in current.inputs {
+            // Reports answered the old run's terminal; its new shell never asked for them.
+            let inputs = current.isRestored(epoch: epoch)
+                ? current.inputs.filter { if case .generated = $0 { false } else { true } }
+                : current.inputs
+            for input in inputs {
                 router.noteInput(pane.rawValue, tap: tap)
                 switch input {
                 case .bytes(let data): client.sendInput(paneId: pane.rawValue, data: data)

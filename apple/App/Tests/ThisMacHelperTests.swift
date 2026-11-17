@@ -151,7 +151,7 @@ final class ThisMacHelperTests: XCTestCase {
 
     // MARK: Killed
 
-    func testAKilledHelperComesBackOnceWithItsPaneAndScreenAndTakesKeysAgain() async throws {
+    func testAKilledHelperComesBackOnceWithItsPaneAndScreenAndSendsKeysTypedWhileAwayOnce() async throws {
         let helper = try makeHelper()
         let id = try await serve(helper)
         let window = try XCTUnwrap(window)
@@ -174,14 +174,12 @@ final class ThisMacHelperTests: XCTestCase {
         XCTAssertFalse(seen.contains(where: Self.isReconnecting), "reads as starting, not lost: \(seen)")
         XCTAssertEqual(window.pane?.id, paneBefore, "the same pane")
         try await window.until("the pane shows its screen from before") { window.screenText.contains("before-42") }
-        // The new run's shell shows its screen under a restart note, not the screen the keys
-        // were typed at: they are dropped with a word, never sent into it.
-        try await window.until("the keys typed while it was away are settled", timeout: .seconds(10)) {
-            window.pane?.heldInput == .dropped(.screenChanged)
-        }
-        XCTAssertNotNil(WindowModel.heldInputDropMessage(.screenChanged))
+        // The new run shows the screen the keys were typed at under its restore note and a
+        // fresh prompt: they are sent there, once.
+        try await window.until("the keys typed while it was away ran", timeout: .seconds(10)) { window.rows.contains("held-25") }
         await window.pump(1)
-        XCTAssertFalse(window.rows.contains("held-25"), window.screenText)
+        XCTAssertNil(window.pane?.heldInput, "settled without a word")
+        XCTAssertEqual(window.rows.filter { $0 == "held-25" }.count, 1, window.screenText)
         try await window.run("echo after-$((2+3))", showing: "after-5")
     }
 
