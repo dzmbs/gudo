@@ -81,6 +81,29 @@ final class TerminalHostFeaturesTests: XCTestCase {
         try await until("⌘↓ past the last prompt returns to the bottom") { pane.view.surface.terminal.viewportAtBottom }
     }
 
+    /// Scrolled into a command's output with its prompt above the pane, the command and its
+    /// result stay at the top right; a failed one says so.
+    func testTheStickyHeaderNamesTheCommandWhoseOutputFillsThePane() async throws {
+        try await runCommand("seq 1 200; false", showing: "200")
+        let pane = try XCTUnwrap(pane)
+        let marks = try XCTUnwrap(PaneCommandMarks.of(pane))
+        try await until("the command is marked") {
+            (0..<pane.view.surface.terminal.size.rows).contains { marks.block(atViewportRow: $0)?.status == .failed(1) }
+        }
+        pane.view.surface.scroll(rows: -60)
+        try await until("the sticky header shows", timeout: .seconds(5)) {
+            pane.view.surface.renderIfDirty(offscreen: true)
+            return self.stickyHeader(in: pane.view)?.isHidden == false
+        }
+        let header = try XCTUnwrap(stickyHeader(in: pane.view))
+        XCTAssertTrue(header.stringValue.contains("$ seq 1 200; false"), header.stringValue)
+        XCTAssertTrue(header.stringValue.contains("✗ 1"), header.stringValue)
+    }
+
+    private func stickyHeader(in view: NSView) -> NSTextField? {
+        view.subviews.compactMap { $0 as? NSTextField }.first { $0.accessibilityIdentifier() == "command-sticky" }
+    }
+
     // MARK: Scrollback from the host
 
     func testCommandHomeOnAReopenedWindowPagesTheOldestOutputIn() async throws {
