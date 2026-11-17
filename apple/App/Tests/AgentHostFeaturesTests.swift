@@ -160,7 +160,11 @@ final class AgentHostFeaturesTests: XCTestCase {
         _ = try await connection.workspace.client().prompt(paneId: pane.rawValue, text: "again", submit: true)
         try await until("approved by the rule", timeout: .seconds(20)) { self.screen(of: pane).contains("turn 2: Tests pass") }
 
-        try await click(try await shown("Revoke", in: window), in: window)
+        // A list row in a window that is never key in a test run can take a first click to select.
+        for _ in 0..<3 where (try? words(in: window).contains { $0.text.hasPrefix("Auto-approving") }) == true {
+            try await click(try await shown("Revoke", in: window), in: window)
+            try await Task.sleep(for: .seconds(1))
+        }
         try await until("the rule is gone") { (try? self.words(in: window).contains { $0.text.hasPrefix("Auto-approving") }) == false }
         _ = try await connection.workspace.client().prompt(paneId: pane.rawValue, text: "once more", submit: true)
         try await untilBlocked(pane)
@@ -176,7 +180,37 @@ final class AgentHostFeaturesTests: XCTestCase {
         XCTAssertTrue(lines.contains("Needsyou1"), "its section: \(lines)")
         XCTAssertTrue(lines.contains("NeedsYou1"), "the Needs You filter counts what its section holds: \(lines)")
         XCTAssertTrue(lines.contains("Errors1"), "\(lines)")
-        XCTAssertEqual(model.agents.needsYouCount, 1, "the badge")
+        try await until("the badge counts it") { model.agents.needsYouCount == 1 }
+    }
+
+    // MARK: Worktrees
+
+    func testANewTaskMakesAWorktreeOnItsOwnBranchInATabOfItsOwn() async throws {
+        let model = try XCTUnwrap(model), hostId = try XCTUnwrap(hostId), agents = try XCTUnwrap(agents)
+        let repo = agents.home.appending(path: "parser")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        for arguments in [["init", "-q", "-b", "main"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "start"]] {
+            let git = Process()
+            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            git.arguments = arguments
+            git.currentDirectoryURL = repo
+            try git.run()
+            git.waitUntilExit()
+        }
+        let workspace = try XCTUnwrap(model.workspace)
+        let tabsBefore = workspace.session.tabs.count
+        _ = try await model.agents.launch(AgentLaunchRequest(
+            agent: .claude, hostId: hostId, prompt: "", worktree: true, branch: nil, name: "fix parser", repo: repo.path, shell: false, account: nil))
+        try await until("a tab of its own") { workspace.session.tabs.count == tabsBefore + 1 }
+        try await until("the worktree is listed", timeout: .seconds(20)) {
+            self.connection?.existingWorkspace?.repos?.worktrees.contains { $0.branch == "fix-parser" && !$0.main } == true
+        }
+        let worktree = try XCTUnwrap(connection?.existingWorkspace?.repos?.worktrees.first { $0.branch == "fix-parser" })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path), worktree.path)
+        try await until("its agent runs in the worktree") {
+            guard let pane = workspace.session.activeTab?.focused else { return false }
+            return self.connection?.meta[pane]?.agent != nil && self.connection?.meta[pane]?.cwd == worktree.path
+        }
     }
 
     // MARK: Toasts
@@ -223,6 +257,11 @@ final class AgentHostFeaturesTests: XCTestCase {
             return !now.isEmpty && now == rings
         }
         return rings
+    }
+
+    private func views(in window: NSWindow) -> [NSView] {
+        func collect(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(collect) }
+        return window.contentView.map(collect) ?? []
     }
 
     private var connection: DaemonConnection? { hostId.flatMap { AppModel.shared.hosts.connection($0) as? DaemonConnection } }
@@ -355,10 +394,14 @@ final class AgentHostFeaturesTests: XCTestCase {
         return controls(in: sheet).filter { abs($0.midY - top) < 1 }.sorted { $0.minX < $1.minX }
     }
 
-    /// Start: the trailing button on the sheet's bottom margin.
+    /// Start: the trailing button on the sheet's bottom margin, outside the form's scrolling rows.
     private func startButton(in sheet: NSWindow) throws -> NSRect {
-        let bottom = try XCTUnwrap(controls(in: sheet).map(\.midY).min())
-        return try XCTUnwrap(controls(in: sheet).filter { abs($0.midY - bottom) < 1 }.max { $0.minX < $1.minX })
+        let scrolling = views(in: sheet).compactMap { $0 as? NSScrollView }
+        let footer = views(in: sheet)
+            .filter { String(describing: Swift.type(of: $0)) == "KeyViewProxy" && !scrolling.contains(where: $0.isDescendant(of:)) }
+            .map { $0.convert($0.bounds, to: nil) }
+        let bottom = try XCTUnwrap(footer.map(\.midY).min())
+        return try XCTUnwrap(footer.filter { abs($0.midY - bottom) < 1 }.max { $0.minX < $1.minX })
     }
 
     private func type(_ text: String, intoPromptOf sheet: NSWindow) throws {
