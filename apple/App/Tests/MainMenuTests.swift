@@ -72,6 +72,18 @@ final class MainMenuTests: XCTestCase {
         XCTAssertTrue(driver.window.isVisible, "and leaves the window open")
     }
 
+    func testEveryMenuInTheBarHoldsSomething() async throws {
+        let driver = try await WindowDriver.start(width: 1180)
+        defer { driver.close() }
+        let bar = try XCTUnwrap(NSApp.mainMenu, "the app's menu bar")
+        let empty = bar.items.filter { item in
+            guard !item.isHidden, let submenu = item.submenu else { return false }
+            submenu.update()
+            return !submenu.items.contains { !$0.isHidden && !$0.isSeparatorItem }
+        }
+        XCTAssertEqual(empty.map(\.title), [], "menus with nothing in them")
+    }
+
     func testNoTwoCommandsShareAKey() throws {
         var byKey: [[String]: [String]] = [:]
         for command in try menuBar where !command.item.isAlternate {

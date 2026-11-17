@@ -31,6 +31,7 @@ struct TerminalApp: App {
         NSWindow.allowsAutomaticWindowTabbing = false
         WorkspaceShortcuts.install()
         TitleBarContextMenus.install()
+        EmptyMenuBarMenus.install()
         #if DEBUG
         WindowSnapshot.scheduleIfRequested()
         #endif
