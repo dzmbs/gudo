@@ -39,6 +39,26 @@ final class ChatRenderMeasureTests: XCTestCase {
         XCTAssertLessThanOrEqual(strongest(from: 14, to: 10), 0.75, "the fade starts well before the edge")
     }
 
+    func testAPromptsTimeReadsAsStrongAsSecondaryText() throws {
+        let now = UInt64(Date().timeIntervalSince1970 * 1_000)
+        let prompt = try Self.row(["User": ["text": "Run the proto tests.", "attachments": [], "queued": false]],
+                                  at: now, origin: "Terminal")
+        for theme in [Self.dark, Self.light] {
+            let pixels = try Self.render(row: prompt, theme: theme)
+            let base = pixels.rgb(1, 1)
+            let inside = pixels.width - Int(30 * Self.scale)
+            let bubbleTop = try XCTUnwrap((0..<pixels.height).first { pixels.distance(inside, $0, from: base) > 6 })
+            let bubbleBottom = try XCTUnwrap((bubbleTop..<pixels.height).first { pixels.distance(inside, $0, from: base) <= 6 })
+            let footer = bubbleBottom..<min(pixels.height, bubbleBottom + Int(30 * Self.scale))
+            let time = footer.flatMap { y in (0..<inside).map { x in pixels.contrast(x, y, against: base) } }.max() ?? 0
+            let reference = try Self.render(row: Self.toolGroup(), theme: theme)
+            let secondary = (0..<reference.height).flatMap { y in
+                (0..<reference.width).map { x in reference.contrast(x, y, against: base) }
+            }.max() ?? 0
+            XCTAssertGreaterThanOrEqual(time, secondary - 0.3, "\(theme.name): the words under a prompt read at text contrast")
+        }
+    }
+
     // MARK: Rendering
 
     private static let dark = ThemeCatalog.theme(named: TerminalPreferences.Default.theme)
@@ -80,6 +100,15 @@ final class ChatRenderMeasureTests: XCTestCase {
 
     private static func reply(_ text: String) throws -> ChatRow {
         try row(["Assistant": ["text": text, "streaming": false]])
+    }
+
+    /// Two calls folded into their summary line, "Ran 2 commands", in secondary ink.
+    private static func toolGroup() throws -> ChatRow {
+        let rows = try ["a", "b"].map { id in
+            try row(["Tool": ["kind": "Shell", "name": "Shell", "title": "Shell", "input": "{}", "status": "Done", "output": NSNull(),
+                              "diff": [], "exit": NSNull(), "duration_ms": NSNull(), "command_mark": NSNull()]], id: id)
+        }
+        return try XCTUnwrap(ChatToolGroups.fold(rows, expanded: []).first)
     }
 
     private static func row(_ body: [String: Any], id: String = "row", at: UInt64 = 0, origin: String = "Agent") throws -> ChatRow {
@@ -138,6 +167,11 @@ final class ChatRenderMeasureTests: XCTestCase {
             return abs(pixel.red - color.red) + abs(pixel.green - color.green) + abs(pixel.blue - color.blue)
         }
 
+        func contrast(_ x: Int, _ y: Int, against color: RGB) -> Double {
+            let first = Self.luminance(rgb(x, y)), second = Self.luminance(color)
+            return (max(first, second) + 0.05) / (min(first, second) + 0.05)
+        }
+
         /// Rows where something draws within the given columns, against each row's own background.
         func inkRows(columns: Range<Int>) -> [Bool] {
             (0..<height).map { y in
@@ -151,6 +185,13 @@ final class ChatRenderMeasureTests: XCTestCase {
 
         private func packed(_ color: RGB) -> Int { color.red << 16 | color.green << 8 | color.blue }
 
+        private static func luminance(_ color: RGB) -> Double {
+            func linear(_ channel: Int) -> Double {
+                let value = Double(channel) / 255
+                return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+            }
+            return 0.2126 * linear(color.red) + 0.7152 * linear(color.green) + 0.0722 * linear(color.blue)
+        }
     }
 }
 #endif

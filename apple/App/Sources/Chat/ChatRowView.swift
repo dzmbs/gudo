@@ -188,14 +188,18 @@ struct ChatRowView: View {
     }
 
     /// Under a prompt, quietly and close to it: where it came from, when, and Copy and Send again.
-    /// The glyphs sit a step apart; each still answers a 44 pt touch, reaching up over the bubble's edge.
+    /// The words read at text contrast, the glyphs a step quieter; each glyph still answers a
+    /// 44 pt touch, reaching up over the bubble's edge.
     private func promptFooter(_ item: TimelineItem, text: String, canResend: Bool) -> some View {
         HStack(spacing: DS.Space.s) {
-            if let time = ChatItemPresentation.promptTime(item.at) {
-                Text(verbatim: item.origin == .terminal ? "From Terminal · " + time : time).monospacedDigit()
-            } else if item.origin == .terminal {
-                Text("From Terminal")
+            Group {
+                if let time = ChatItemPresentation.promptTime(item.at) {
+                    Text(verbatim: item.origin == .terminal ? "From Terminal · " + time : time).monospacedDigit()
+                } else if item.origin == .terminal {
+                    Text("From Terminal")
+                }
             }
+            .foregroundStyle(DS.Palette.textSecondary)
             footerButton("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
             if canResend, let resend = actions.resend {
                 footerButton("Send again", systemImage: "arrow.clockwise") { resend(text) }
