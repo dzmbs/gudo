@@ -164,6 +164,28 @@ final class TabsByHandTests: XCTestCase {
         XCTAssertNotEqual(try title(of: ref), "logs", "what its shell says names it")
     }
 
+    func testAMixedTabsRenamePromptShowsItsNameEachTimeItOpens() async throws {
+        let before = Set(model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id))
+        model.openBrowserTab()
+        await driver.expect("a browser tab") { self.model.activeMixed != nil }
+        await driver.settle()
+        let row = try XCTUnwrap(model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id).first { !before.contains($0) && $0.hasPrefix("tab/") }, "its row")
+        let mixed = try XCTUnwrap(model.activeMixed?.id)
+
+        await driver.contextMenu(on: driver.sidebarRowFrame(row), choose: ["Rename…"])
+        await driver.expect("the rename prompt opens") { self.driver.sheet != nil }
+        await driver.answerSheet(typing: "docs")
+        await driver.expect("the prompt closes") { self.driver.sheet == nil }
+        XCTAssertEqual(model.groups.composites.tab(mixed)?.title, "docs")
+
+        await driver.contextMenu(on: driver.sidebarRowFrame(row), choose: ["Rename…"])
+        await driver.expect("the rename prompt opens again") { self.driver.sheet != nil }
+        await driver.pump(0.2)
+        let field = (driver.sheet?.firstResponder as? NSTextView)?.string
+        XCTAssertEqual(field, "docs", "the field holds the name Rename would keep")
+        driver.press("\u{1B}", keyCode: 53)
+    }
+
     // MARK: Order and selection
 
     func testMoveTabKeysReorderTheSidebarAndTheStrip() async throws {

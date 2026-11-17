@@ -432,6 +432,7 @@ struct MixedTabRow: View {
     @Environment(WindowModel.self) private var model
     @State private var renaming = false
     @State private var draft = ""
+    @State private var renameOpenings = 0
 
     var body: some View {
         let ref = WindowModel.mixedRef(tab.id)
@@ -472,6 +473,9 @@ struct MixedTabRow: View {
         #endif
         .alert("Rename Tab", isPresented: $renaming) {
             TextField("Title", text: $draft)
+                // A field of its own each time the prompt opens: on the Mac the same field opens
+                // empty the second time, while Rename still gives the old name.
+                .id(renameOpenings)
             Button("Rename") { model.composites.apply(.rename(tab.id, draft), to: tab.id) }
             Button("Cancel", role: .cancel) {}
         }
@@ -498,6 +502,7 @@ struct MixedTabRow: View {
         switch action {
         case .rename:
             draft = tab.title ?? ""
+            renameOpenings += 1
             renaming = true
         case .closeTab, .closeEditor:
             model.closeWindowTab(tab.id, undoable: actions(busy: busy).undoable.contains(action))
