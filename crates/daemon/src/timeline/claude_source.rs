@@ -272,11 +272,16 @@ fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
                 .and_then(|session| session.native_id.as_ref())
                 .map(ToString::to_string)
                 .or(agent.session_id),
-            session
-                .and_then(|session| session.transcript.clone())
-                .or(agent.transcript),
+            session.and_then(|session| session.transcript.clone()),
         )
     };
+    let hook_path = hook_path.or_else(|| {
+        agent.transcript.filter(|saved| {
+            native_session
+                .as_deref()
+                .is_some_and(|session| saved.file_stem() == Some(std::ffi::OsStr::new(session)))
+        })
+    });
     let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
     let context = core.ws.accounts.context(agent.kind, account);
     if context.is_none() && account != proto::SYSTEM_ACCOUNT {
