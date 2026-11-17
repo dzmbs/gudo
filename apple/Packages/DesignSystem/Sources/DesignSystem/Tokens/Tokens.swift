@@ -83,6 +83,9 @@ public extension DS {
         public static let proseTableLineHeight: CGFloat = 24
         public static let proseOutputLineHeight: CGFloat = 16
         public static let proseDiffLineHeight: CGFloat = 20
+        /// Where a code line or table runs past its box: wide enough that the glyph cut by the
+        /// edge has faded out before it.
+        public static let proseEdgeFade: CGFloat = 24
         /// The composer's Send and Stop disc, drawn inside a 44 pt target.
         public static let proseSendDisc: CGFloat = 32
         /// Chat's reading column: about 75 characters of body text, the comfortable line length.

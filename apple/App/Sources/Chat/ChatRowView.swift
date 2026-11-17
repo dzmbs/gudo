@@ -612,11 +612,11 @@ extension View {
             HStack(spacing: 0) {
                 // style-exempt: a mask, only its alpha counts
                 LinearGradient(colors: [edges.leading ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.stripFade)
+                    .frame(width: DS.Size.proseEdgeFade)
                 Rectangle()
                 // style-exempt: a mask, only its alpha counts
                 LinearGradient(colors: [.black, edges.trailing ? .clear : .black], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: DS.Size.stripFade)
+                    .frame(width: DS.Size.proseEdgeFade)
             }
         }
     }
@@ -642,27 +642,16 @@ private struct ChatCodeBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: DS.Space.s) {
-                Text(verbatim: language?.isEmpty == false ? language ?? "" : "code")
-                    .font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textTertiary)
-                Spacer(minLength: 0)
-                Button { UIPasteboard.general.string = code.text } label: {
-                    Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
-                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
-                        .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
-                        .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("chat-code-copy")
-            }
-            .padding(.leading, DS.Space.m)
-            .frame(height: DS.Size.touchTarget)
-            .background(DS.Palette.sidebar)
-            Hairline(style: DS.Palette.hairline)
+            Text(verbatim: language?.isEmpty == false ? language ?? "" : "code")
+                .font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .trailing) { copyButton }
+                .padding(.leading, DS.Space.m).padding(.top, DS.Space.m)
             ScrollView(.horizontal) {
                 Text(ChatCodeStyler.text(code, theme: terminalTheme, increasedContrast: contrast == .increased))
                     .font(TerminalFont.font(size: fontSize, relativeTo: .callout)).lineSpacing(DS.Space.xxs * scale)
-                    .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(.horizontal, DS.Space.m).padding(.bottom, DS.Space.m)
             }
             .scrollIndicators(.hidden)
             .onScrollGeometryChange(for: ChatScrollEdges.self) { geometry in
@@ -670,7 +659,7 @@ private struct ChatCodeBlock: View {
                                 container: geometry.containerSize.width)
             } action: { _, edges in self.edges = edges }
             .chatEdgeFade(edges)
-            .frame(height: CGFloat(code.visibleLineCount) * lineHeight + 2 * DS.Space.m)
+            .frame(height: CGFloat(code.visibleLineCount) * lineHeight + DS.Space.m)
             if code.isTruncated {
                 Hairline(style: DS.Palette.hairline)
                 Button(code.lineCount == 1 ? "Show full code" : "Show all \(code.lineCount) lines", action: showAll)
@@ -681,6 +670,19 @@ private struct ChatCodeBlock: View {
         }
         .background(terminalTheme.codeSurface, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
         .clipShape(.rect(cornerRadius: DS.Radius.control, style: .continuous))
+    }
+
+    /// A 44 pt target centred on the label's line, reaching over the code's first line so the
+    /// label can sit close above the code.
+    private var copyButton: some View {
+        Button { UIPasteboard.general.string = code.text } label: {
+            Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
+                .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat-code-copy")
     }
 }
 #endif
