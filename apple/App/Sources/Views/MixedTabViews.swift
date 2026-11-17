@@ -576,6 +576,9 @@ struct MixedTabChip: View {
         }
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
+        #if os(macOS)
+        .onMiddleClick { model.closeMixedTab(tab.id) }
+        #endif
         .onHover { isHovered = $0 }
         .chromeContextMenu {
             MergeWindowTabMenu(tab: tab.id)

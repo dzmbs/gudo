@@ -144,6 +144,50 @@ extension View {
     }
 }
 
+#if os(macOS)
+extension View {
+    /// A middle click on the view, as a tab takes one to close.
+    func onMiddleClick(perform action: @escaping () -> Void) -> some View {
+        overlay(MiddleClickCatcher(action: action))
+    }
+}
+
+/// Takes the middle button's clicks over the view it covers and lets every other event through.
+private struct MiddleClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        CatcherView()
+    }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.action = action
+    }
+
+    final class CatcherView: NSView {
+        var action: (() -> Void)?
+        private var isPressed = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            switch NSApp.currentEvent?.type {
+            case .otherMouseDown?, .otherMouseUp?: super.hitTest(point)
+            default: nil
+            }
+        }
+
+        override func otherMouseDown(with event: NSEvent) {
+            if event.buttonNumber == 2 { isPressed = true } else { super.otherMouseDown(with: event) }
+        }
+
+        override func otherMouseUp(with event: NSEvent) {
+            guard event.buttonNumber == 2, isPressed else { return super.otherMouseUp(with: event) }
+            isPressed = false
+            if bounds.contains(convert(event.locationInWindow, from: nil)) { action?() }
+        }
+    }
+}
+#endif
+
 /// UI tests only (`-windowProbe YES`): what the window shows and advertises, as JSON in an
 /// accessibility value.
 struct WindowProbe: View {

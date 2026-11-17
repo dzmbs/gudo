@@ -396,6 +396,9 @@ private struct TabChip: View {
         .animation(DS.Motion.micro, value: isActive)
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
+        #if os(macOS)
+        .onMiddleClick { model.closeTab(ref, undoable: false) }
+        #endif
         .onHover { hovering in withAnimation(DS.Motion.micro) { isHovered = hovering } }
         .chromeContextMenu {
             if let workspace {
