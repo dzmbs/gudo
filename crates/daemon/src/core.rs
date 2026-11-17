@@ -2367,6 +2367,18 @@ impl Core {
         mut record: PaneRecord,
     ) -> Result<(), pty::AdoptError> {
         let id = carried.id;
+        // The build that handed the pane over may track an agent typed by hand without a
+        // record of it (0.1.4): recorded here, its session is found and kept like any other.
+        if record.agent.is_none()
+            && let Some(kind) = carried.agent
+        {
+            record.agent = Some(AgentRecord {
+                kind,
+                session_id: None,
+                account: Some(proto::SYSTEM_ACCOUNT.into()),
+                transcript: None,
+            });
+        }
         let created_at = *record.created_at.get_or_insert_with(|| {
             proto::UnixMillis(
                 carried
