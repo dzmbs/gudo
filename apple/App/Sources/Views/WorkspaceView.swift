@@ -1262,19 +1262,23 @@ struct ActiveTabView: View {
     }
 }
 
-/// A host's window before there is a session to show, with actions only when something failed.
-/// A quick connect shows nothing: the words wait for a 1 s grace, a failure does not.
+/// A host's window before there is a session to show, with actions only when something failed
+/// or the wait has gone on for long. A quick connect shows nothing: the words wait for a 1 s
+/// grace, a failure does not.
 private struct ConnectingView: View {
     let hostName: String
     let state: ConnectionState
     let onRetry: () -> Void
     let onDisconnect: () -> Void
     @State private var isGraceOver = false
+    @State private var waitingSince = Date.now
 
     var body: some View {
         Group {
             if isGraceOver || state.isFailure {
-                details
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    details(isLong: context.date.timeIntervalSince(waitingSince) >= ConnectionState.longWait, now: context.date)
+                }
             } else {
                 Color.clear
             }
@@ -1284,29 +1288,28 @@ private struct ConnectingView: View {
             try? await Task.sleep(for: .seconds(1))
             isGraceOver = true
         }
+        .onChange(of: state.isFailure) { waitingSince = .now }
     }
 
-    private var details: some View {
+    private func details(isLong: Bool, now: Date) -> some View {
         VStack(spacing: DS.Space.m) {
             ConnectionGlyph(state)
                 .font(.title)
                 .frame(height: 32)
             VStack(spacing: DS.Space.xs) {
-                Text(title)
+                Text(title(isLong: isLong))
                     .font(DS.Font.title)
                     .foregroundStyle(.primary)
-                if let detail {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(detail(context.date))
-                            .font(.subheadline)
-                            .foregroundStyle(DS.Palette.textSecondary)
-                            .monospacedDigit()
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 360)
-                    }
+                if let detail = detail(isLong: isLong, now: now) {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .monospacedDigit()
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 360)
                 }
             }
-            if let action {
+            if let action = action(isLong: isLong) {
                 HStack(spacing: DS.Space.s) {
                     Button("Disconnect", action: onDisconnect)
                         .buttonStyle(.glass)
@@ -1319,12 +1322,14 @@ private struct ConnectingView: View {
         }
         .padding(DS.Space.xxxl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(DS.Motion.standard, value: isLong)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("connecting")
     }
 
-    private var title: String {
+    private func title(isLong: Bool) -> String {
         switch state {
+        case .starting where isLong: "The helper on \(hostName) hasn't answered"
         case .reconnecting: "Reconnecting to \(hostName)…"
         case .starting: "Starting…"
         case .offline: "Offline"
@@ -1335,21 +1340,25 @@ private struct ConnectingView: View {
     }
 
     /// The second line: the phase or the reason, never a repeat of the title.
-    private var detail: ((Date) -> String)? {
+    private func detail(isLong: Bool, now: Date) -> String? {
         switch state {
-        case .connecting(let phase?): { _ in phase }
-        case .reconnecting(_, let since): { now in "Last contact \(Self.ago(now.timeIntervalSince(since)))" }
-        case .offline: { _ in "Waiting for the network. Sessions keep running on \(hostName)." }
-        case .needsAttention(let reason, _): { _ in reason }
-        case .unreachable(let reason, let hint): { _ in [reason, hint].compactMap(\.self).joined(separator: " ") }
+        case .starting where isLong: "It is still starting. Retrying automatically."
+        case .connecting(let phase?): phase
+        case .reconnecting(_, let since): "Last contact \(Self.ago(now.timeIntervalSince(since)))"
+        case .offline: "Waiting for the network. Sessions keep running on \(hostName)."
+        case .needsAttention(let reason, _): reason
+        case .unreachable(let reason, let hint): [reason, hint].compactMap(\.self).joined(separator: " ")
         default: nil
         }
     }
 
-    private var action: String? {
+    /// What a failure, or a wait past `ConnectionState.longWait`, offers besides Disconnect.
+    private func action(isLong: Bool) -> String? {
         switch state {
         case .needsAttention(_, let action): action ?? "Retry"
         case .unreachable: "Retry"
+        case .starting, .connecting: isLong ? "Retry Now" : nil
+        case .reconnecting: isLong ? "Reconnect Now" : nil
         default: nil
         }
     }

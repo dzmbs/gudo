@@ -265,6 +265,39 @@ final class ThisMacHelperTests: XCTestCase {
         try await window.until("the card is gone") { window.element("connection-overlay") == nil }
     }
 
+    func testAHelperThatHangsAsTheAppStartsIsNamedAfterAWhileAndRetryNowReachesIt() async throws {
+        let first = try makeHelper()
+        let id = try await serve(first)
+        let running = try XCTUnwrap(endpoint)
+        window?.close()
+        window = nil
+        AppModel.shared.hosts.disconnect(id)
+
+        // The next launch finds the helper running, but it does not answer.
+        kill(running.pid, SIGSTOP)
+        defer { kill(running.pid, SIGCONT) }
+        let window = HostWindow()
+        self.window = window
+        let second = try makeHelper()
+        AppModel.shared.serveThisMac(with: second)
+        window.model.show(.host(id))
+        var seen: [ConnectionState] = []
+        try await window.until("the window says it is starting", timeout: .seconds(10)) { window.says("Starting…", inSheet: false) }
+        XCTAssertNil(window.element("Retry Now"), "nothing to do yet")
+        try await window.until("after a while it says the helper hasn't answered", timeout: .seconds(70)) {
+            if seen.last.map({ !Self.sameKind($0, window.model.connection) }) ?? true { seen.append(window.model.connection) }
+            return window.says("The helper on This Mac hasn't answered", inSheet: false)
+        }
+        XCTAssertFalse(seen.contains(where: Self.isReconnecting), "it reads as starting: \(seen)")
+        XCTAssertNotNil(window.element("Disconnect"))
+
+        kill(running.pid, SIGCONT)
+        try await window.click("Retry Now")
+        try await window.until("live", timeout: .seconds(30)) { window.model.connection.isLive && window.pane?.connection == .live }
+        XCTAssertFalse(window.says("hasn't answered", inSheet: false))
+        XCTAssertEqual(endpoint?.pid, running.pid, "the same helper, its sessions kept")
+    }
+
     // MARK: Builds
 
     /// A row `echo shell-$$` will print, once the shell's pid is known.

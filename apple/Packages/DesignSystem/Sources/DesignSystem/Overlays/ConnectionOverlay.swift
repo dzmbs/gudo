@@ -82,6 +82,10 @@ nonisolated public enum ConnectionState: Hashable, Sendable {
 
     var isConnecting: Bool { if case .connecting = self { true } else { false } }
 
+    /// How long a link may be on its way or down before the window offers to retry or
+    /// disconnect.
+    public static let longWait: TimeInterval = 40
+
     public var color: ChromeStyle {
         switch self {
         case .slow, .reconnecting: DS.Palette.attention
@@ -229,7 +233,7 @@ struct ConnectionPresentation: Equatable {
     /// sits just under the timeline's 1 s tick so it shows on the first tick past it.
     static let noticeAfter: TimeInterval = 0.9
     static let dimAfter: TimeInterval = 2
-    static let cardAfter: TimeInterval = 40
+    static let cardAfter = ConnectionState.longWait
     static let dimLevel = 0.45
 
     init() {}
