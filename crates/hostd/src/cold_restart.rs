@@ -24,8 +24,12 @@ enum Supervisor {
     Launchd(String),
     /// A systemd user unit.
     Systemd,
-    /// Nothing: a helper started by hand or by a test, started again here.
-    None(Vec<OsString>),
+    /// Nothing: a helper started by hand or by a test, started again here with its command
+    /// line and environment (its panes' `PATH` and homes come from it).
+    None {
+        arguments: Vec<OsString>,
+        environment: Option<Vec<String>>,
+    },
 }
 
 impl Supervisor {
@@ -43,7 +47,10 @@ impl Supervisor {
         let arguments = daemon::process_arguments(pid)
             .filter(|arguments| !arguments.is_empty())
             .context("reading the running helper's command line")?;
-        Ok(Self::None(arguments))
+        Ok(Self::None {
+            arguments,
+            environment: daemon::process_environment(pid),
+        })
     }
 }
 
@@ -84,9 +91,12 @@ pub fn restart(state_dir: &Path, pid: u32, started_at: u64, exe: &Path) -> Resul
             let unit = format!("{}.service", brand::DAEMON_BIN);
             run(Command::new("systemctl").args(["--user", "restart", &unit]))?;
         }
-        Supervisor::None(arguments) => {
+        Supervisor::None {
+            arguments,
+            environment,
+        } => {
             stop(pid, state_dir)?;
-            start(exe, &arguments[1..])?;
+            start(exe, &arguments[1..], environment.as_deref())?;
         }
     }
     wait_for_start(state_dir, started_at)
@@ -122,10 +132,17 @@ fn stop(pid: u32, state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Starts `exe` with `arguments` on its own, outliving this command.
-fn start(exe: &Path, arguments: &[OsString]) -> Result<()> {
+/// Starts `exe` with `arguments` (and `environment`, else this command's) on its own,
+/// outliving this command.
+fn start(exe: &Path, arguments: &[OsString], environment: Option<&[String]>) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    Command::new(exe)
+    let mut command = Command::new(exe);
+    if let Some(environment) = environment {
+        command
+            .env_clear()
+            .envs(environment.iter().filter_map(|entry| entry.split_once('=')));
+    }
+    command
         .args(arguments)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -176,9 +193,20 @@ mod tests {
         let supervisor = Supervisor::of(child.id());
         let _ = child.kill();
         let _ = child.wait();
-        assert_eq!(
-            supervisor.unwrap(),
-            Supervisor::None(vec!["/bin/sleep".into(), "30".into()])
-        );
+        let Supervisor::None { arguments, .. } = supervisor.unwrap() else {
+            panic!("a supervisor");
+        };
+        assert_eq!(arguments, ["/bin/sleep", "30"]);
+    }
+
+    #[test]
+    fn a_helper_is_started_again_with_its_environment() {
+        // macOS hides the environment of its own programs such as sleep: read this process's.
+        let Supervisor::None { environment, .. } = Supervisor::of(std::process::id()).unwrap()
+        else {
+            panic!("a supervisor");
+        };
+        let path = format!("PATH={}", std::env::var("PATH").unwrap());
+        assert!(environment.unwrap().contains(&path));
     }
 }

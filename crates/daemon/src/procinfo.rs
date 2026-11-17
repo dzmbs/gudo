@@ -111,6 +111,11 @@ pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
     imp::exe_path(pid)
 }
 
+/// A process's environment as `NAME=value` entries, if it is ours to inspect.
+pub fn process_environment(pid: u32) -> Option<Vec<String>> {
+    imp::process_env(pid)
+}
+
 /// The file a process runs, if it is ours to inspect.
 pub fn process_executable(pid: u32) -> Option<PathBuf> {
     imp::exe_path(pid)
