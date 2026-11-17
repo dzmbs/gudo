@@ -182,15 +182,18 @@ struct SplitTreeView: View {
                 size: geometry.size, gap: paneStyle == .comfortable ? DS.Space.row : DS.Size.hairline(scale: displayScale),
                 header: PaneHeader.height, cell: tree.cellSize, padding: tree.padding, headers: isSplit, live: arrangement.live,
                 zoomSettled: !animated || zoomed == settledZoom)
+            // Once per change: the reader lays out again as the motion draws (each arrival's
+            // frame), and a motion begun again on each of those would never settle.
+            let startsMotion = animated && lastShape.takeChangeToLayOut()
             // Before any terminal is told its new size: the stills are of the frames on screen.
-            let _ = change != .none && animated ? beginMotion(from: lastLayout.layout, to: target, settle: settle) : ()
+            let _ = startsMotion ? beginMotion(from: lastLayout.layout, to: target, settle: settle) : ()
             let _ = arrangement.settledVersion
             let _ = arrangement.arrivalsDrawn
             let drawn = Self.drawn(target, motion: arrangement)
             let _ = arrangement.update(layout: drawn, tree: tree)
             // Every terminal is laid out once, at its new size: its grid changes once, now, and
             // its last frame stands in, under its still, until the motion settles.
-            let _ = change != .none && animated ? arrangement.prepareTerminals(for: target, within: settle) : ()
+            let _ = startsMotion ? arrangement.prepareTerminals(for: target, within: settle) : ()
             let _ = lastLayout.layout = target
             let shown = arrangement.preview ?? drawn
             let layout = arrangement.scrub.map { shown.blended(from: $0.from, progress: $0.progress) } ?? shown
@@ -360,16 +363,27 @@ private final class ShapeMemo {
     private(set) var lastChange = Change.split
     /// The pane zoomed before the last change, on its way back into the tree.
     private(set) var unzoomed: PaneId?
+    private var awaitsLayout = false
 
     /// Records `shape`; a change, or a tree just shown (a tab turning into a window tab swaps
     /// the whole view, and its panes move with it).
     func update(_ shape: CanvasShape) -> Change {
         defer { self.shape = shape }
-        guard let old = self.shape else { return .split }
+        guard let old = self.shape else {
+            awaitsLayout = true
+            return .split
+        }
         guard old != shape else { return .none }
         lastChange = old.windows != shape.windows || old.hidden != shape.hidden ? .float : .split
         unzoomed = old.zoomed != shape.zoomed ? old.zoomed : nil
+        awaitsLayout = true
         return lastChange
+    }
+
+    /// Whether the last change has yet to be laid out, which it now is.
+    func takeChangeToLayOut() -> Bool {
+        defer { awaitsLayout = false }
+        return awaitsLayout
     }
 }
 
