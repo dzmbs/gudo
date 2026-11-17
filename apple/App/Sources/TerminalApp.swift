@@ -30,6 +30,7 @@ struct TerminalApp: App {
         // Tabs are ours (⌘T); AppKit's window tabbing would compete for the same shortcuts.
         NSWindow.allowsAutomaticWindowTabbing = false
         WorkspaceShortcuts.install()
+        TitleBarContextMenus.install()
         #if DEBUG
         WindowSnapshot.scheduleIfRequested()
         #endif

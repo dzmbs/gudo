@@ -68,6 +68,17 @@ public extension View {
         modifier(ChromeContentModifier())
     }
 
+    /// A context menu whose commands keep their titles inside a bar: the icon-only button
+    /// style of a bar or a title bar item reaches a menu's items too and leaves only their
+    /// symbols.
+    func chromeContextMenu<Items: View>(@ViewBuilder _ items: () -> Items) -> some View {
+        contextMenu {
+            items()
+                .buttonStyle(.automatic)
+                .labelStyle(.titleAndIcon)
+        }
+    }
+
     /// A grouped list or form on the chrome's grouped page, instead of the system's black or grey,
     /// with the theme's ink (`chromeContent()`).
     func chromeGrouped() -> some View {

@@ -27,6 +27,8 @@ struct PresenceToolbarButton: View {
             } else {
                 PresenceStack(others.map(\.avatar))
                     .animation(DS.Motion.micro, value: others.map(\.actor.device))
+                    // The whole stack answers, not only the faces drawn in it.
+                    .contentShape(.rect)
             }
         }
         .popover(isPresented: $showsPeople, arrowEdge: .top) {
@@ -48,7 +50,7 @@ struct PresenceToolbarButton: View {
             afterClose = nil
             Task { @MainActor in next() }
         }
-        .contextMenu {
+        .chromeContextMenu {
             FollowMenuItems(session: session)
             Button("Share Session…", systemImage: "person.crop.circle.badge.plus", action: action)
         }

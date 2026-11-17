@@ -397,7 +397,7 @@ private struct TabChip: View {
         .contentShape(.rect)
         .onTapGesture { model.focus(ref) }
         .onHover { hovering in withAnimation(DS.Motion.micro) { isHovered = hovering } }
-        .contextMenu {
+        .chromeContextMenu {
             if let workspace {
                 Button("Rename…", systemImage: "pencil") {
                     model.focus(ref)

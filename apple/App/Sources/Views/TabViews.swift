@@ -1565,7 +1565,7 @@ struct SidebarToggle: View {
         .help(model.isSidebarShown ? "Hide Sidebar (⌘B)" : "Show Sidebar (⌘B)")
         .accessibilityValue(calls ? "A tab wants attention" : "")
         .tint(.primary)
-        .contextMenu { TabBarPlacementToggle() }
+        .chromeContextMenu { TabBarPlacementToggle() }
         .accessibilityIdentifier("toggle-sidebar")
     }
 }
