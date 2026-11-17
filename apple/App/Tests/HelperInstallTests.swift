@@ -19,15 +19,16 @@ final class HelperInstallTests: XCTestCase {
 
     /// A stand-in helper that reports the hash of its own file, as `build-info --json --hash` does;
     /// `build` makes each build's bytes differ.
-    private func bundledHelper(build: String, reports report: String? = nil) throws -> URL {
+    private func bundledHelper(build: String, reports report: String? = nil, builtUnix: UInt64? = nil) throws -> URL {
         let app = folder.appending(path: "App-\(build).app/Contents/MacOS", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
         let helper = app.appending(path: "gudo-hostd")
         let hash = report.map { "'\($0)'" } ?? #""$(/usr/bin/shasum -a 256 "$0" | /usr/bin/cut -d' ' -f1)""#
+        let info = builtUnix.map { #","version":"0.1.\#($0)","build":"\#(build)","built_unix":\#($0),"protocol":1"# } ?? ""
         let script = """
             #!/bin/sh
             # build \(build)
-            [ "$1" = build-info ] && printf '{"exe_sha256":"%s"}\\n' \(hash)
+            [ "$1" = build-info ] && printf '{"exe_sha256":"%s"\(info)}\\n' \(hash)
             exit 0
 
             """
@@ -84,6 +85,26 @@ final class HelperInstallTests: XCTestCase {
         XCTAssertNotEqual(before, after, "a new file at the path, never the old one written over")
         let kept = String(decoding: try running.readToEnd() ?? Data(), as: UTF8.self)
         XCTAssertTrue(kept.contains("# build a"), "the running helper's file is as it was")
+    }
+
+    func testANewerBuildInCurrentIsKeptWhenAnOlderAppStarts() async throws {
+        let current = try await install(try bundledHelper(build: "b", builtUnix: 200), version: "8").install()
+        let newer = try Data(contentsOf: current)
+
+        let kept = try await install(try bundledHelper(build: "a", builtUnix: 100), version: "7").install()
+
+        XCTAssertEqual(kept, current)
+        XCTAssertEqual(try Data(contentsOf: kept), newer, "never swapped back to the older build")
+    }
+
+    func testCurrentThatLostItsBuildIsRepaired() async throws {
+        let bundled = try bundledHelper(build: "a", builtUnix: 100)
+        let current = try await install(bundled).install()
+        try FileManager.default.removeItem(at: current)
+
+        let repaired = try await install(bundled).install()
+
+        XCTAssertEqual(try Data(contentsOf: repaired), try Data(contentsOf: bundled))
     }
 
     func testACopyThatIsNotTheBuildInTheAppIsRefused() async throws {

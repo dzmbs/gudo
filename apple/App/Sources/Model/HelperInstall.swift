@@ -47,6 +47,12 @@ nonisolated struct HelperInstall {
             try? files.removeItem(at: version)
             try files.moveItem(at: staged, to: version)
         }
+        // An older app started after a newer one leaves the newer build in place.
+        if let installedBuild = await HelperBuild.read(current),
+           let bundledBuild = await HelperBuild.read(version.appending(path: bundled.lastPathComponent)),
+           bundledBuild.isOlder(than: installedBuild) {
+            return current
+        }
         let staged = try stage(from: version.appending(path: bundled.lastPathComponent))
         guard try Self.codeIdentity(of: staged.appending(path: bundled.lastPathComponent)) == bundledCode else {
             try? files.removeItem(at: staged)
