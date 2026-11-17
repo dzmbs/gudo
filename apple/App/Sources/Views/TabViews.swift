@@ -29,14 +29,13 @@ struct WorkspaceSidebar: View {
     var showsDestinations = true
     @State private var swipe = RowSwipeState()
     @State private var geometry = SidebarGeometry()
-    @State private var scroll = SidebarScroll()
 
     var body: some View {
         #if DEBUG
         let _ = ChromeRenders.note("sidebar")
         #endif
         ScrollViewReader { proxy in
-            list.background(ActiveRowReveal(geometry: geometry, scroll: scroll, proxy: proxy))
+            list.background(ActiveRowReveal(geometry: geometry, proxy: proxy))
         }
     }
 
@@ -64,16 +63,16 @@ struct WorkspaceSidebar: View {
         .contentMargins(.all, 0, for: .scrollContent)
         .coordinateSpace(name: "sidebar-list")
         // Written here, read only by the pinned header, so scrolling never rebuilds the list.
-        .onScrollGeometryChange(for: [CGFloat].self) {
-            [$0.contentOffset.y, $0.contentInsets.top, $0.containerSize.height - $0.contentInsets.bottom]
-        } action: { _, values in
-            scroll.offset = values[0]
-            scroll.top = values[1]
-            scroll.bottom = values[2]
+        .onScrollGeometryChange(for: ClosedRange<CGFloat>.self) {
+            $0.contentInsets.top...max($0.contentInsets.top, $0.containerSize.height - $0.contentInsets.bottom)
+        } action: { _, shown in
+            geometry.scroll.top = shown.lowerBound
+            geometry.scroll.bottom = shown.upperBound
+            geometry.pin()
         }
         .overlay(alignment: .top) {
             if listStyle == .plain {
-                StickyProjectHeader(geometry: geometry, scroll: scroll)
+                StickyProjectHeader(geometry: geometry)
             }
         }
         .onDrop(of: [.text], delegate: SidebarDropDelegate(model: model, drag: model.sidebarDrag, geometry: geometry))
@@ -164,7 +163,6 @@ private struct SidebarDestinations: View {
 /// Keeps the active tab's row in view; a view of its own so a tab change re-renders only this.
 private struct ActiveRowReveal: View {
     let geometry: SidebarGeometry
-    let scroll: SidebarScroll
     let proxy: ScrollViewProxy
     @Environment(WindowModel.self) private var model
     @Environment(\.chromeAccessibility) private var accessibility
@@ -176,7 +174,7 @@ private struct ActiveRowReveal: View {
                 // Under Reduce Motion the list goes there in place, as a highlight between rows does.
                 let animation = accessibility.travel(DS.Motion.standard)
                 // Once the list has laid out the row a new tab adds.
-                Task { @MainActor in geometry.reveal(ref, scroll: scroll, proxy: proxy, animation: animation) }
+                Task { @MainActor in geometry.reveal(ref, proxy: proxy, animation: animation) }
             }
     }
 }

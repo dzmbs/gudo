@@ -101,10 +101,21 @@ final class SidebarDragState {
     }
 }
 
+/// A row's frame in the list's space and in the window's.
+nonisolated struct SidebarRowPlace: Equatable, Sendable {
+    let frame: CGRect
+    let frameInWindow: CGRect
+}
+
 /// Where each item is, for hit-testing a drag (not observed: frames change every layout).
 @MainActor
 final class SidebarGeometry {
     var frames: [String: CGRect] = [:]
+    /// Where the list's space starts in the window's.
+    var listOriginInWindow = CGPoint.zero
+    /// The pinned project header's height, as last drawn.
+    var headerHeight: CGFloat = 40
+    let scroll = SidebarScroll()
     var items: [String: SidebarItem] = [:]
     /// The items' ids in list order.
     var order: [String] = []
@@ -255,9 +266,13 @@ struct SidebarTabList: View {
                 SidebarItemView(item: item, numbers: numbers)
                     .environment(\.groupedRowPosition, Self.position(of: item, in: items))
                     .motionTransition(.row)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: { geometry.frames[item.id] = $0 }
-                    // A row the list stops showing keeps no frame: the pinned header reads only rows on screen.
-                    .onDisappear { geometry.frames[item.id] = nil }
+                    .onGeometryChange(for: SidebarRowPlace.self) { proxy in
+                        SidebarRowPlace(frame: proxy.frame(in: .named(Self.space)), frameInWindow: proxy.frame(in: .global))
+                    } action: { place in
+                        geometry.place(item.id, place)
+                    }
+                    // A row the list stops showing keeps no frame: frames are of rows on screen.
+                    .onDisappear { geometry.place(item.id, nil) }
             }
         }
         .animation(DS.Motion.standard, value: items)
@@ -286,6 +301,29 @@ private extension SidebarItem {
         case .projectEmpty(let id): "\(SidebarContainer.project(id))"
         default: nil
         }
+    }
+}
+
+extension SidebarGeometry {
+    /// Where a row is, or nil once the list stops showing it, and the pinned header that follows
+    /// from it: worked out as the rows report each layout, so the header moves with them.
+    func place(_ id: String, _ place: SidebarRowPlace?) {
+        frames[id] = place?.frame
+        if let place {
+            listOriginInWindow = CGPoint(x: place.frameInWindow.minX - place.frame.minX, y: place.frameInWindow.minY - place.frame.minY)
+        }
+        pin()
+    }
+
+    func pin() {
+        let pinned = StickyProjectHeader.pinned(in: self, top: scroll.top, height: headerHeight).flatMap { pinned -> PinnedProject? in
+            // Across the rows' own width, inside the list's margins.
+            guard let row = frames.values.first else { return nil }
+            let edge = listOriginInWindow.y + scroll.top
+            let frame = CGRect(x: listOriginInWindow.x + row.minX, y: edge + pinned.offset, width: row.width, height: headerHeight)
+            return PinnedProject(project: pinned.project, edge: edge, frame: frame)
+        }
+        if scroll.pinned != pinned { scroll.pinned = pinned }
     }
 }
 
@@ -591,15 +629,26 @@ struct ProjectMark: View {
     }
 }
 
-/// Where the sidebar list is scrolled to, observed only by the pinned header.
+/// Where the sidebar list shows its content, and the project header pinned over it: observed
+/// only by the pinned header.
 @MainActor
 @Observable
 final class SidebarScroll {
-    var offset: CGFloat = 0
-    /// Where the list's content starts under the window's bars.
-    var top: CGFloat = 0
-    /// Where it ends over the footer, in the list's own space.
+    /// Where the list's content starts under the window's bars, in the list's own space.
+    @ObservationIgnored var top: CGFloat = 0
+    /// Where it ends over the footer.
     @ObservationIgnored var bottom: CGFloat = 0
+    var pinned: PinnedProject?
+}
+
+/// The project header pinned over the list, in the window's space.
+struct PinnedProject: Equatable {
+    let project: String
+    /// Where the list's content starts under the window's bars.
+    let edge: CGFloat
+    /// Where the header sits: at the edge, or above it, pushed up by the end of its rows; as
+    /// wide as the rows.
+    let frame: CGRect
 }
 
 /// Which way the list scrolls to show a row: not at all while the row shows whole.
@@ -638,7 +687,7 @@ enum SidebarReveal: Equatable {
 
 extension SidebarGeometry {
     /// Scrolls `proxy` so `ref`'s row shows whole, the least way, when it does not, in `animation`.
-    func reveal(_ ref: TabRef, scroll: SidebarScroll, proxy: ScrollViewProxy, animation: Animation?) {
+    func reveal(_ ref: TabRef, proxy: ScrollViewProxy, animation: Animation?) {
         guard let item = items.values.first(where: { if case .row(let row, _) = $0 { row == ref } else { false } }) else { return }
         let header: String? = if case .row(_, .project(let project)) = item { SidebarItem.projectHeader(project).id } else { nil }
         let covered = header.flatMap { frames[$0]?.height } ?? 0
@@ -655,50 +704,62 @@ extension SidebarGeometry {
 }
 
 /// The header of the project whose rows run under the list's top edge, pinned there until the
-/// next project's header pushes it up, as list section headers do.
+/// end of its rows pushes it up, as list section headers do.
 struct StickyProjectHeader: View {
     let geometry: SidebarGeometry
-    let scroll: SidebarScroll
     @Environment(WindowModel.self) private var model
-    @State private var height: CGFloat = 40
+    @State private var frameInWindow = CGRect.zero
 
     var body: some View {
-        // Read so the header follows every scroll; the list itself never does.
-        let _ = scroll.offset
-        let top = scroll.top
+        let pinned = geometry.scroll.pinned
         ZStack(alignment: .top) {
-            if let pinned = Self.pinned(in: geometry, top: top, height: height), let project = model.groups.project(pinned.project) {
+            if let pinned, let project = model.groups.project(pinned.project) {
                 ProjectHeader(project: project)
+                    .padding(.leading, max(0, pinned.frame.minX - frameInWindow.minX))
+                    .padding(.trailing, max(0, frameInWindow.maxX - pinned.frame.maxX))
                     .background(DS.Palette.sidebar)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
-                    .offset(y: top + pinned.offset)
+                    .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        geometry.headerHeight = height
+                        geometry.pin()
+                    }
+                    .offset(y: pinned.frame.minY - frameInWindow.minY)
                     .transition(.identity)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frameInWindow = $0 }
         // A header pushed up leaves under the bars, not over them.
-        .mask(alignment: .top) { Rectangle().padding(.top, top) }
+        .mask(alignment: .top) { Rectangle().padding(.top, max(0, (pinned?.edge ?? 0) - frameInWindow.minY)) }
     }
 
-    /// The project scrolled past the top whose rows still show, and how far the next header has
-    /// pushed it up.
+    /// The project whose rows cross the top edge, and how far the end of its rows has pushed its
+    /// header up. Read from the items at and below the edge: the list lets go of items as they
+    /// pass under the window's bars, the project's own header among them.
     static func pinned(in geometry: SidebarGeometry, top: CGFloat, height: CGFloat) -> (project: String, offset: CGFloat)? {
-        var headers: [(project: String, top: CGFloat)] = []
-        var bottoms: [String: CGFloat] = [:]
-        for (id, item) in geometry.items {
-            guard let frame = geometry.frames[id] else { continue }
-            switch item {
-            case .projectHeader(let project): headers.append((project, frame.minY))
-            case .row(_, .project(let project)), .pane(_, _, .project(let project)), .projectEmpty(let project): bottoms[project] = max(bottoms[project] ?? -.infinity, frame.maxY)
-            default: break
-            }
+        let order = geometry.order
+        guard let first = order.indices.first(where: { geometry.frames[order[$0]].map { $0.maxY > top } ?? false }),
+              let firstFrame = geometry.frames[order[first]]
+        else { return nil }
+        let atEdge = firstFrame.minY < top ? first : first - 1
+        guard order.indices.contains(atEdge), let project = geometry.items[order[atEdge]]?.project,
+              let last = order.lastIndex(where: { geometry.items[$0]?.project == project })
+        else { return nil }
+        // Where the rows end: the next item's top, or the last row's end, once either is laid out.
+        let bottom = (order.indices.contains(last + 1) ? geometry.frames[order[last + 1]]?.minY : nil)
+            ?? geometry.frames[order[last]]?.maxY ?? .infinity
+        guard bottom > top else { return nil }
+        return (project, min(0, bottom - top - height))
+    }
+}
+
+private extension SidebarItem {
+    /// The project a header or line belongs to.
+    var project: String? {
+        switch self {
+        case .projectHeader(let project), .projectEmpty(let project), .row(_, .project(let project)), .pane(_, _, .project(let project)): project
+        default: nil
         }
-        headers.sort { $0.top < $1.top }
-        guard let current = headers.last(where: { $0.top < top }), let bottom = bottoms[current.project], bottom > top + height else {
-            return nil
-        }
-        let next = headers.first { $0.top >= top }?.top ?? .infinity
-        return (current.project, min(0, next - top - height))
     }
 }
 
