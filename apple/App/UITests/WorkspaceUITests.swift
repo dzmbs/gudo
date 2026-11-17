@@ -166,11 +166,19 @@ final class WorkspaceUITests: XCTestCase {
     #if os(iOS)
     @MainActor
     private func toggleZoom(_ app: XCUIApplication) {
+        // The pane headers have small Zoom Pane buttons of their own; the menu's item is a row.
+        let zoomButtons = app.buttons.matching(NSPredicate(format: "label == 'Zoom Pane'"))
+        let headerCount = zoomButtons.count
         element(app, "pane-menu").tap()
-        let item = app.buttons["Zoom Pane"].firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 5))
+        let menuOpened = NSPredicate(format: "count > %d", headerCount)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: menuOpened, evaluatedWith: zoomButtons)], timeout: 5), .completed)
+        guard let item = zoomButtons.allElementsBoundByIndex.max(by: { $0.frame.width < $1.frame.width }) else {
+            return XCTFail("the pane menu has Zoom Pane")
+        }
+        let withMenu = zoomButtons.count
         item.tap()
-        XCTAssertTrue(item.waitForNonExistence(timeout: 5))
+        let menuClosed = NSPredicate(format: "count < %d", withMenu)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation(for: menuClosed, evaluatedWith: zoomButtons)], timeout: 5), .completed)
     }
     #endif
 
