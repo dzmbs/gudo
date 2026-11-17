@@ -218,6 +218,23 @@ final class AgentHostFeaturesTests: XCTestCase {
         }
     }
 
+    func testNewWorktreeInAFolderThatIsNoRepositorySaysSoInTheSheet() async throws {
+        let model = try XCTUnwrap(model), window = try XCTUnwrap(window)
+        model.newAgent()
+        let sheet = try await self.sheet(of: window)
+        let label = try await shown("New Worktree", in: sheet)
+        let toggle = try XCTUnwrap(
+            views(in: sheet).filter { $0 is NSSwitch }.map { $0.convert($0.bounds, to: nil) }.first { abs($0.midY - label.midY) < 20 },
+            "the New Worktree switch")
+        try await click(toggle, in: sheet)
+        try await untilShown("Name and Branch", in: sheet)
+        press("\r", modifiers: .command, in: sheet)
+        try await until("the sheet says the folder is no repository", timeout: .seconds(5)) {
+            ((try? self.words(in: sheet)) ?? []).contains { $0.text.localizedCaseInsensitiveContains("git repository") }
+        }
+        XCTAssertNotNil(window.attachedSheet, "the sheet stays to say so")
+    }
+
     // MARK: Toasts
 
     func testAnAgentInAnotherTabToastsAndTheCardAnswersIt() async throws {

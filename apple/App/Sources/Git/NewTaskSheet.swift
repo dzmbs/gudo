@@ -270,12 +270,14 @@ struct NewTaskSheet: View {
                         Label(failure, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(DS.Palette.error)
                             .font(DS.Font.rowSubtitle)
+                            .id(Self.failureRow)
                     }
                     .chromeRows()
                 }
             }
             .formStyle(.grouped)
             .chromeGrouped()
+            .modifier(ScrollsToFailure(failure: failure, row: Self.failureRow))
             #if os(macOS)
             // A Mac form draws a card behind every section: the picker sits on the page above it.
             .safeAreaInset(edge: .top, spacing: 0) {
@@ -324,6 +326,8 @@ struct NewTaskSheet: View {
         .frame(width: 520)
         #endif
     }
+
+    private static let failureRow = "launch-failure"
 
     private var canStart: Bool {
         host != nil && !isStarting && status.canStart && (!worktree || !name.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -376,6 +380,22 @@ struct NewTaskSheet: View {
             } catch {
                 isStarting = false
                 withAnimation(DS.Motion.standard) { failure = ScreenError.describe(error) }
+            }
+        }
+    }
+}
+
+/// A form with every section open is taller than the sheet: its error, in the last row, is
+/// scrolled into view as it appears.
+private struct ScrollsToFailure: ViewModifier {
+    let failure: String?
+    let row: String
+
+    func body(content: Content) -> some View {
+        ScrollViewReader { proxy in
+            content.onChange(of: failure) { _, failure in
+                guard failure != nil else { return }
+                withAnimation(DS.Motion.standard) { proxy.scrollTo(row, anchor: .bottom) }
             }
         }
     }
