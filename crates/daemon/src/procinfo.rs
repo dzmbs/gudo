@@ -64,7 +64,7 @@ pub(crate) fn process_name(pid: u32) -> Option<String> {
 }
 
 /// The value of `name` in a process's environment, if readable.
-pub(crate) fn process_env_var(pid: u32, name: &str) -> Option<String> {
+pub fn process_env_var(pid: u32, name: &str) -> Option<String> {
     let prefix = format!("{name}=");
     imp::process_env(pid)?
         .into_iter()
@@ -114,6 +114,11 @@ pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
 /// A process's working directory, if it is ours to inspect.
 pub(crate) fn process_cwd(pid: u32) -> Option<PathBuf> {
     imp::process_cwd(pid)
+}
+
+/// A process's command line, its program name first, if it is ours to inspect.
+pub fn process_arguments(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+    imp::process_arguments(pid)
 }
 
 /// When a process started (an `exec` keeps it), if it exists.
@@ -230,6 +235,18 @@ mod imp {
     pub fn process_name(pid: u32) -> Option<String> {
         let comm = fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
         Some(comm.trim_end().to_owned())
+    }
+
+    pub fn process_arguments(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+        use std::os::unix::ffi::OsStrExt;
+        let command_line = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        let arguments = command_line.strip_suffix(&[0]).unwrap_or(&command_line);
+        Some(
+            arguments
+                .split(|&byte| byte == 0)
+                .map(|argument| std::ffi::OsStr::from_bytes(argument).to_owned())
+                .collect(),
+        )
     }
 
     pub fn process_env(pid: u32) -> Option<Vec<String>> {
@@ -513,6 +530,27 @@ mod imp {
     /// The environment from `KERN_PROCARGS2`: `argc`, the executable path, padding, `argc`
     /// arguments, then `KEY=value` strings, all NUL-terminated.
     pub fn process_env(pid: u32) -> Option<Vec<String>> {
+        let (argc, mut parts) = procargs(pid)?;
+        Some(
+            parts
+                .by_ref()
+                .skip(argc)
+                .map(|part| String::from_utf8_lossy(&part).into_owned())
+                .filter(|variable| variable.contains('='))
+                .collect(),
+        )
+    }
+
+    pub fn process_arguments(pid: u32) -> Option<Vec<std::ffi::OsString>> {
+        use std::os::unix::ffi::OsStringExt;
+        let (argc, parts) = procargs(pid)?;
+        let arguments: Vec<_> = parts.take(argc).map(std::ffi::OsString::from_vec).collect();
+        (arguments.len() == argc).then_some(arguments)
+    }
+
+    /// `argc` and the NUL-separated strings after the executable path: the arguments, then the
+    /// environment.
+    fn procargs(pid: u32) -> Option<(usize, impl Iterator<Item = Vec<u8>>)> {
         let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as c_int];
         let mut size: libc::size_t = 0;
         // SAFETY: a null buffer asks for the size.
@@ -545,18 +583,15 @@ mod imp {
             return None;
         }
         buffer.truncate(size);
-        let argc = i32::from_ne_bytes(buffer[..4].try_into().ok()?) as usize;
-        let mut parts = buffer[4..]
+        let argc = usize::try_from(i32::from_ne_bytes(buffer[..4].try_into().ok()?)).ok()?;
+        let parts: Vec<Vec<u8>> = buffer[4..]
             .split(|&byte| byte == 0)
-            .filter(|part| !part.is_empty());
+            .filter(|part| !part.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect();
+        let mut parts = parts.into_iter();
         parts.next()?; // the executable path
-        Some(
-            parts
-                .skip(argc)
-                .map(|part| String::from_utf8_lossy(part).into_owned())
-                .filter(|variable| variable.contains('='))
-                .collect(),
-        )
+        Some((argc, parts))
     }
 }
 
@@ -572,6 +607,18 @@ mod tests {
             .canonicalize()
             .unwrap();
         assert_eq!(found, directory);
+    }
+
+    #[test]
+    fn a_process_command_line_is_read() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let arguments = process_arguments(child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(arguments.unwrap(), ["/bin/sleep", "30"]);
     }
 
     #[test]

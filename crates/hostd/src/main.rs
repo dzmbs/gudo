@@ -28,6 +28,7 @@
 #[cfg(target_os = "macos")]
 mod app_job;
 mod askpass;
+mod cold_restart;
 mod devices;
 mod log_file;
 mod service;
@@ -1048,6 +1049,14 @@ fn restart(state_dir: &Path) -> Result<()> {
     match reply {
         daemon::RestartReply::Current => {
             println!("already running the installed build");
+            Ok(())
+        }
+        daemon::RestartReply::Refused(reason) if reason == cold_restart::REFUSED_FOR_LIVE_CHAT => {
+            let exe = cold_restart::executable_of(before.pid)
+                .or_else(|| std::env::current_exe().ok())
+                .context("finding the installed build")?;
+            cold_restart::restart(state_dir, before.pid, before.started_at, &exe)?;
+            println!("restarted into the installed build; running agents resumed their sessions");
             Ok(())
         }
         daemon::RestartReply::Refused(reason) => bail!("{reason}"),
