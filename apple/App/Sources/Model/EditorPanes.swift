@@ -603,7 +603,7 @@ extension WindowModel {
 
     var editorPaletteExtras: [(String, String, String, [String]?, () -> Void)] {
         var extras: [(String, String, String, [String]?, () -> Void)] = [
-            ("editor-split", "Open in VS Code Beside", "rectangle.split.2x1", ["⌥", "↩"], { [weak self] in
+            ("editor-split", "Open in VS Code Beside", "rectangle.split.2x1", nil, { [weak self] in
                 self?.openEditor(placement: .split)
             }),
             ("editor-tunnel", "Open VS Code Through a Remote Tunnel…", "point.3.connected.trianglepath.dotted", nil, { [weak self] in

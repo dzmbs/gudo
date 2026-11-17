@@ -151,6 +151,10 @@ public struct CommandPalette: View {
             .focused($isFocused)
             .onSubmit { run(results.first { $0.id == selection } ?? results.first) }
             .onKeyPress(.escape) { close(); return .handled }
+            #if os(macOS)
+            // ⌘., which reaches the field as a cancel rather than as a key.
+            .onExitCommand { close() }
+            #endif
             .onKeyPress(.delete) {
                 guard query.isEmpty, let onDeleteEmpty else { return .ignored }
                 onDeleteEmpty()
