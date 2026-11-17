@@ -3,7 +3,6 @@ import Foundation
 import HostKit
 import Observation
 import os
-import Security
 import ServiceManagement
 
 /// This Mac's own helper: the daemon bundled in the app (`Contents/MacOS/<name>-hostd`), run for
@@ -24,7 +23,23 @@ final class LocalHelper {
         case failed(String)
     }
 
+    /// Whether This Mac runs the helper the app carries.
+    enum Update: Equatable {
+        /// An older helper serves This Mac that cannot hand its sessions over: replacing it
+        /// restarts running commands, so it waits for the user (`replaceOlderHelper`).
+        case needsRestart(failure: String?)
+        case updating
+        /// This start moved This Mac onto the app's helper.
+        case updated
+    }
+
     private(set) var state = State.off
+    private(set) var update: Update?
+    /// Goes up each time This Mac moves onto a newer helper.
+    private(set) var updatedCount = 0
+    /// The build the app carries, once read from its installed copy.
+    private(set) var appBuild: HelperBuild?
+    @ObservationIgnored private var isReplacing = false
     @ObservationIgnored let hosts: HostsModel
     @ObservationIgnored let binary: URL?
     /// The copy of `binary` the helper runs from, once installed.
@@ -112,6 +127,8 @@ final class LocalHelper {
 
     private var isFailed: Bool { if case .failed = state { true } else { false } }
 
+    private var isOutOfDate: Bool { if case .needsRestart = update { true } else { false } }
+
     /// Whether This Mac's link reads as the helper starting rather than a lost link: it is
     /// starting, or it runs and this launch has not reached it yet (`connectionCount`).
     static func readsAsStarting(_ state: State, connectionCount: Int) -> Bool {
@@ -129,17 +146,45 @@ final class LocalHelper {
         guard isEnabled, task == nil else { return }
         guard state != .running || hosts.thisDeviceId == nil else { return }
         state = .starting
+        begin()
+    }
+
+    /// Update Helper: the older helper saves its sessions and stops, and the app's starts on
+    /// them (shells start again in their folders, agents resume).
+    func replaceOlderHelper() {
+        guard isEnabled, task == nil, case .needsRestart = update else { return }
+        isReplacing = true
+        update = .updating
+        stopWatchingExit()
+        state = .starting
+        begin()
+    }
+
+    private func begin() {
         task = Task {
-            defer { finishTask() }
+            defer {
+                isReplacing = false
+                finishTask()
+            }
             do {
                 let id = try await run()
                 state = .running
+                if update == .updated { updatedCount += 1 }
                 watchExit()
                 onReady?(id)
             } catch {
                 if Task.isCancelled { return }
                 Self.log.error("helper: \(String(describing: error), privacy: .public)")
-                state = .failed((error as? LocalizedError)?.errorDescription ?? String(describing: error))
+                let reason = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+                if isReplacing {
+                    update = .needsRestart(failure: reason)
+                    if Self.runningEndpoint(in: stateDirectory) != nil {
+                        state = .running
+                        watchExit()
+                        return
+                    }
+                }
+                state = .failed(reason)
                 onUnavailable?()
             }
         }
@@ -308,7 +353,8 @@ final class LocalHelper {
         // Its link looks up until the idle timeout; dialling now shows "Connecting" at once
         // and reaches the helper as soon as one listens again.
         if let id = hosts.thisDeviceId { hosts.connection(id)?.retry() }
-        guard !servesForeign else { return }
+        // An older helper the user ran gives way to the app's once it ends.
+        guard !servesForeign || isOutOfDate else { return }
         if child?.processIdentifier == pid { child = nil }
         let ranFor = watchedSince.map { ContinuousClock.now - $0 } ?? .zero
         guard let delay = respawn.delay(afterRunning: ranFor, jitter: .random(in: 0..<1)) else {
@@ -336,51 +382,60 @@ final class LocalHelper {
         }
         let executable = await installHelper(binary)
         timeline.mark("helper installed")
+        let appBuild = await HelperBuild.read(executable)
+        self.appBuild = appBuild
+        timeline.mark("build \(appBuild?.summary ?? "unknown")")
+        let wasOutOfDate = isOutOfDate || update == .updating
+        var outcome: Update?
         var launched = true
         servesForeign = false
-        let running = Self.runningEndpoint(in: stateDirectory)
-        let plan = Self.plan(
-            running: running.map { Self.runningHelper(pid: $0.pid, versions: versionsDirectory) },
-            loginItem: loginItem, registeredIsCurrent: isRegistered(binary))
+        let runningEndpoint = Self.runningEndpoint(in: stateDirectory)
+        var running: Running?
+        if let runningEndpoint {
+            running = await Self.running(pid: runningEndpoint.pid, versions: versionsDirectory, app: appBuild)
+        }
+        let plan = Self.plan(running: running, loginItem: loginItem)
         timeline.mark("plan \(plan)")
         switch plan {
-        case .useForeign(let retiresLoginItem):
-            launched = false
-            servesForeign = true
-            // A daemon the user runs on this folder (`service install`, `run`) serves This Mac.
-            // An earlier version's login item could only fail to take the folder, again and
-            // again. It runs nothing, so nothing waits for it to go.
-            if retiresLoginItem { retireLoginItemLater() }
-            Self.log.info("helper: using the daemon already running on the folder (pid \(running?.pid ?? 0))")
-        case .launch(let retiresLoginItem):
-            if retiresLoginItem {
+        case .launch(let earlier):
+            if earlier == .retire {
                 await stopLoginItem()
                 timeline.mark("login item removed")
             }
             try await launch(executable)
-        case .restartInPlace(let retiresLoginItem):
+            if wasOutOfDate { outcome = .updated }
+        case .keep(let earlier):
             launched = false
-            if retiresLoginItem { retireLoginItemLater() }
-            // The installed build changed (an update): the helper hands its sessions to it,
-            // in the same process, so its launchd job keeps it. Or it already runs it.
-            _ = await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory)
-            timeline.mark("restart in place")
-        case .keepBundled(let stopsLoginStart, let replaceIfRefused):
-            let restarted = await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory)
-            timeline.mark("restart in place")
-            if restarted || !replaceIfRefused {
-                // Its sessions stay. Unregistering its login item would end them, so it only
-                // stops starting at login; once it ends, the installed build takes over.
-                launched = false
-                if stopsLoginStart { await stopLoginStart() }
+            // A helper the user runs (`service install` of a build folder, `run`) is theirs to
+            // start again.
+            servesForeign = running?.location == .foreign
+            await apply(earlier)
+            Self.log.info("helper: keeping the running helper (pid \(runningEndpoint?.pid ?? 0))")
+        case .restartInPlace(let earlier):
+            launched = false
+            await apply(earlier)
+            if await restartInPlace(running: runningEndpoint, executable: executable, app: appBuild) {
+                servesForeign = running?.location == .foreign
+                outcome = .updated
+            } else if isReplacing, let runningEndpoint {
+                try await replace(pid: runningEndpoint.pid, with: executable)
+                launched = true
+                outcome = .updated
             } else {
-                // A helper that cannot restart in place is replaced, never restarted, because
-                // launchd only spawns the exact build that was registered. Its agents resume
-                // their sessions in the new helper.
-                await stopLoginItem()
-                try await launch(executable)
+                outcome = .needsRestart(failure: nil)
+            }
+        case .askToReplace(let earlier):
+            if isReplacing, let runningEndpoint {
+                try await replace(pid: runningEndpoint.pid, with: executable)
+                outcome = .updated
+            } else {
+                launched = false
+                servesForeign = running?.location == .foreign
+                await apply(earlier)
+                outcome = .needsRestart(failure: nil)
             }
         }
+        update = outcome
         let endpoint = try await waitForEndpoint()
         timeline.mark("helper listening")
         if launched { startedAt = .now }
@@ -389,6 +444,64 @@ final class LocalHelper {
         let id = try await hosts.pairThisDevice(try PairingTicket(ticket), name: WindowModel.deviceName)
         timeline.mark("paired")
         return id
+    }
+
+    private func apply(_ earlier: EarlierLoginItem) async {
+        switch earlier {
+        case .leave: break
+        case .retire: retireLoginItemLater()
+        case .keepFromStartingAtLogin: await stopLoginStart()
+        }
+    }
+
+    /// Hands the running helper's sessions to the build at its own path (`hostd restart`), and
+    /// checks it then runs the app's build or a newer one: a build that answers that it runs
+    /// the file already, or restarts into an older one, does not count.
+    private func restartInPlace(running: Endpoint?, executable: URL, app: HelperBuild?) async -> Bool {
+        guard await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory) else { return false }
+        timeline.mark("restart in place")
+        guard let pid = Self.runningEndpoint(in: stateDirectory)?.pid ?? running?.pid else { return false }
+        return await Self.running(pid: pid, versions: versionsDirectory, app: app).build != .older
+    }
+
+    /// Replaces an older helper that cannot hand over: it saves its sessions and stops
+    /// (SIGTERM, on which every released build saves its screens and layout), then the
+    /// installed build starts on the same folder, keys and pairings, as the login service when
+    /// it starts at login, so that points at `Versions/Current` from then on.
+    private func replace(pid: Int32, with executable: URL) async throws {
+        Self.log.info("helper: replacing the older helper (pid \(pid))")
+        // Its own launchd job, when it is the app's, goes with it rather than starting it again.
+        await Self.stopJob(executable: executable, stateDirectory: stateDirectory, uninstallsLoginService: false)
+        if Self.isAlive(pid), loginItem != .none { await stopLoginItem() }
+        if Self.isAlive(pid) { kill(pid, SIGTERM) }
+        // Saving a long scrollback takes a while; launchd allows a job 20 s.
+        let deadline = ContinuousClock.now + .seconds(30)
+        while Self.isAlive(pid), ContinuousClock.now < deadline {
+            try await Task.sleep(for: Self.pollInterval)
+        }
+        guard !Self.isAlive(pid) else { throw HelperError.olderHelperKeepsRunning }
+        timeline.mark("older helper stopped")
+        try await launch(executable)
+    }
+
+    nonisolated private static func isAlive(_ pid: Int32) -> Bool { kill(pid, 0) == 0 }
+
+    /// What runs as `pid`: where from, and its build against the app's, read from the file it
+    /// runs while that is still at its path. When the app's build cannot be told, what runs is
+    /// kept, as before builds were compared. A process whose file the system no longer names
+    /// (removed, or swapped out of `Current`) is asked to restart into its own path: whether
+    /// it can tells what it was.
+    nonisolated static func running(pid: Int32, versions: URL, app: HelperBuild?) async -> Running {
+        guard let app else {
+            return Running(location: runningHelper(pid: pid, versions: versions), build: .same, buildAtItsPath: .same)
+        }
+        guard let executable = RunningExecutable.of(pid: pid) else {
+            return Running(location: .installed, build: .older, buildAtItsPath: .same)
+        }
+        let atItsPath = BuildAge(await HelperBuild.read(URL(fileURLWithPath: executable.path)), against: app)
+        return Running(
+            location: runningHelper(executable: executable.path, versions: versions),
+            build: executable.isOnDisk ? atItsPath : .older, buildAtItsPath: atItsPath)
     }
 
     private func install(of binary: URL) -> HelperInstall {
@@ -449,32 +562,47 @@ final class LocalHelper {
         case disabled
     }
 
-    /// How starting goes, given what runs on the state folder.
-    nonisolated enum StartPlan: Equatable {
-        /// Nothing runs there: start the installed build, after removing an earlier version's
-        /// login item.
-        case launch(retiresLoginItem: Bool)
-        /// A daemon the user runs on the folder serves This Mac.
-        case useForeign(retiresLoginItem: Bool)
-        /// The installed build runs: it restarts into the newly installed one, keeping its
-        /// sessions, when that changed.
-        case restartInPlace(retiresLoginItem: Bool)
-        /// An earlier version's helper runs from an app bundle: kept, so its sessions stay,
-        /// restarted into the build at its own path when that changed, and kept from starting
-        /// at login again. One that cannot restart is replaced when `replaceIfRefused`.
-        case keepBundled(stopsLoginStart: Bool, replaceIfRefused: Bool)
+    /// What runs on the state folder: where from, and its build against the app's.
+    nonisolated struct Running: Equatable {
+        var location: RunningHelper
+        var build: BuildAge
+        /// The build now at the path it runs from.
+        var buildAtItsPath: BuildAge
     }
 
-    nonisolated static func plan(running: RunningHelper?, loginItem: LoginItem, registeredIsCurrent: Bool) -> StartPlan {
-        let registered = loginItem != .none
-        switch running {
-        case nil: return .launch(retiresLoginItem: registered)
-        case .foreign: return .useForeign(retiresLoginItem: registered)
-        case .installed: return .restartInPlace(retiresLoginItem: registered)
-        case .bundled:
-            return .keepBundled(
-                stopsLoginStart: loginItem == .enabled, replaceIfRefused: loginItem == .enabled && !registeredIsCurrent)
+    /// What becomes of the login item earlier versions registered.
+    nonisolated enum EarlierLoginItem: Equatable {
+        case leave
+        /// Unregistered: it runs nothing.
+        case retire
+        /// Its helper may be the one running: kept from starting at the next login only.
+        case keepFromStartingAtLogin
+    }
+
+    /// How starting goes, given what runs on the state folder.
+    nonisolated enum StartPlan: Equatable {
+        /// Nothing runs there: start the installed build.
+        case launch(EarlierLoginItem)
+        /// The app's build or a newer one runs, from wherever it runs: kept.
+        case keep(EarlierLoginItem)
+        /// An older build runs, and its own path holds the app's build or a newer one: it hands
+        /// its sessions to that build in the same process.
+        case restartInPlace(EarlierLoginItem)
+        /// An older build runs that cannot hand over: replacing it restarts running commands,
+        /// so the user is asked first. It serves This Mac meanwhile.
+        case askToReplace(EarlierLoginItem)
+    }
+
+    nonisolated static func plan(running: Running?, loginItem: LoginItem) -> StartPlan {
+        guard let running else { return .launch(loginItem == .none ? .leave : .retire) }
+        let earlier: EarlierLoginItem = switch (running.location, loginItem) {
+        case (_, .none): .leave
+        case (.bundled, .enabled): .keepFromStartingAtLogin
+        case (.bundled, .disabled): .leave
+        case (.installed, _), (.foreign, _): .retire
         }
+        if running.build != .older { return .keep(earlier) }
+        return running.buildAtItsPath == .older ? .askToReplace(earlier) : .restartInPlace(earlier)
     }
 
     /// Stops the helper of a build from before the product's rename and keeps its login items
@@ -616,24 +744,6 @@ final class LocalHelper {
         child = process
     }
 
-    /// Whether the registered login item is this exact build: launchd pins the registered
-    /// app's code and won't spawn a rebuilt helper under the old registration.
-    private func isRegistered(_ binary: URL) -> Bool {
-        defaults.string(forKey: Self.registeredKey) == Self.identity(binary)
-    }
-
-
-    /// The helper's location and code hash.
-    nonisolated static func identity(_ binary: URL) -> String {
-        var code: SecStaticCode?
-        var info: CFDictionary?
-        guard SecStaticCodeCreateWithPath(binary as CFURL, [], &code) == errSecSuccess, let code,
-              SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
-              let hash = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data
-        else { return binary.path }
-        return binary.path + "#" + hash.map { String(format: "%02x", $0) }.joined()
-    }
-
     private static var label: String { (Bundle.main.bundleIdentifier ?? "app") + ".hostd" }
     private static var loginItemTarget: String { "gui/\(getuid())/\(label)" }
     private static let launchctl = URL(fileURLWithPath: "/bin/launchctl")
@@ -770,6 +880,7 @@ nonisolated enum HelperError: Error, Equatable, LocalizedError {
     case noTicket
     case keepsStopping
     case launchdRefused
+    case olderHelperKeepsRunning
 
     var errorDescription: String? {
         switch self {
@@ -779,6 +890,7 @@ nonisolated enum HelperError: Error, Equatable, LocalizedError {
         case .noTicket: "The helper didn't hand out a pairing ticket."
         case .keepsStopping: "The helper keeps stopping right after it starts."
         case .launchdRefused: "launchd didn't start the helper."
+        case .olderHelperKeepsRunning: "The older helper didn't stop. Quit it from a terminal and try again."
         }
     }
 }

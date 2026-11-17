@@ -17,6 +17,8 @@ final class ThisMacHelperTests: XCTestCase {
     private var window: HostWindow?
     private var ready: [String] = []
     private var savedEnvironment: [String: String?] = [:]
+    private var outsideHelpers: [Process] = []
+    private var buildFolders: [URL] = []
 
     override func setUp() async throws {
         try XCTSkipUnless(LaunchOptions.mock, "needs TEST_RUNNER_GUDO_MOCK=1")
@@ -38,6 +40,7 @@ final class ThisMacHelperTests: XCTestCase {
         window?.close()
         window = nil
         for helper in helpers.reversed() { helper.stop() }
+        for process in outsideHelpers where process.isRunning { process.terminate() }
         AppModel.shared.serveThisMac(with: nil)
         let hosts = AppModel.shared.hosts
         if let id = hosts.thisDeviceId { hosts.remove(id) }
@@ -55,6 +58,7 @@ final class ThisMacHelperTests: XCTestCase {
             try? FileManager.default.removeItem(at: stateDirectory)
         }
         if let zshDirectory { try? FileManager.default.removeItem(at: zshDirectory) }
+        for folder in buildFolders { try? FileManager.default.removeItem(at: folder) }
         for (key, value) in savedEnvironment {
             if let value { setenv(key, value, 1) } else { unsetenv(key) }
         }
@@ -206,6 +210,163 @@ final class ThisMacHelperTests: XCTestCase {
         XCTAssertEqual(try HelperInstall.codeIdentity(of: try XCTUnwrap(updated.installed)), try HelperInstall.codeIdentity(of: newBuild))
         XCTAssertTrue(window.screenText.contains(shellBefore), "the screen stays: \(window.screenText)")
         try await window.run("echo again-$$", showing: shellBefore.replacingOccurrences(of: "shell-", with: "again-"))
+    }
+
+    // MARK: Older helpers
+
+    /// A login service from a build folder that runs a released build: it serves This Mac and
+    /// the app asks; Update Helper puts This Mac on the installed build with its panes.
+    func testAnOlderHelperFromABuildFolderIsReplacedOnceAskedAndItsPanesComeBack() async throws {
+        let older = try olderBuild(at: "build/hostd/macos")
+        try await replacesOlderHelper(startedFrom: older)
+    }
+
+    /// An earlier app's helper whose app was replaced by this one: the build at its path is
+    /// this app's, but a release from before hand-offs refuses to restart into it.
+    func testAnOlderHelperThatRefusesToHandOverIsReplacedOnceAsked() async throws {
+        let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
+        try XCTSkipIf(try readsHandOffs(older), "GUDO_OLD_HOSTD_BIN hands over: a release before 0.1.4 refuses")
+        try await replacesOlderHelper(startedFrom: older) { try self.replaceFile(older) }
+    }
+
+    /// The same with a release that hands over: its sessions stay, nothing to ask.
+    func testAnEarlierAppsHelperHandsOverToThisAppsBuildAtItsPath() async throws {
+        let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
+        try XCTSkipUnless(try readsHandOffs(older), "GUDO_OLD_HOSTD_BIN is a release before hand-offs")
+        let running = try startOutsideTheApp(older)
+        try replaceFile(older)
+        let helper = try makeHelper()
+        _ = try await serve(helper)
+        let window = try XCTUnwrap(window)
+
+        XCTAssertEqual(helper.update, .updated)
+        XCTAssertEqual(helper.updatedCount, 1)
+        XCTAssertEqual(endpoint?.pid, running.processIdentifier, "handed over in the same process")
+        XCTAssertEqual(RunningExecutable.of(pid: running.processIdentifier)?.isOnDisk, true, "runs this app's build")
+        try await window.run("echo after-$((2+3))", showing: "after-5")
+    }
+
+    func testAnOlderHelperWhoseFileIsGoneIsReplacedOnceAsked() async throws {
+        let older = try olderBuild(at: "removed")
+        try await replacesOlderHelper(startedFrom: older) { try FileManager.default.removeItem(at: older) }
+    }
+
+    func testANewerHelperFromABuildFolderIsKept() async throws {
+        let newer = try copy(try Self.daemonBinary(), to: "build/hostd/macos")
+        let running = try startOutsideTheApp(newer)
+        let helper = try makeHelper(binary: try Self.olderBinary())
+        _ = try await serve(helper)
+
+        XCTAssertNil(helper.update, "nothing to tell")
+        XCTAssertEqual(endpoint?.pid, running.processIdentifier, "the newer build serves This Mac")
+    }
+
+    private func replacesOlderHelper(startedFrom older: URL, afterStart: () throws -> Void = {}) async throws {
+        let running = try startOutsideTheApp(older)
+        try afterStart()
+        let helper = try makeHelper()
+        _ = try await serve(helper)
+        let window = try XCTUnwrap(window)
+        XCTAssertEqual(helper.update, .needsRestart(failure: nil), "the older helper serves This Mac until the user says")
+        XCTAssertEqual(endpoint?.pid, running.processIdentifier)
+        try await window.run("echo before-$((6*7))", showing: "before-42")
+        // The helper saves a screen a few seconds after its output.
+        await HostWindow.sleep(7)
+        let paneBefore = try XCTUnwrap(window.pane?.id)
+        let tabsBefore = try XCTUnwrap(window.model.workspace?.session.tabs.map(\.id))
+        let daemonBefore = try XCTUnwrap(endpoint?.daemonId)
+        // Releases before 0.1.5 keep no screens: their panes come back with a fresh prompt.
+        let savesScreens = FileManager.default.fileExists(atPath: try XCTUnwrap(stateDirectory).appending(path: "screens").path)
+
+        helper.replaceOlderHelper()
+
+        try await window.until("This Mac runs the installed build", timeout: .seconds(60)) {
+            guard let now = self.endpoint, now.pid != running.processIdentifier else { return false }
+            return helper.update == .updated && helper.state == .running
+                && window.model.connection.isLive && window.pane?.connection == .live
+        }
+        let now = try XCTUnwrap(endpoint)
+        XCTAssertEqual(now.daemonId, daemonBefore, "its keys and pairings kept")
+        let executable = try XCTUnwrap(RunningExecutable.of(pid: now.pid))
+        XCTAssertTrue(executable.path.hasSuffix("/Helper/Versions/Current/\(try Self.daemonBinary().lastPathComponent)"), executable.path)
+        XCTAssertEqual(helper.updatedCount, 1)
+        XCTAssertEqual(window.model.workspace?.session.tabs.map(\.id), tabsBefore, "the same tabs")
+        XCTAssertEqual(window.pane?.id, paneBefore, "the same pane")
+        if savesScreens {
+            try await window.until("the pane shows its screen from before") { window.screenText.contains("before-42") }
+        }
+        try await window.run("echo after-$((2+3))", showing: "after-5")
+    }
+
+    /// This app replaced in place: another file at the older helper's path.
+    private func replaceFile(_ older: URL) throws {
+        let replacement = older.deletingLastPathComponent().appending(path: "next")
+        try FileManager.default.copyItem(at: try Self.daemonBinary(), to: replacement)
+        _ = try FileManager.default.replaceItemAt(older, withItemAt: replacement)
+    }
+
+    private func readsHandOffs(_ executable: URL) throws -> Bool {
+        let info = try JSONSerialization.jsonObject(with: try runOutput(executable, ["build-info", "--json"])) as? [String: Any]
+        return (info?["handoff"] as? [Int])?.isEmpty == false
+    }
+
+    /// A released build at `folder` under the test's temporary folder (`GUDO_OLD_HOSTD_BIN`:
+    /// a release tag built with `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX` older than the test build).
+    private func olderBuild(at folder: String) throws -> URL {
+        let older = try Self.olderBinary()
+        let app = try XCTUnwrap(HelperBuild(json: try runOutput(try Self.daemonBinary(), ["build-info", "--json"])))
+        let release = try XCTUnwrap(HelperBuild(json: try runOutput(older, ["build-info", "--json"])))
+        try XCTSkipUnless(release.isOlder(than: app), "GUDO_OLD_HOSTD_BIN must be older than GUDO_HOSTD_BIN")
+        return try copy(older, to: folder)
+    }
+
+    private static func olderBinary() throws -> URL {
+        let path = ProcessInfo.processInfo.environment["GUDO_OLD_HOSTD_BIN"] ?? ""
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: path), "set GUDO_OLD_HOSTD_BIN to a released helper build")
+        return URL(fileURLWithPath: path)
+    }
+
+    private func copy(_ binary: URL, to folder: String) throws -> URL {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "tm-builds-\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
+        let directory = root.appending(path: folder, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        buildFolders.append(root)
+        let copy = directory.appending(path: try Self.daemonBinary().lastPathComponent)
+        try FileManager.default.copyItem(at: binary, to: copy)
+        return copy
+    }
+
+    /// The helper as a login service or a terminal runs it: not the app's child.
+    private func startOutsideTheApp(_ executable: URL) throws -> Process {
+        let state = try XCTUnwrap(stateDirectory)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["--state-dir", state.path, "run"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        outsideHelpers.append(process)
+        let deadline = Date.now.addingTimeInterval(20)
+        while LocalHelper.runningEndpoint(in: state)?.pid != process.processIdentifier, Date.now < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertEqual(LocalHelper.runningEndpoint(in: state)?.pid, process.processIdentifier, "the helper runs")
+        return process
+    }
+
+    private func runOutput(_ executable: URL, _ arguments: [String]) throws -> Data {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = executable
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return output
     }
 
     // MARK: Quitting

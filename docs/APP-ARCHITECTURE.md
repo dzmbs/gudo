@@ -462,14 +462,33 @@ re-signing or updating the app leaves the running helper and its launchd job alo
   **Start Helper at Login** (on by default, so phones reach This Mac after a restart) runs `service install` from `Versions/Current`
   instead, a LaunchAgent in `~/Library/LaunchAgents`; switching either setting restarts the
   helper (shells start again, agents resume, screens are restored).
-- **What runs.** The executable of the helper on the folder tells (`LocalHelper.runningHelper`):
-  under `Helper/Versions` it is the app's (its job, the login service or a child) and restarts
-  in place into a newly installed `Current` (`hostd restart`: same process, so launchd keeps
-  it, sessions kept). Inside an `.app` it is an earlier version's login item or child: kept, so
-  its sessions stay, restarted in place into the build at its own path, and its login item is
-  switched off (`launchctl disable`) so it does not start at the next login; one that cannot
-  restart while the registered build differs is replaced as before. Anywhere else (`hostd
-  service install` of another build, a `run` in a terminal) it is used as is and only redialled.
+- **What runs.** Decided by build, not by path (`LocalHelper.plan`, `LocalHelper.running`). The
+  app reads its own build (`Versions/Current/<name>-hostd build-info --json`) and the running
+  helper's: the executable the process runs (`proc_pidpath`), read with `build-info --json`
+  while that file is still the one the process maps (`RunningExecutable`: same device and
+  inode); a file replaced or removed since counts as older. Builds are ordered as
+  `HelperCheck.isOlder` (protocol level, then source time). Where it runs from
+  (`LocalHelper.runningHelper`: under `Helper/Versions` the app's, inside an `.app` an earlier
+  version's login item or child, else foreign) only decides what becomes of an earlier
+  version's login item.
+
+  | Running helper | Action | The user sees |
+  |---|---|---|
+  | none | start `Versions/Current` (login service, job or child) | nothing (or the toast, after Update Helper) |
+  | the app's build or newer, from anywhere | keep it | nothing |
+  | older, its own path now holds the app's build or newer (`Current` swapped, an app replaced in place, a rebuilt build folder) | `hostd restart`: hand-off in the same process, then the build is checked again | toast "This Mac runs helper 0.1.7" |
+  | older, the hand-off refused (a release before hand-offs, a live agent Chat) or unsupported, or its path holds an older build or nothing | keep it serving This Mac and ask | notice "This Mac runs an older helper. Updating it restarts running commands." with **Update Helper** |
+
+  **Update Helper** (`replaceOlderHelper`): `service stop` (the app's job), the earlier login
+  item unregistered, then SIGTERM (every released build saves screens and layout on it and
+  exits 0, so a `KeepAlive` LaunchAgent does not start it again), up to 30 s; then
+  `Versions/Current` starts as the login service when Start Helper at Login is on (so
+  `dev.gudo.hostd` points at `Versions/Current` from then on), else as the job or a child. Same
+  folder, keys, pairings and layout: tabs and panes come back with their screens, shells start
+  again in their folders, agents resume. A failure keeps the notice with the reason. Settings ▸
+  This Mac shows the running helper's version and build (from `DaemonInfo`) and the build the
+  app carries, and Update Helper while one is needed. An older app started after a newer one
+  leaves the newer build in `Current`.
 - **Migration from the login item.** Earlier versions registered `Contents/Library/LaunchAgents/
   <bundle id>.hostd.plist` (`BundleProgram`) with `SMAppService`; the plist stays in the bundle
   so it can be unregistered, and nothing registers it any more. Once nothing of it runs (the
@@ -484,7 +503,7 @@ once with a `pair --json --local` ticket (`gudo devices` lists the device as "Th
 app)") as the owner, saved as a host with `thisDevice` and named "This Mac": dialled on loopback
 alone (`ConnectOptions.thisComputer`: no relay, no Wi-Fi address, no lookup, from the first
 pairing dial on), so it never needs the network; listed first, no helper-update offers (a new
-app build is installed and the helper restarts into it in place), and an empty plain local group
+app build is installed and the helper restarts into it in place, or the app asks to replace it: "What runs" above), and an empty plain local group
 gives way to it (plain shells still open stay until closed). When the helper refuses the app's device as removed (`InvalidGrant`,
 `Revoked`: `gudo devices` removed it, or its pairing was lost), `HostsModel.onThisDeviceRemoved`
 has `LocalHelper.pairAgain` mint a fresh local ticket and pair again without asking; the host
@@ -514,10 +533,10 @@ ends it (`service stop`: SIGTERM, so it saves its sessions, then the job is remo
 helper.
 
 Tests: `HelperInstallTests` (copy, check, quarantine, swap while the old file is open, refusal
-of a copy that is another build, pruning), `LocalHelperTests` (the start plan, what runs, the
-job's answers and refusal), `LocalHelperJobTests` (a real helper as a launchd job from its
+of a copy that is another build, pruning), `LocalHelperTests` (the start plan for every running helper and
+login item, build order, a replaced file told apart, the job's answers and refusal), `LocalHelperJobTests` (a real helper as a launchd job from its
 installed copy, found again after `kill -9`, gone after Stop Helper; its own state folder and
-job label), `LocalHelperRespawnTests` (the child). Daemon side: `cargo test -p hostd --test
+job label), `LocalHelperRespawnTests` (the child), `ThisMacHelperTests` (a released build run from a build folder, an `.app` replaced in place, or a removed file is replaced on Update Helper with its tabs, panes and screens; a newer build folder is kept; `GUDO_OLD_HOSTD_BIN` is a release tag built with an older `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX`). Daemon side: `cargo test -p hostd --test
 service_job`.
 
 **What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`

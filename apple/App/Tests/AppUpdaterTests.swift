@@ -77,21 +77,5 @@ final class AppUpdaterTests: XCTestCase {
         command?.action()
         XCTAssertEqual(fake.checks, 1)
     }
-
-    /// An update replaces the bundled helper at the same path: the next launch must see a build
-    /// other than the registered login item's, so it registers again and launchd runs the new one.
-    func testAnUpdatedHelperAtTheSamePathIsANewRegistration() throws {
-        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let helper = folder.appending(path: "helper")
-        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/ls"), to: helper)
-        let before = LocalHelper.identity(helper)
-        XCTAssertEqual(LocalHelper.identity(helper), before)
-        try FileManager.default.removeItem(at: helper)
-        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/cat"), to: helper)
-        XCTAssertNotEqual(LocalHelper.identity(helper), before)
-        XCTAssertTrue(before.hasPrefix(helper.path + "#"), "the code hash, not only the path")
-    }
 }
 #endif
