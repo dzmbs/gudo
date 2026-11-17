@@ -166,7 +166,64 @@ final class AgentHostFeaturesTests: XCTestCase {
         try await untilBlocked(pane)
     }
 
+    func testAFailedAgentNeedsYouInEveryCount() async throws {
+        let model = try XCTUnwrap(model), window = try XCTUnwrap(window)
+        let pane = try await launchAgent(prompt: "fail please")
+        try await until("the turn fails", timeout: .seconds(30)) { self.state(of: pane) == .error }
+        model.destination = .inbox
+        try await untilShown("API Error: rate limited", in: window)
+        let lines = try words(in: window).map { $0.text.replacingOccurrences(of: " ", with: "") }
+        XCTAssertTrue(lines.contains("Needsyou1"), "its section: \(lines)")
+        XCTAssertTrue(lines.contains("NeedsYou1"), "the Needs You filter counts what its section holds: \(lines)")
+        XCTAssertTrue(lines.contains("Errors1"), "\(lines)")
+        XCTAssertEqual(model.agents.needsYouCount, 1, "the badge")
+    }
+
+    // MARK: Toasts
+
+    func testAnAgentInAnotherTabToastsAndTheCardAnswersIt() async throws {
+        let model = try XCTUnwrap(model), window = try XCTUnwrap(window), hostId = try XCTUnwrap(hostId)
+        let workspace = try XCTUnwrap(model.workspace)
+        let home = try XCTUnwrap(workspace.session.activeTab?.id)
+        let pane = try await launchAgent(prompt: "")
+        try await until("its tab shows") { workspace.session.activeTab?.root.panes.contains(pane) == true }
+        model.focus(TabRef(hostId: hostId, tab: home))
+        try await until("back on the first tab") { workspace.session.activeTab?.id == home }
+
+        try await LiveAgentFeed.typeWhenReady("fix the parser", pane: pane.rawValue, daemon: try XCTUnwrap(connection))
+        try await untilBlocked(pane)
+        try await until("a card says it needs you") { model.agentToasts.cards.map(\.kind) == [.needsYou] }
+        let buttons = try await cardButtons(in: window)
+        try await click(try XCTUnwrap(buttons.last), in: window)
+        try await until("approved from the card", timeout: .seconds(20)) { self.state(of: pane) == .done }
+        XCTAssertTrue(screen(of: pane).contains("turn 1: Tests pass"), screen(of: pane))
+
+        try await until("a card says it finished") { model.agentToasts.cards.map(\.kind) == [.finished] }
+        let open = try await cardButtons(in: window)
+        try await click(try XCTUnwrap(open.last), in: window)
+        try await until("the card opens the agent's pane") { workspace.session.activeTab?.root.panes.contains(pane) == true }
+        XCTAssertTrue(model.agentToasts.cards.isEmpty)
+    }
+
     // MARK: Helpers
+
+    /// The agent cards' buttons, leading to trailing: their focus rings in the content's bottom
+    /// leading corner (the cards' glass draws nothing into a cached image).
+    private func cardButtons(in window: NSWindow) async throws -> [NSRect] {
+        func collect(_ view: NSView) -> [NSRect] {
+            let frame = view.convert(view.bounds, to: nil)
+            let own = String(describing: Swift.type(of: view)) == "_FocusRingView" && frame.minX >= 250 && frame.maxY < 250 ? [frame] : []
+            return own + view.subviews.flatMap(collect)
+        }
+        var rings: [NSRect] = []
+        // Once the card has slid in and holds still.
+        try await until("the card's buttons") {
+            let now = (window.contentView?.superview.map(collect) ?? []).sorted { $0.minX < $1.minX }
+            defer { rings = now }
+            return !now.isEmpty && now == rings
+        }
+        return rings
+    }
 
     private var connection: DaemonConnection? { hostId.flatMap { AppModel.shared.hosts.connection($0) as? DaemonConnection } }
 
@@ -248,17 +305,6 @@ final class AgentHostFeaturesTests: XCTestCase {
         _ = try await shown(text, in: window)
     }
 
-    private func dump(_ window: NSWindow) {
-        func walk(_ view: NSView, _ depth: Int) {
-            let name = String(describing: Swift.type(of: view))
-            if !name.hasPrefix("_NSGraphicsView") {
-                print("VIEW-DUMP \(String(repeating: " ", count: depth))\(name) \(view.convert(view.bounds, to: nil))")
-            }
-            for sub in view.subviews { walk(sub, depth + 1) }
-        }
-        if let root = window.contentView?.superview { walk(root, 0) }
-    }
-
     private func press(_ key: KeyEquivalent, modifiers: NSEvent.ModifierFlags = [], in window: NSWindow) {
         let codes: [Character: UInt16] = ["\r": 36, "\u{1B}": 53, "e": 14, "\u{F700}": 126, "\u{F701}": 125]
         let characters = String(key.character)
@@ -324,12 +370,6 @@ final class AgentHostFeaturesTests: XCTestCase {
         sheet.makeFirstResponder(prompt)
         let editor = try XCTUnwrap(prompt.currentEditor())
         editor.insertText(text)
-    }
-
-    private func snap(_ window: NSWindow, _ name: String) {
-        guard let view = window.contentView?.superview, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "/private/tmp/claude-501/-Users-vani-projects-unnamed/819dd3b9-342b-400c-a80c-e5eae2c2df64/scratchpad/features-agents/\(name).png"))
     }
 
     private func click(_ rect: NSRect, in window: NSWindow, count: Int = 1) async throws {
@@ -432,6 +472,10 @@ final class FakeAgents {
         hook SessionStart "{$base,\"hook_event_name\":\"SessionStart\",\"source\":\"startup\"}"
         while IFS= read -r line; do
           hook UserPromptSubmit "{$base,\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"task\"}"
+          case "$line" in *fail*)
+            hook StopFailure "{$base,\"hook_event_name\":\"StopFailure\",\"error\":\"rate_limit\",\"last_assistant_message\":\"API Error: rate limited\"}"
+            continue ;;
+          esac
           answer=$(hook PermissionRequest "{$base,\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"make test\",\"description\":\"Run the tests\"},\"permission_suggestions\":[{\"type\":\"addRules\",\"rules\":[{\"toolName\":\"Bash\",\"ruleContent\":\"make test\"}],\"behavior\":\"allow\",\"destination\":\"localSettings\"}]}")
           echo "answer: $answer"
           case "$answer" in *'"allow"'*) said="Tests pass";; *) said="Stopped, not allowed";; esac
