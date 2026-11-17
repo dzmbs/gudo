@@ -186,6 +186,10 @@ pub(crate) struct AgentRecord {
     /// accounts, which ran under the system account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    /// The transcript its hooks named for that session, which need not be under the pane's
+    /// directory (the agent may have started elsewhere).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<PathBuf>,
 }
 
 /// A pane that closed, kept so a recently closed tab can come back (`PaneLaunch::Reopen`).
@@ -1668,6 +1672,7 @@ impl Core {
                 kind,
                 session_id: Some(session_id),
                 account,
+                ..
             }) if crate::resumable::is_session_id(&session_id) => PaneLaunch::AccountAgent {
                 agent: kind,
                 account,
@@ -2258,6 +2263,7 @@ impl Core {
                     kind: *kind,
                     session_id: session_id.clone(),
                     account: Some(account.clone()),
+                    transcript: None,
                 }),
             worktree,
             resumable: resumable.clone(),
@@ -2495,6 +2501,16 @@ impl Core {
                 let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
                 self.ws.accounts.pin(agent.kind, &native, account);
                 agent.session_id = Some(native);
+                agent.transcript = None;
+                self.mark_dirty();
+            }
+            if let Some(agent) = record.agent.as_mut()
+                && agent.session_id.is_some()
+                && event.session.native_id.as_ref().map(ToString::to_string) == agent.session_id
+                && let Some(transcript) = &event.session.transcript
+                && agent.transcript.as_ref() != Some(transcript)
+            {
+                agent.transcript = Some(transcript.clone());
                 self.mark_dirty();
             }
         }
@@ -3580,6 +3596,7 @@ pub(crate) fn record_agent_started_by_hand(
             kind,
             session_id,
             account: Some(proto::SYSTEM_ACCOUNT.into()),
+            transcript: None,
         });
     }
     core.mark_dirty();

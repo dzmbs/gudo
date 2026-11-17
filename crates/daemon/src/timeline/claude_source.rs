@@ -272,7 +272,9 @@ fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
                 .and_then(|session| session.native_id.as_ref())
                 .map(ToString::to_string)
                 .or(agent.session_id),
-            session.and_then(|session| session.transcript.clone()),
+            session
+                .and_then(|session| session.transcript.clone())
+                .or(agent.transcript),
         )
     };
     let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);

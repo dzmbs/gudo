@@ -721,6 +721,7 @@ const CLAUDE_TRANSCRIPT: &str =
 /// Writes its transcript where Claude Code does, reports it through the hooks a hand-started
 /// Claude Code runs, and waits as `claude`.
 const FAKE_CLAUDE: &str = r#"#!/bin/bash
+cd "${CLAUDE_START_DIR:-.}"
 dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$dir"
 transcript="$dir/__ID__.jsonl"
@@ -737,6 +738,17 @@ exec -a claude /bin/sleep 600
 /// the pane over finds the same conversation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_app_update_keeps_chat_for_a_claude_started_by_hand() {
+    update_keeps_chat_for_a_claude_started_by_hand("").await;
+}
+
+/// The same for a Claude Code whose transcript is not where the pane's directory says: the
+/// path its hooks reported is kept across the update.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_update_keeps_chat_for_a_claude_started_in_another_directory() {
+    update_keeps_chat_for_a_claude_started_by_hand("CLAUDE_START_DIR=elsewhere ").await;
+}
+
+async fn update_keeps_chat_for_a_claude_started_by_hand(command_prefix: &str) {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let build =
@@ -761,7 +773,7 @@ async fn an_app_update_keeps_chat_for_a_claude_started_by_hand() {
     .unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
     let work = dir.path().join("work");
-    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(work.join("elsewhere")).unwrap();
     let state = dir.path().join("state");
     let hostd = run(&exe, &state, &dir.path().join("hostd.log"));
     let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
@@ -780,7 +792,7 @@ async fn an_app_update_keeps_chat_for_a_claude_started_by_hand() {
         panic!("new tab");
     };
     client.follow(pane).await;
-    client.type_line(pane, &claude.display().to_string());
+    client.type_line(pane, &format!("{command_prefix}{}", claude.display()));
     client.wait_text(pane, "claude-ready").await;
     client
         .until("the pane is an agent", |client| {
