@@ -95,7 +95,7 @@ struct TabSubtitle: View {
                         Text(state)
                     }
                 } else {
-                    Text(context).truncationMode(.head)
+                    PathText(context)
                 }
             }
         } else if worktree == nil && host == nil {

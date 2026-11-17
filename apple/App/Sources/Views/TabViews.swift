@@ -907,6 +907,40 @@ private struct NoHostsRow: View {
     }
 }
 
+/// A path, or any title, on one line: a path that does not fit keeps its end, whole folders of
+/// it (the directory you are in), never a word cut at its start.
+struct PathText: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            ForEach(PathTitle.forms(of: text), id: \.self) { form in
+                Text(verbatim: form)
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.tail)
+    }
+}
+
+/// The ways a row names a path, longest first: whole, then from a later folder on, then its last
+/// folder alone. Anything else is named one way.
+nonisolated enum PathTitle {
+    static func forms(of title: String) -> [String] {
+        guard title.hasPrefix("/") || title.hasPrefix("~") else { return [title] }
+        let folders = title.split(separator: "/").filter { $0 != "~" }
+        guard let last = folders.last else { return [title] }
+        let tails = stride(from: folders.count - 1, through: 2, by: -1).map { count in
+            "…/" + folders.suffix(count).joined(separator: "/")
+        }
+        return [title] + tails + [String(last)]
+    }
+}
+
 /// One tab: its number across all hosts, name and status glyph, and its context underneath.
 /// Dragged by the list (`SidebarTabList`).
 struct TabRow: View {
@@ -958,13 +992,10 @@ struct TabRow: View {
                     .attentionCue(trigger: model.attention.beat(of: ref))
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: DS.Space.row) {
-                        Text(title)
+                        PathText(title)
                             .font(SidebarFont.title)
                             // Finished work not yet looked at, until it is opened.
                             .fontWeight(state == .done && !isActive ? .semibold : .regular)
-                            .lineLimit(1)
-                            // A path keeps its end: the directory you are in.
-                            .truncationMode(title.hasPrefix("/") || title.hasPrefix("~") ? .head : .tail)
                             .shimmering(state == .working, text: title)
                             .foregroundStyle(SidebarRowInk.title(selected: isActive && !model.isSelectingTabs))
                         if tab.zoomed != nil {

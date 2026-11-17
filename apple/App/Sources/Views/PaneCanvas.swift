@@ -1061,11 +1061,9 @@ private struct DragChip: View {
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
             if let cwd = workspace.panes[pane]?.workingDirectory, !cwd.isEmpty {
-                Text(verbatim: (cwd as NSString).abbreviatingWithTildeInPath)
+                PathText((cwd as NSString).abbreviatingWithTildeInPath)
                     .font(DS.Font.literalSmall)
                     .foregroundStyle(DS.Palette.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
                     .frame(maxWidth: 180)
             }
         }

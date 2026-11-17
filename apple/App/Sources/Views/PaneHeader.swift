@@ -180,11 +180,9 @@ struct PaneTitle<Detail: View>: View {
                 .layoutPriority(1)
             detail
             if let directory = headline.directory {
-                Text(verbatim: directory)
+                PathText(directory)
                     .font(.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
                     .accessibilityLabel(TabLeadingMark.spoken(directory))
             }
         }
