@@ -2,6 +2,7 @@
 
 mod access;
 mod accounts;
+mod agent_sessions;
 mod agent_terminal;
 mod agent_tui_parity;
 mod agents;

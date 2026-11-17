@@ -116,11 +116,18 @@ pub(crate) fn process_cwd(pid: u32) -> Option<PathBuf> {
     imp::process_cwd(pid)
 }
 
+/// When a process started (an `exec` keeps it), if it exists.
+pub(crate) fn process_started_at(pid: u32) -> Option<std::time::SystemTime> {
+    imp::process_started_at(pid)
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
+
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::Listener;
 
@@ -242,6 +249,26 @@ mod imp {
     pub fn process_cwd(pid: u32) -> Option<PathBuf> {
         fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
+
+    /// Field 22 of `/proc/<pid>/stat` counts clock ticks from boot (`btime` in `/proc/stat`).
+    pub fn process_started_at(pid: u32) -> Option<SystemTime> {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let after_comm = &stat[stat.rfind(')')? + 1..];
+        let ticks: u64 = after_comm.split_whitespace().nth(19)?.parse().ok()?;
+        let boot_seconds: u64 = fs::read_to_string("/proc/stat")
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("btime "))?
+            .trim()
+            .parse()
+            .ok()?;
+        // SAFETY: `sysconf` only reads a configuration value.
+        let ticks_per_second = u64::try_from(unsafe { libc::sysconf(libc::_SC_CLK_TCK) })
+            .ok()
+            .filter(|&rate| rate > 0)?;
+        let since_boot = Duration::from_millis(ticks * 1000 / ticks_per_second);
+        Some(UNIX_EPOCH + Duration::from_secs(boot_seconds) + since_boot)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -279,6 +306,32 @@ mod imp {
     const TCPSI_STATE: usize = 80;
     const INI_IPV4: u8 = 1;
 
+    pub fn process_started_at(pid: u32) -> Option<std::time::SystemTime> {
+        let info = bsd_info(c_int::try_from(pid).ok()?)?;
+        Some(
+            std::time::UNIX_EPOCH
+                + std::time::Duration::from_secs(info.pbi_start_tvsec)
+                + std::time::Duration::from_micros(info.pbi_start_tvusec),
+        )
+    }
+
+    fn bsd_info(pid: c_int) -> Option<libc::proc_bsdinfo> {
+        let size = mem::size_of::<libc::proc_bsdinfo>() as c_int;
+        // SAFETY: proc_bsdinfo is plain old data, so all-zero is a valid value.
+        let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
+        // SAFETY: the buffer is a properly aligned proc_bsdinfo of `size` bytes.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTBSDINFO,
+                0,
+                (&raw mut info).cast::<c_void>(),
+                size,
+            )
+        };
+        (written == size).then_some(info)
+    }
+
     pub fn parent_table() -> Vec<(u32, u32)> {
         // SAFETY: a null buffer asks for the number of pids.
         let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
@@ -296,22 +349,7 @@ mod imp {
         pids.truncate(count as usize);
         pids.into_iter()
             .filter(|&pid| pid > 0)
-            .filter_map(|pid| {
-                let size = mem::size_of::<libc::proc_bsdinfo>() as c_int;
-                // SAFETY: proc_bsdinfo is plain old data, so all-zero is a valid value.
-                let mut info: libc::proc_bsdinfo = unsafe { mem::zeroed() };
-                // SAFETY: the buffer is a properly aligned proc_bsdinfo of `size` bytes.
-                let ret = unsafe {
-                    libc::proc_pidinfo(
-                        pid,
-                        libc::PROC_PIDTBSDINFO,
-                        0,
-                        (&raw mut info).cast::<c_void>(),
-                        size,
-                    )
-                };
-                (ret == size).then_some((pid as u32, info.pbi_ppid))
-            })
+            .filter_map(|pid| bsd_info(pid).map(|info| (pid as u32, info.pbi_ppid)))
             .collect()
     }
 
@@ -534,6 +572,23 @@ mod tests {
             .canonicalize()
             .unwrap();
         assert_eq!(found, directory);
+    }
+
+    #[test]
+    fn a_process_start_time_is_read() {
+        let before = std::time::SystemTime::now();
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let started = process_started_at(child.id()).unwrap();
+        let after = std::time::SystemTime::now();
+        let _ = child.kill();
+        let _ = child.wait();
+        let slack = std::time::Duration::from_secs(2);
+        assert!(started + slack >= before && started <= after + slack);
+        let own = process_started_at(std::process::id()).unwrap();
+        assert!(own <= before);
     }
 
     #[test]

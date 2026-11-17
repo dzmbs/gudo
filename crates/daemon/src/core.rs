@@ -3311,13 +3311,20 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
     let cwd = PathBuf::from(lock(&entry.record).cwd.clone().unwrap_or_default());
     let agent_dir = account_dir(core, kind, &account);
     let root = entry.pane.pty().pid();
-    // Slack for an agent that was running a moment before the pane noticed it.
-    let since = lock(&entry.agent)
-        .as_ref()
-        .map(|runtime| runtime.started_at() - Duration::from_secs(5))
-        .map_or(entry.launched_at, |started| started.max(entry.launched_at));
+    let (noticed_at, agent_pid) = match lock(&entry.agent).as_ref() {
+        Some(runtime) => (Some(runtime.started_at()), runtime.pid()),
+        None => (None, None),
+    };
     let (core, entry, busy) = (Arc::clone(core), Arc::clone(entry), Arc::clone(busy));
     tokio::task::spawn_blocking(move || {
+        // The process's own start, not when this daemon noticed it: a build a hot upgrade
+        // handed the pane to notices an agent that may have written its session long before.
+        // Slack for a start time read from a process that just exec'd, or one never seen.
+        let since = agent_pid
+            .and_then(crate::procinfo::process_started_at)
+            .or(noticed_at)
+            .map(|started| started - Duration::from_secs(5))
+            .map_or(entry.launched_at, |started| started.max(entry.launched_at));
         let found = match kind {
             AgentKind::Codex => crate::codex_session::from_open_files(root).or_else(|| {
                 crate::codex_session::from_rollouts(&agent_dir?, &cwd, since, &claimed)
@@ -3428,6 +3435,11 @@ fn runs_pi(entry: &PaneEntry) -> bool {
             .is_some_and(|process| ResumableProgram::of(&process) == Some(ResumableProgram::Pi))
 }
 
+/// When `pid` started, else now.
+fn process_started(pid: u32) -> SystemTime {
+    crate::procinfo::process_started_at(pid).unwrap_or_else(SystemTime::now)
+}
+
 /// Records the pi or Kimi agent a pane runs, and forgets it once the agent ended.
 fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::ForegroundProcess) {
     let running = ResumableProgram::of(foreground);
@@ -3436,7 +3448,8 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
         (Some(program), Some(agent)) if agent.program == program => {
             // Its environment names its sessions folder, and a pane restored with `--continue`
             // finds its session from the file written since it started.
-            lock(&entry.resumable_process).get_or_insert((foreground.pid, SystemTime::now()));
+            lock(&entry.resumable_process)
+                .get_or_insert_with(|| (foreground.pid, process_started(foreground.pid)));
             if agent.cwd.is_none() {
                 agent.cwd = crate::procinfo::process_cwd(foreground.pid)
                     .map(|cwd| cwd.to_string_lossy().into_owned());
@@ -3457,7 +3470,8 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
                 cwd: crate::procinfo::process_cwd(foreground.pid)
                     .map(|cwd| cwd.to_string_lossy().into_owned()),
             });
-            *lock(&entry.resumable_process) = Some((foreground.pid, SystemTime::now()));
+            *lock(&entry.resumable_process) =
+                Some((foreground.pid, process_started(foreground.pid)));
             drop(record);
             core.mark_dirty();
             core.emit(Event::PaneMeta(entry.pane.id));
