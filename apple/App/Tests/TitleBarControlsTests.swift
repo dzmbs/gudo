@@ -157,6 +157,9 @@ final class TitleBarControlsTests: XCTestCase {
             let isHost = hosts.contains { $0.name == path.last }
             if isHost { driver.model.destination = .inbox }
             let before = driver.state
+            let workspace = try driver.workspace
+            let focused = try XCTUnwrap(workspace.focusedPane)
+            let hasRoom = workspace.hasRoomToSplit(focused, .horizontal)
             driver.menus.choice = path
             try await driver.click(toolbarItem: "More")
             XCTAssertEqual(driver.menus.chosen, path, "More ▸ \(path) is chosen")
@@ -164,11 +167,12 @@ final class TitleBarControlsTests: XCTestCase {
             let after = driver.state
             if path == ["Command Palette"] {
                 XCTAssertEqual(after.palette, .commands, "More ▸ Command Palette")
+            } else if path == ["Split", "Split Right"], !hasRoom {
+                // A narrow window's half pane is too narrow for two: it says so instead.
+                XCTAssertEqual(after.panes, before.panes, "More ▸ Split ▸ Split Right")
+                XCTAssertEqual(driver.model.toasts.current?.message.hasPrefix("No room for another pane"), true, "More ▸ Split ▸ Split Right says why")
             } else if path.first == "Split" {
                 let did = try XCTUnwrap(Self.paneCommandDid(Array(path.dropFirst()), from: before, to: after), "nothing says what \(path) does")
-                // Chosen here without the pointer opening the submenu, this one command does
-                // nothing while the same choice in the bar's own Split menu works; open question.
-                XCTExpectFailure("More ▸ Split ▸ Split Right chosen without the pointer", enabled: path == ["Split", "Split Right"], strict: false)
                 XCTAssertTrue(did, "More ▸ \(path.joined(separator: " ▸ ")): \(before) → \(after)")
             } else {
                 XCTAssertTrue(isHost, "nothing says what More ▸ \(path) does")
