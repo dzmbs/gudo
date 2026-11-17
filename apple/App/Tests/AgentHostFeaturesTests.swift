@@ -239,24 +239,55 @@ final class AgentHostFeaturesTests: XCTestCase {
         XCTAssertTrue(model.agentToasts.cards.isEmpty)
     }
 
+    func testTheCardOffersAlwaysWhenTheAgentDoesAndItAnswersSo() async throws {
+        let model = try XCTUnwrap(model), window = try XCTUnwrap(window), hostId = try XCTUnwrap(hostId)
+        let workspace = try XCTUnwrap(model.workspace)
+        let home = try XCTUnwrap(workspace.session.activeTab?.id)
+        let pane = try await launchAgent(prompt: "")
+        try await until("its tab shows") { workspace.session.activeTab?.root.panes.contains(pane) == true }
+        model.focus(TabRef(hostId: hostId, tab: home))
+        try await until("back on the first tab") { workspace.session.activeTab?.id == home }
+
+        try await LiveAgentFeed.typeWhenReady("fix the parser", pane: pane.rawValue, daemon: try XCTUnwrap(connection))
+        try await untilBlocked(pane)
+        try await until("a card says it needs you") { model.agentToasts.cards.map(\.kind) == [.needsYou] }
+        let id = try XCTUnwrap(model.agents.items.first { $0.paneId == pane.rawValue }?.id)
+        XCTAssertTrue(model.agents.canApproveAlways(id), "the agent offers not to ask again")
+        var buttons: [NSRect] = []
+        try await until("the card shows Deny, Always and Approve") {
+            buttons = self.cardButtonRings(in: window)
+            return buttons.count == 3
+        }
+        try await click(buttons[1], in: window)
+        try await until("approved from the card", timeout: .seconds(20)) { self.state(of: pane) == .done }
+        XCTAssertTrue(screen(of: pane).contains("updatedPermissions"), screen(of: pane))
+    }
+
     // MARK: Helpers
 
-    /// The agent cards' buttons, leading to trailing: their focus rings in the content's bottom
-    /// leading corner (the cards' glass draws nothing into a cached image).
+    /// The newest agent card's buttons, leading to trailing: the lowest row of focus rings in the
+    /// content's bottom leading corner (the cards' glass draws nothing into a cached image).
     private func cardButtons(in window: NSWindow) async throws -> [NSRect] {
-        func collect(_ view: NSView) -> [NSRect] {
-            let frame = view.convert(view.bounds, to: nil)
-            let own = String(describing: Swift.type(of: view)) == "_FocusRingView" && frame.minX >= 250 && frame.maxY < 250 ? [frame] : []
-            return own + view.subviews.flatMap(collect)
-        }
         var rings: [NSRect] = []
         // Once the card has slid in and holds still.
         try await until("the card's buttons") {
-            let now = (window.contentView?.superview.map(collect) ?? []).sorted { $0.minX < $1.minX }
+            let now = self.cardButtonRings(in: window)
             defer { rings = now }
             return !now.isEmpty && now == rings
         }
         return rings
+    }
+
+    private func cardButtonRings(in window: NSWindow) -> [NSRect] {
+        func collect(_ view: NSView) -> [NSRect] {
+            let frame = view.convert(view.bounds, to: nil)
+            // Cards sit 16 pt above the window's bottom edge; the sidebar's footer below that.
+            let own = String(describing: Swift.type(of: view)) == "_FocusRingView" && frame.minY >= 16 && frame.maxY < 250 ? [frame] : []
+            return own + view.subviews.flatMap(collect)
+        }
+        let rings = window.contentView?.superview.map(collect) ?? []
+        guard let bottom = rings.map(\.minY).min() else { return [] }
+        return rings.filter { $0.minY == bottom }.sorted { $0.minX < $1.minX }
     }
 
     private func views(in window: NSWindow) -> [NSView] {
