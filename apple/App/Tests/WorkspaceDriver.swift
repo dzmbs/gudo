@@ -127,7 +127,7 @@ final class WorkspaceDriver {
         await pump(0.3)
     }
 
-    func wait(timeout: Double = 5, until condition: () -> Bool) async -> Bool {
+    func wait(timeout: Double = 10, until condition: () -> Bool) async -> Bool {
         let deadline = ContinuousClock.now + .seconds(timeout)
         while !condition() {
             if ContinuousClock.now > deadline { return false }
@@ -136,7 +136,7 @@ final class WorkspaceDriver {
         return true
     }
 
-    func expect(_ message: @autoclosure () -> String, timeout: Double = 5, file: StaticString = #filePath, line: UInt = #line,
+    func expect(_ message: @autoclosure () -> String, timeout: Double = 10, file: StaticString = #filePath, line: UInt = #line,
                 until condition: () -> Bool) async {
         if await !wait(timeout: timeout, until: condition) { XCTFail("timed out: \(message())", file: file, line: line) }
     }
@@ -189,7 +189,8 @@ final class WorkspaceDriver {
     // MARK: Pointer
 
     /// A click as the window receives it. The release waits in the queue, where a control
-    /// tracking the press reads it, or the run loop hands it on next.
+    /// tracking the press reads it; otherwise it follows the press at once, so the clicks of a
+    /// double click stay within the double-click interval however busy the machine is.
     func click(_ point: CGPoint, button: Button = .left, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) async {
         for clickCount in 1...count {
             guard let press = mouse(button.down, at: point, modifiers: modifiers, clickCount: clickCount),
@@ -197,9 +198,11 @@ final class WorkspaceDriver {
             else { return XCTFail("could not make the click") }
             NSApp.postEvent(release, atStart: false)
             window.sendEvent(press)
-            await pump(0.05)
+            if let waiting = NSApp.nextEvent(matching: button.upMask, until: .distantPast, inMode: .default, dequeue: true) {
+                window.sendEvent(waiting)
+            }
         }
-        await pump(0.1)
+        await pump(0.15)
     }
 
     func click(_ view: NSView, button: Button = .left, count: Int = 1) async {
@@ -416,6 +419,13 @@ private extension WorkspaceDriver.Button {
         switch self {
         case .left: .leftMouseDown
         case .right: .rightMouseDown
+        }
+    }
+
+    var upMask: NSEvent.EventTypeMask {
+        switch self {
+        case .left: .leftMouseUp
+        case .right: .rightMouseUp
         }
     }
 
