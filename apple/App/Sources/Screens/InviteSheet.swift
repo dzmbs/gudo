@@ -670,7 +670,7 @@ struct QRCodeView: View {
 
     var body: some View {
         if let image = Self.image(text) {
-            Image(decorative: image, scale: 1)
+            Image(image, scale: 1, label: Text(label))
                 .interpolation(.none)
                 .resizable()
                 .scaledToFit()
@@ -678,7 +678,6 @@ struct QRCodeView: View {
                 // style-exempt: a QR code scans only on a white quiet zone
                 .background(.white, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
                 .hairlineBorder(RoundedRectangle.rounded(DS.Radius.control))
-                .accessibilityLabel(label)
         }
     }
 

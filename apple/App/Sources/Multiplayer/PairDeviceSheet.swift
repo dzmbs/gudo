@@ -131,6 +131,7 @@ struct PairDeviceSheet: View {
         }
         .onChange(of: session?.freshPairings) { model.refresh(session) }
         .sensoryFeedback(DS.Haptic.success, trigger: model.stage.isPaired)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("pair-device")
     }
 
