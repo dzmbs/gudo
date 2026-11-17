@@ -174,6 +174,11 @@ final class AgentHostFeaturesTests: XCTestCase {
         let model = try XCTUnwrap(model), window = try XCTUnwrap(window)
         let pane = try await launchAgent(prompt: "fail please")
         try await until("the turn fails", timeout: .seconds(30)) { self.state(of: pane) == .error }
+        let hostId = try XCTUnwrap(hostId)
+        XCTAssertEqual(model.agentState(ofPane: pane, onGroup: hostId), .error, "the sidebar, tab strip and palette agree with the Inbox")
+        let workspace = try XCTUnwrap(model.workspace(ofGroup: hostId))
+        let tab = try XCTUnwrap(workspace.session.tab(containing: pane))
+        XCTAssertEqual(workspace.windowSubtitle(of: tab), "Claude Code · failed")
         model.destination = .inbox
         try await untilShown("API Error: rate limited", in: window)
         let lines = try words(in: window).map { $0.text.replacingOccurrences(of: " ", with: "") }

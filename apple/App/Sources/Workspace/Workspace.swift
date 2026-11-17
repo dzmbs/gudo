@@ -441,6 +441,7 @@ final class Workspace {
         let name = title(of: tab)
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[paneId]?.agent {
             let kind = AgentKind(agent.kind).title
+            if daemon.report(of: paneId)?.state == .error { return "\(kind) · failed" }
             switch agent.state {
             case .blocked(_, let summary, _): return SharedApproval.shows(summary: summary) ? "\(kind) · needs you: \(summary)" : "\(kind) · needs you"
             case .running: return "\(kind) · working"

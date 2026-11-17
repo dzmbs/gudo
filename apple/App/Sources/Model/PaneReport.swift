@@ -74,6 +74,18 @@ extension DesignSystem.AgentState {
 
 extension DaemonConnection {
     func report(of pane: PaneId) -> PaneReport? {
-        PaneReport(meta: meta[pane], program: programs[pane])
+        guard var report = PaneReport(meta: meta[pane], program: programs[pane]) else { return nil }
+        if meta[pane]?.agent != nil, report.state == .done || report.state == .idle, lastTurnFailed(in: pane) {
+            report.state = .error
+        }
+        return report
+    }
+
+    /// The agent reports a turn that failed as done; the host's attention feed, which the Inbox
+    /// reads, says it failed.
+    private func lastTurnFailed(in pane: PaneId) -> Bool {
+        let latest = existingWorkspace?.attention.filter { $0.paneId == pane.rawValue }.max { $0.id < $1.id }
+        if case .agentFailed? = latest?.kind { return true }
+        return false
     }
 }
