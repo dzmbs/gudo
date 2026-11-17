@@ -176,8 +176,9 @@ extension Pane {
         #if os(macOS)
         // AppKit hands first responder to the window as soon as the old container leaves it, so
         // the focused pane takes it back whenever nothing else in the window has it. Only the
-        // focused pane: taking first responder focuses the pane.
-        guard let window = target.window, isFocusedPane(), !view.refusesKeyboard,
+        // focused pane, and only where its new place is the focused leaf (a tool or page beside
+        // it in a mixed tab may have the focus): taking first responder focuses the pane.
+        guard let window = target.window, isFocusedPane(), target.isFocusedPane, !view.refusesKeyboard,
               hadKeyboard || window.firstResponder == nil || window.firstResponder === window
         else { return announceMove(to: target) }
         if let canvas { canvas.takeKeyboard() } else { window.makeFirstResponder(view) }
