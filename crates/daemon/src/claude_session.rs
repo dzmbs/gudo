@@ -36,6 +36,20 @@ pub(crate) fn from_argv(argv: &[String]) -> Option<String> {
     None
 }
 
+/// The transcript of `session` in whichever project folder holds it: Claude Code files a
+/// session under the directory it started in, which need not be the pane's.
+pub(crate) fn find_transcript(config_dir: &Path, session: &str) -> Option<std::path::PathBuf> {
+    if !is_session_id(session) {
+        return None;
+    }
+    let file_name = format!("{session}.jsonl");
+    std::fs::read_dir(config_dir.join("projects"))
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join(&file_name))
+        .find(|path| path.is_file())
+}
+
 /// Claude Code's folder for the transcripts of sessions started in `cwd`.
 pub(crate) fn project_dir(config_dir: &Path, cwd: &Path) -> std::path::PathBuf {
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
@@ -94,6 +108,24 @@ mod tests {
 
     fn argv(words: &[&str]) -> Vec<String> {
         words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_session_transcript_is_found_in_any_project_folder() {
+        let config = tempfile::tempdir().unwrap();
+        let elsewhere = config.path().join("projects/-somewhere-else");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir_all(config.path().join("projects/-work")).unwrap();
+        std::fs::write(elsewhere.join(format!("{ID}.jsonl")), "{}\n").unwrap();
+        assert_eq!(
+            find_transcript(config.path(), ID),
+            Some(elsewhere.join(format!("{ID}.jsonl")))
+        );
+        assert_eq!(
+            find_transcript(config.path(), "1f0c2a4e-5b1d-4c3e-9a7f-0123456789ab"),
+            None
+        );
+        assert_eq!(find_transcript(config.path(), "../escape"), None);
     }
 
     #[test]

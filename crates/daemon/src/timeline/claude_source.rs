@@ -302,8 +302,14 @@ fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
         return Err(WsError::Invalid("the agent session id is invalid".into()));
     }
     let expected = hook_path.unwrap_or_else(|| {
-        crate::claude_session::project_dir(&config_directory, &working_directory)
-            .join(format!("{native_session}.jsonl"))
+        let in_pane_directory =
+            crate::claude_session::project_dir(&config_directory, &working_directory)
+                .join(format!("{native_session}.jsonl"));
+        if in_pane_directory.exists() {
+            return in_pane_directory;
+        }
+        crate::claude_session::find_transcript(&config_directory, &native_session)
+            .unwrap_or(in_pane_directory)
     });
     let path = if !native_session.is_empty() && expected.exists() {
         Some(super::transcript::validate_path(
