@@ -142,19 +142,22 @@ final class TerminalInputUITests: XCTestCase {
     func testSelectionDragCopyAndPasteBack() throws {
         let app = launchFocused()
         let pane = element(app, "pane-1")
+        // The banner starts with the build's brand name ("<brand> · pane-1 · …").
+        let banner = (element(app, "pane-1-screen").value as? String ?? "").prefix { !$0.isNewline }
+        let paneName = try XCTUnwrap(banner.range(of: "pane-1"), "the banner: \(banner)")
+        let selected = String(banner[..<paneName.upperBound])
         cellPoint(pane, x: 3, y: 0).press(forDuration: 0.8)
         let end = element(app, "selection-end-handle")
         XCTAssertTrue(end.waitForExistence(timeout: 5))
-        // "Gudo · pane-1" ends at column 15.
         end.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .press(forDuration: 0.1, thenDragTo: cellPoint(pane, x: 15, y: 0))
+            .press(forDuration: 0.1, thenDragTo: cellPoint(pane, x: selected.count - 1, y: 0))
         let copy = app.menuItems["Copy"].firstMatch
         XCTAssertTrue(copy.waitForExistence(timeout: 5))
         copy.tap()
         // A key sent while the edit menu is still going away does not reach the terminal.
         XCTAssertTrue(copy.waitForNonExistence(timeout: 5))
         app.typeKey("v", modifierFlags: .command)
-        expectScreen(app, containing: "❯ Gudo · pane-1")
+        expectScreen(app, containing: "❯ \(selected)")
     }
 
     @MainActor
