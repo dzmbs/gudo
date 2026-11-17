@@ -369,6 +369,8 @@ final class WindowModel {
     /// The editor shown full screen while it has the focus (⌃⌘F, `isEditorFullScreen`).
     var fullScreenEditor: UUID?
     let ports: any PortSource
+    /// The host's own files, changes, ports and links even under `-mock` (`init`'s `liveTools`).
+    let hasLiveTools: Bool
     let links: any LinkSource
     /// Agent plan usage per host (sidebar host headers, Inbox).
     let usage: any UsageFeed
@@ -411,6 +413,7 @@ final class WindowModel {
     init(app: AppModel, isPresentation: Bool = false, agents mockAgents: (any AgentFeed)? = nil, liveTools: Bool = false) {
         self.app = app
         self.isPresentation = isPresentation
+        hasLiveTools = liveTools
         Self.made += 1
         serial = Self.made
         groups = HostGroups(

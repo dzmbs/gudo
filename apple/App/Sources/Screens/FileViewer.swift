@@ -173,7 +173,7 @@ enum FileViewerMode: String, CaseIterable, Identifiable {
 
 extension WindowModel {
     func fileReader(for target: FileTarget) -> any FileReading {
-        if LaunchOptions.mock { return MockFileReader() }
+        if LaunchOptions.mock, !hasLiveTools { return MockFileReader() }
         guard let hostId = target.hostId else { return LocalFileReader() }
         let app = app
         return DaemonFileReader {
