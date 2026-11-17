@@ -16,8 +16,10 @@ final class WindowDriver {
     /// and a window that is not key takes a first click on its content only to become key.
     final class OffscreenWindow: NSWindow {
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
-        override var canBecomeKey: Bool { true }
-        override var isKeyWindow: Bool { true }
+        /// Closed, it stops saying it is key, so later tests' windows are the only key ones.
+        var isOpen = true
+        override var canBecomeKey: Bool { isOpen }
+        override var isKeyWindow: Bool { isOpen }
     }
 
     enum MouseButton {
@@ -102,6 +104,7 @@ final class WindowDriver {
     func close() {
         model.isPaletteShown = false
         model.sheet = nil
+        (window as? OffscreenWindow)?.isOpen = false
         window.close()
         model.close()
         trap.uninstall()
