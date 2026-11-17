@@ -29,8 +29,9 @@ final class AppModel {
     /// when This Mac's helper serves the Mac instead.
     let localLayout: LocalLayoutStore
     #if os(macOS)
-    /// This Mac's own helper (nil for design fixtures and `-mock`).
-    let localHelper: LocalHelper?
+    /// This Mac's own helper (nil for design fixtures and `-mock`, unless a test hands This Mac
+    /// to one of its own with `serveThisMac(with:)`).
+    private(set) var localHelper: LocalHelper?
     #endif
 
     /// Saves daemon hosts' workspaces for instant start (nil for design fixtures and `-mock`).
@@ -84,7 +85,6 @@ final class AppModel {
         }
         #if os(macOS)
         let helper = LaunchOptions.mock || LaunchOptions.screen != nil ? nil : LocalHelper.app(hosts: hosts)
-        localHelper = helper
         let helperServesMac = helper?.isEnabled == true
         #else
         let helperServesMac = false
@@ -96,11 +96,7 @@ final class AppModel {
         hosts.onBrowserPush = { [weak self] id, push in self?.browserPush(id, push) }
         hosts.onClipboard = { [weak self] id, pane, text in self?.clipboardWrite(id, pane, text) }
         #if os(macOS)
-        helper?.onReady = { [weak self] id in self?.thisDeviceReady(id) }
-        helper?.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }
-        hosts.onThisDeviceRemoved = { [weak helper] _ in helper?.pairAgain() ?? false }
-        helper?.start()
-        if let helper { connectEarly(helper) }
+        serveThisMac(with: helper)
         #endif
         if let store = hosts.workspaceCache {
             let writer = WorkspaceCacheWriter(store: store, hosts: hosts) { [weak self] in self?.openWorkspaces ?? [] }
@@ -199,6 +195,18 @@ final class AppModel {
     // MARK: This Mac's helper
 
     #if os(macOS)
+    /// This Mac is served by `helper`: it starts now, and each window shows it once it is ready.
+    /// Nil leaves This Mac to its plain shells.
+    func serveThisMac(with helper: LocalHelper?) {
+        localHelper = helper
+        guard let helper else { return }
+        helper.onReady = { [weak self] id in self?.thisDeviceReady(id) }
+        helper.onUnavailable = { [weak self] in self?.thisDeviceUnavailable() }
+        hosts.onThisDeviceRemoved = { [weak helper] _ in helper?.pairAgain() ?? false }
+        helper.start()
+        connectEarly(helper)
+    }
+
     /// Dials This Mac's helper before any window exists when it already runs (a login item)
     /// and is the one paired: the first frame then shows its saved workspace and the link is
     /// on its way. The helper's own start (login item checks, pairing) follows.
