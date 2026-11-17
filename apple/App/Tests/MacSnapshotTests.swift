@@ -405,6 +405,40 @@ final class MacSnapshotTests: XCTestCase {
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
     }
 
+    /// A long sidebar scrolled part way: the header of the project under the top edge pinned
+    /// there, then pushed up by the end of its rows.
+    func testPinnedProjectHeader() async throws {
+        try await window("sidebar-pinned", screen: "single", size: CGSize(width: 1000, height: 620)) { model in
+            let names = ["humble-valley", "brisk-lynx", "amber-finch"]
+            while model.groups.tabs.count < names.count * 6 { model.newTab() }
+            await self.pump(1)
+            let tabs = model.groups.tabs
+            for (index, name) in names.enumerated() {
+                model.newProject(from: Array(tabs[index * 6..<(index + 1) * 6]), name: name, naming: false)
+            }
+            await self.pump(1)
+            guard let window = self.current, let table = Self.table(in: window.contentView), let scrollView = table.enclosingScrollView,
+                  let next = model.projects.dropFirst().first
+            else { return XCTFail("the sidebar's list") }
+            let ids = model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id)
+            let leading = table.numberOfRows - ids.count
+            let nextHeader = table.rect(ofRow: (ids.firstIndex(of: "project/\(next.id)") ?? 0) + leading)
+            // The edge part way down the first project's rows, then just above the next header.
+            for (name, edge) in [("sidebar-pinned-middle", nextHeader.minY - 90), ("sidebar-pinned-pushed", nextHeader.minY - 16)] {
+                scrollView.contentView.scroll(to: NSPoint(x: 0, y: edge - scrollView.contentInsets.top))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+                await self.pump(1)
+                try? self.capture(window, name)
+            }
+        }
+    }
+
+    private static func table(in view: NSView?) -> NSTableView? {
+        guard let view else { return nil }
+        if let table = view as? NSTableView, table.numberOfRows > 0 { return table }
+        return view.subviews.lazy.compactMap { table(in: $0) }.first
+    }
+
     /// Tabs in a repository keep their rows with the branch and changes on them; the worktrees
     /// without tabs fold after the host's tabs.
     func testRepositoryTabs() async throws {
