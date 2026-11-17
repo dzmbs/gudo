@@ -118,7 +118,7 @@ final class AgentToastsTests: XCTestCase {
         ]
         func ids(_ filter: InboxFilter) -> [String] { items.filter(filter.includes).map(\.id) }
         XCTAssertEqual(ids(.all).count, 4)
-        XCTAssertEqual(ids(.needsYou), ["blocked"])
+        XCTAssertEqual(ids(.needsYou), ["blocked", "failed"])
         XCTAssertEqual(ids(.running), ["working"])
         XCTAssertEqual(ids(.unread), ["done"])
         XCTAssertEqual(ids(.errors), ["failed"])

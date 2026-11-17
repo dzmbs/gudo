@@ -27,7 +27,8 @@ enum InboxFilter: String, CaseIterable, Identifiable {
     func includes(_ item: AgentItem) -> Bool {
         switch self {
         case .all: true
-        case .needsYou: item.state == .blocked
+        // What the "Needs you" section and the badge count: a failed agent waits for you too.
+        case .needsYou: item.state.needsYou
         case .running: item.state == .working
         case .unread: item.unseen
         case .errors: item.state == .error
