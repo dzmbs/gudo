@@ -306,6 +306,8 @@ final class ToolPanesHostTests: XCTestCase {
         // which an offscreen window never draws.)
         let open = try await shown("Open")
         let click = try await shown("Click")
+        // The transport settles once the recording has loaded under it.
+        try await Task.sleep(for: .seconds(1))
         let transport = try transportButtons(above: open)
         try await driver.click(at: center(of: transport[2]))
         try await until("Next Step goes to the click") { try self.isHighlighted(click) && !self.isHighlighted(open) }

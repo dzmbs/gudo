@@ -206,7 +206,12 @@ struct SessionReplayView: View {
         player = newPlayer
         let lines = ReplayStore.shared.eventLines(session.id)
         await newPlayer.load(events: "[" + lines.joined(separator: ",") + "]", size: CGSize(width: 800, height: 600))
-        if newPlayer.isEmpty { selected = session.actions.first?.id }
+        if newPlayer.isEmpty {
+            selected = session.actions.first?.id
+        } else if let selected, let action = session.actions.first(where: { $0.id == selected }) {
+            // A step chosen while the recording loaded: the playhead had no length to move on.
+            newPlayer.seek(newPlayer.offset(of: action))
+        }
     }
 
     // MARK: Stage
