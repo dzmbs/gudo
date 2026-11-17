@@ -3,8 +3,9 @@ import DesignSystem
 import HostKit
 import SwiftUI
 
-/// Three dots on a small card just above the composer while the agent works. The working
-/// shimmer sweeps them; under Reduce Motion they hold still.
+/// Three dots on a small capsule just above the composer while the agent works, on the
+/// composer's own flat fill so it reads no heavier. The working shimmer sweeps them; under
+/// Reduce Motion they hold still.
 struct ChatWorkingIndicator: View {
     private static let dots = "•••"
 
@@ -14,7 +15,7 @@ struct ChatWorkingIndicator: View {
             .foregroundStyle(DS.Palette.textSecondary)
             .shimmering(true, text: Self.dots)
             .padding(.horizontal, DS.Space.m).padding(.vertical, DS.Space.xs)
-            .floatingCapsule()
+            .surface(.tile, in: Capsule(), fill: DS.Palette.raised)
             .allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Working")

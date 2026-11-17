@@ -59,6 +59,20 @@ final class ChatRenderMeasureTests: XCTestCase {
         }
     }
 
+    func testTheWorkingDotsCastNoShadowOnWhatIsUnderThem() throws {
+        for theme in [Self.dark, Self.light] {
+            let canvas = CGSize(width: 240, height: 160)
+            let pixels = try Self.render(ChatWorkingIndicator().frame(width: canvas.width, height: canvas.height), theme: theme,
+                                         size: canvas)
+            let base = pixels.rgb(1, 1)
+            let center = Int(canvas.height / 2 * Self.scale)
+            let below = (center + Int(20 * Self.scale))..<(center + Int(34 * Self.scale))
+            let columns = (pixels.width / 2 - Int(30 * Self.scale))..<(pixels.width / 2 + Int(30 * Self.scale))
+            let darkest = below.flatMap { y in columns.map { pixels.distance($0, y, from: base) } }.max() ?? 0
+            XCTAssertLessThanOrEqual(darkest, 3, "\(theme.name): under the dots reads as the background")
+        }
+    }
+
     // MARK: Rendering
 
     private static let dark = ThemeCatalog.theme(named: TerminalPreferences.Default.theme)
