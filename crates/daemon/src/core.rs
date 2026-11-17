@@ -3357,8 +3357,16 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
             AgentKind::Codex => crate::codex_session::from_open_files(root).or_else(|| {
                 crate::codex_session::from_rollouts(&agent_dir?, &cwd, since, &claimed)
             }),
+            // Claude Code files a session under the directory it started in, which is its own
+            // working directory, not always the pane's.
             AgentKind::Claude => agent_dir.and_then(|dir| {
-                crate::claude_session::from_transcripts(&dir, &cwd, since, &claimed)
+                agent_pid
+                    .and_then(crate::procinfo::process_cwd)
+                    .into_iter()
+                    .chain([cwd])
+                    .find_map(|cwd| {
+                        crate::claude_session::from_transcripts(&dir, &cwd, since, &claimed)
+                    })
             }),
             AgentKind::Pi => None,
         };
