@@ -1537,6 +1537,9 @@ private struct RenameTabPrompt: ViewModifier {
                 #if os(iOS)
                 .textInputAutocapitalization(.never)
                 #endif
+                // Without an identity of its own the field opens empty the next time the prompt
+                // opens on the Mac, while Rename still gives the old name.
+                .id(workspace.renamingTab)
             Button("Rename") {
                 if let id = workspace.renamingTab { workspace.apply(.rename(id, draft)) }
             }
