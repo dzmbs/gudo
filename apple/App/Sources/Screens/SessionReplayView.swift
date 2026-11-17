@@ -143,6 +143,7 @@ struct SessionReplayView: View {
     @State private var selected: Int?
     @State private var exported: ExportedTest?
     @State private var confirmDelete = false
+    @State private var width: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
     @Environment(\.toolNavigation) private var navigation
     @Environment(WindowModel.self) private var model
@@ -150,12 +151,16 @@ struct SessionReplayView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
 
+    private static let stepsWidth: CGFloat = 320
+    /// Narrower than this (a leaf beside a page), the steps go under the page instead of
+    /// beside it.
+    private static let sideBySideWidth: CGFloat = stepsWidth + 400
+
     private var isCompact: Bool {
         #if os(iOS)
-        sizeClass == .compact
-        #else
-        false
+        if sizeClass == .compact { return true }
         #endif
+        return width > 0 && width < Self.sideBySideWidth
     }
 
     /// The step at the playhead (its result is what the page shows).
@@ -174,12 +179,13 @@ struct SessionReplayView: View {
                 }
             } else {
                 HStack(spacing: 0) {
-                    steps.frame(width: 320)
+                    steps.frame(width: Self.stepsWidth)
                     Hairline(.vertical)
                     stage
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background(DS.Palette.base)
         .toolChrome(session.displayTitle) { actions }
         .task(id: session.id) { await load() }
@@ -238,51 +244,78 @@ struct SessionReplayView: View {
             .accessibilityIdentifier("replay-player")
     }
 
+    /// One row where it fits; beside a page, the playhead over the buttons and clock.
     private var transport: some View {
-        HStack(spacing: DS.Space.m) {
-            Button("Previous Step", systemImage: "backward.end.fill") { step(-1) }
-                .toolShortcut(.leftArrow, modifiers: [])
-                .accessibilityIdentifier("replay-step-back")
-            Button(player?.isPlaying == true ? "Pause" : "Play", systemImage: player?.isPlaying == true ? "pause.fill" : "play.fill") {
-                guard let player else { return }
-                if player.isPlaying { player.pause() } else { player.play() }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: DS.Space.m) {
+                stepButtons
+                scrubber
+                clock
+                speedMenu
             }
-            .toolShortcut(.space, modifiers: [])
-            .contentTransition(.symbolEffect(.replace))
-            .disabled(player?.isEmpty != false)
-            .accessibilityIdentifier("replay-play")
-            Button("Next Step", systemImage: "forward.end.fill") { step(1) }
-                .toolShortcut(.rightArrow, modifiers: [])
-                .accessibilityIdentifier("replay-step-forward")
-            scrubber
-            Text(timeLabel)
-                .font(DS.Font.meta)
-                .foregroundStyle(DS.Palette.textSecondary)
-                .fixedSize()
-                .accessibilityIdentifier("replay-time")
-            Menu {
-                Picker("Speed", selection: Binding(get: { player?.speed ?? 1 }, set: { player?.speed = $0 })) {
-                    ForEach([0.5, 1, 2, 4, 8], id: \.self) { Text(Self.speedLabel($0)).tag($0) }
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .floatingCapsule(interactive: true)
+            VStack(spacing: DS.Space.xs) {
+                scrubber
+                HStack(spacing: DS.Space.s) {
+                    stepButtons
+                    Spacer(minLength: 0)
+                    clock
+                    speedMenu
                 }
-            } label: {
-                Text(Self.speedLabel(player?.speed ?? 1))
-                    .font(DS.Font.meta.weight(.semibold))
-                    .frame(minWidth: 28)
             }
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel("Speed")
-            .accessibilityIdentifier("replay-speed")
+            .padding(.horizontal, DS.Space.l)
+            .padding(.vertical, DS.Space.s)
+            .floatingPanel()
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.bar)
-        .padding(.horizontal, DS.Space.l)
-        .padding(.vertical, DS.Space.s)
-        .floatingCapsule(interactive: true)
         .padding([.horizontal, .bottom], DS.Space.l)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("replay-transport")
         .accessibilityValue(currentAction.map { "step \($0 + 1)" } ?? "")
+    }
+
+    @ViewBuilder private var stepButtons: some View {
+        Button("Previous Step", systemImage: "backward.end.fill") { step(-1) }
+            .toolShortcut(.leftArrow, modifiers: [])
+            .accessibilityIdentifier("replay-step-back")
+        Button(player?.isPlaying == true ? "Pause" : "Play", systemImage: player?.isPlaying == true ? "pause.fill" : "play.fill") {
+            guard let player else { return }
+            if player.isPlaying { player.pause() } else { player.play() }
+        }
+        .toolShortcut(.space, modifiers: [])
+        .contentTransition(.symbolEffect(.replace))
+        .disabled(player?.isEmpty != false)
+        .accessibilityIdentifier("replay-play")
+        Button("Next Step", systemImage: "forward.end.fill") { step(1) }
+            .toolShortcut(.rightArrow, modifiers: [])
+            .accessibilityIdentifier("replay-step-forward")
+    }
+
+    private var clock: some View {
+        Text(timeLabel)
+            .font(DS.Font.meta)
+            .foregroundStyle(DS.Palette.textSecondary)
+            .fixedSize()
+            .accessibilityIdentifier("replay-time")
+    }
+
+    private var speedMenu: some View {
+        Menu {
+            Picker("Speed", selection: Binding(get: { player?.speed ?? 1 }, set: { player?.speed = $0 })) {
+                ForEach([0.5, 1, 2, 4, 8], id: \.self) { Text(Self.speedLabel($0)).tag($0) }
+            }
+        } label: {
+            Text(Self.speedLabel(player?.speed ?? 1))
+                .font(DS.Font.meta.weight(.semibold))
+                .frame(minWidth: 28)
+        }
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("Speed")
+        .accessibilityIdentifier("replay-speed")
     }
 
     /// The playhead over the recording, with a tick at each step.

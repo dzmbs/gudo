@@ -252,6 +252,54 @@ final class ToolPanesHostTests: XCTestCase {
         try await until("the shell goes there") { self.terminal?.workingDirectory == project.appending(path: "src").path }
     }
 
+    // MARK: Replays
+
+    /// What an agent does on a page is kept: the page's Replays button opens its session beside
+    /// it, with its steps, and the transport steps through them and plays.
+    func testAnAgentsPageSessionReplaysFromThePagesReplaysButton() async throws {
+        let driver = try XCTUnwrap(driver)
+        let model = driver.model
+        let port = try await startServer()
+        let agent = HostPane(hostId: try XCTUnwrap(hostId), pane: try XCTUnwrap(workspace?.focusedPane))
+
+        let snapshot = try await agentCall("browser_navigate", ["url": "http://localhost:\(port)/"], from: agent)
+        // Two seconds apart, so the steps sit at different times on the playhead.
+        try await Task.sleep(for: .seconds(2))
+        let ref = try XCTUnwrap(snapshot.firstMatch(of: /link "Two".*\[(ref_\d+)\]/)?.1, snapshot)
+        _ = try await agentCall("browser_click", ["target": ["type": "ref", "ref": String(ref)]], from: agent)
+        let member = try XCTUnwrap(model.composites.tab(containing: agent)?.browsers.values.first, "the agent's page beside it")
+        let page = try await page(of: member)
+        try await until("the click went through") { page.page.title == "Fixture Two" }
+        try await until("the session is kept") { ReplayStore.shared.sessions.contains { $0.page == member.id && $0.actions.count == 2 } }
+
+        // The page's own bar: Replays sits before New Browser Tab, More and Close.
+        model.focusLeaf(try XCTUnwrap(model.activeMixed?.leaf(forBrowser: member.id)), inMixedTab: try XCTUnwrap(model.activeMixedTab))
+        try await until("the page has the focus") { model.activeMixed?.focusedBrowser == member }
+        let buttons = try barButtons()
+        try await driver.click(at: center(of: buttons[buttons.count - 4]))
+        try await until("Replays opens beside the page") { model.activeMixed?.focusedTool?.tool == .replays }
+        _ = try await shown("Fixture Two")
+        _ = try await shown("Open")
+        _ = try await shown("Click")
+
+        // The transport over the steps: Previous Step, Play and Next Step lead its lower row.
+        // The current step is the highlighted row. (Play runs on the page's animation frames,
+        // which an offscreen window never draws.)
+        let open = try await shown("Open")
+        let click = try await shown("Click")
+        let transport = try transportButtons(above: open)
+        try await driver.click(at: center(of: transport[2]))
+        try await until("Next Step goes to the click") { try self.isHighlighted(click) && !self.isHighlighted(open) }
+        try await driver.click(at: center(of: transport[0]))
+        try await until("Previous Step back to the start") { try self.isHighlighted(open) && !self.isHighlighted(click) }
+
+        // → and ← step too while the replay has the focus.
+        try await driver.press(KeyboardShortcut(.rightArrow, modifiers: []))
+        try await until("→ goes to the click") { try self.isHighlighted(click) && !self.isHighlighted(open) }
+        try await driver.press(KeyboardShortcut(.leftArrow, modifiers: []))
+        try await until("← back to the start") { try self.isHighlighted(open) && !self.isHighlighted(click) }
+    }
+
     // MARK: Helpers
 
     private var workspace: Workspace? { driver?.model.workspace }
@@ -409,6 +457,57 @@ final class ToolPanesHostTests: XCTestCase {
             return found != nil
         }
         return try XCTUnwrap(found)
+    }
+
+    private var nextCall: UInt64 = 1
+
+    /// A browser tool called by the agent in `pane`, as the host hands it to the app; its text.
+    private func agentCall(_ tool: String, _ args: [String: Any], from pane: HostPane) async throws -> String {
+        let id = nextCall
+        nextCall += 1
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: args), as: UTF8.self)
+        let result = await withCheckedContinuation { continuation in
+            BrowserAgent.shared.run(id, tool: tool, args: json, pane: pane, app: .shared) { continuation.resume(returning: $0) }
+        }
+        switch result {
+        case .success(let answer):
+            let object = (try? JSONSerialization.jsonObject(with: Data(answer.utf8))) as? [String: Any]
+            return object?["text"] as? String ?? ""
+        case .failure(let error):
+            XCTFail("\(tool): \(error.message)")
+            throw error
+        }
+    }
+
+    /// The replay's transport buttons on its lower row, leading to trailing: just above the
+    /// first step's row, inside the replay's leaf.
+    private func transportButtons(above firstStep: NSRect) throws -> [NSRect] {
+        func rings(_ view: NSView) -> [NSRect] {
+            let own = String(describing: Swift.type(of: view)) == "_FocusRingView" ? [view.convert(view.bounds, to: nil)] : []
+            return own + view.subviews.flatMap(rings)
+        }
+        let band = rings(try XCTUnwrap(driver?.window.contentView))
+            .filter { $0.minY > firstStep.maxY && $0.minY < firstStep.maxY + 140 && $0.maxX > firstStep.minX - 80 }
+        let lowest = try XCTUnwrap(band.map(\.midY).min(), "the transport's buttons")
+        let row = band.filter { abs($0.midY - lowest) < 4 }.sorted { $0.minX < $1.minX }
+        XCTAssertGreaterThanOrEqual(row.count, 3, "Previous Step, Play, Next Step: \(row)")
+        return row
+    }
+
+    /// Whether the row whose title is drawn at `title` has the selected row's fill, read from
+    /// the window's pixels just past the title.
+    private func isHighlighted(_ title: NSRect) throws -> Bool {
+        let view = try XCTUnwrap(driver?.window.contentView?.superview)
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+        func brightness(_ point: NSPoint) -> CGFloat {
+            let color = bitmap.colorAt(x: Int(point.x * scale), y: Int((view.bounds.height - point.y) * scale))
+            return color?.usingColorSpace(.sRGB)?.brightnessComponent ?? 0
+        }
+        let row = brightness(NSPoint(x: title.maxX + 24, y: title.midY))
+        let list = brightness(NSPoint(x: title.maxX + 24, y: title.minY - 60))
+        return row > list + 0.04
     }
 
     /// The browser bar's address field.
