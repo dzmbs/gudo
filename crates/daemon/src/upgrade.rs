@@ -458,6 +458,17 @@ pub struct RestartCall {
 pub struct RestartAsk {
     /// The daemon's own hook token (`<state>/hook.token`), not a pane's.
     pub token: String,
+    /// The build to hand over to, when not the one at the daemon's own path (`restart
+    /// --into`): from then on the daemon runs from there. Daemons from before ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<PathBuf>,
+}
+
+impl RestartCall {
+    /// The build this call restarts into: the one it names, else the daemon's own path.
+    fn target(&self, core: &Core) -> Option<PathBuf> {
+        self.restart.exe.clone().or_else(|| core.cfg.exe.clone())
+    }
 }
 
 /// The answer to a [`RestartCall`].
@@ -480,18 +491,26 @@ pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> Resta
         tracing::warn!("refused a restart request with a bad token");
         return RestartReply::Refused("not allowed".into());
     }
-    let Some(exe) = core.cfg.exe.clone() else {
+    let Some(exe) = call.target(core) else {
         return RestartReply::Refused("this daemon does not know its executable".into());
     };
+    if !exe.is_absolute() {
+        return RestartReply::Refused(format!("{} is not an absolute path", exe.display()));
+    }
     if core.upgrade.started_from.is_some() && core.upgrade.started_from == file_identity(&exe) {
         return RestartReply::Current;
     }
     let Some(busy) = Busy::acquire(&core.upgrade.busy) else {
         return RestartReply::Refused("an update is already running".into());
     };
+    let running = crate::info::build_info(DaemonFeatures::EMPTY);
     match check(&exe).await {
+        Ok((info, _)) if info.is_older_than(&running) => RestartReply::Refused(format!(
+            "the installed build {} is older than the running {}",
+            info.build, running.build
+        )),
         Ok((info, true)) => {
-            tracing::info!(build = %info.build, "restarting into the installed build");
+            tracing::info!(build = %info.build, exe = %exe.display(), "restarting into the installed build");
             busy.keep();
             RestartReply::Restarting
         }
@@ -505,9 +524,9 @@ pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> Resta
 
 /// After the [`RestartReply::Restarting`] answer went out: asks the host process to restart
 /// into the installed build.
-pub(crate) fn after_restart_reply(core: &Core, reply: &RestartReply) {
+pub(crate) fn after_restart_reply(core: &Core, call: &RestartCall, reply: &RestartReply) {
     if *reply == RestartReply::Restarting
-        && let Some(exe) = core.cfg.exe.clone()
+        && let Some(exe) = call.target(core)
     {
         core.upgrade.request_restart(exe, true);
     }

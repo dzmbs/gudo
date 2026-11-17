@@ -125,8 +125,12 @@ enum Command {
     Status,
     /// Restart the running daemon into the build now installed at its path (after a package
     /// or app update), keeping its sessions running. Fails, changing nothing, when that build
-    /// cannot take them over.
-    Restart,
+    /// cannot take them over or is older than the running one.
+    Restart {
+        /// Hand over to the build at this path instead, which the daemon then runs from.
+        #[arg(long, value_name = "EXE")]
+        into: Option<PathBuf>,
+    },
     /// The paired owner devices (guests are managed in the app). In a terminal: pair a new
     /// one, rename or remove them.
     Devices {
@@ -295,7 +299,7 @@ fn main() -> Result<()> {
             local,
         ),
         Command::Status => status(&state_dir),
-        Command::Restart => restart(&state_dir),
+        Command::Restart { into } => restart(&state_dir, into.as_deref()),
         Command::Devices { json } => devices::run(&state_dir, json),
         Command::Rename { device, name } => devices::rename(&state_dir, &device, &name.join(" ")),
         Command::Unpair { device } => {
@@ -450,6 +454,7 @@ fn run(
         .enable_all()
         .thread_name("hostd")
         .build()?;
+    let running_exe = config.cli_exe.clone();
     let served = runtime.block_on(async move {
         let mut daemon = Daemon::start_inheriting(config, inherited).await?;
         let task_ended = daemon.task_ended();
@@ -509,7 +514,7 @@ fn run(
             daemon.shutdown().await;
             None
         };
-        restart_into(&exe, hand_off)
+        restart_into(&exe, running_exe.as_deref(), hand_off)
     });
     // A git or file read stuck on a stalled mount must not keep a stopping daemon alive.
     runtime.shutdown_timeout(RUNTIME_STOP_WAIT);
@@ -591,9 +596,10 @@ fn installed_by_app(exe: &Path) -> bool {
 /// Replaces this process with `exe` and the same arguments (same PID, so systemd or launchd
 /// keep supervising it, and the panes' programs stay its children). With a hand-off the new
 /// build continues the running panes. Falls back to the previous build if the new one cannot
-/// be executed, and exits with an error (the service manager restarts it) if neither can,
-/// after ending the panes it would have handed over.
-fn restart_into(exe: &Path, hand_off: Option<daemon::HandOff>) -> ! {
+/// be executed (the one kept next to it, else `running`, the file this process runs from),
+/// and exits with an error (the service manager restarts it) if none can, after ending the
+/// panes it would have handed over.
+fn restart_into(exe: &Path, running: Option<&Path>, hand_off: Option<daemon::HandOff>) -> ! {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let hand_off = hand_off.and_then(|hand_off| match hand_off.prepare_exec() {
         Ok(()) => Some(hand_off),
@@ -610,6 +616,12 @@ fn restart_into(exe: &Path, hand_off: Option<daemon::HandOff>) -> ! {
     if std::fs::rename(&previous, exe).is_ok() {
         let error = exec(exe, &args, handed_env.as_ref());
         log_line!("could not start the previous build either: {error}");
+    } else if let Some(running) = running.filter(|running| *running != exe) {
+        let error = exec(running, &args, handed_env.as_ref());
+        log_line!(
+            "could not start {} again either: {error}",
+            running.display()
+        );
     }
     if let Some(hand_off) = hand_off {
         hand_off.abandon();
@@ -679,6 +691,8 @@ fn build_info(json: bool, hash: bool) -> Result<()> {
         // that reads its own.
         let mut object = serde_json::to_value(&info)?;
         object["handoff"] = serde_json::json!(daemon::HANDOFF_READS);
+        // `restart --into`: it hands over to a build at another path.
+        object["restart_into"] = serde_json::json!(true);
         // Only when asked: a running daemon runs this on its successor while it restarts.
         if let Some(digest) = hash.then(exe_sha256).flatten() {
             object["exe_sha256"] = serde_json::json!(digest);
@@ -1010,13 +1024,16 @@ fn status(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Asks the running daemon over its hook socket to restart into the installed build and
-/// waits until it has (same process, started again).
-fn restart(state_dir: &Path) -> Result<()> {
+/// Asks the running daemon over its hook socket to restart into the installed build (or the
+/// one at `into`) and waits until it has (same process, started again).
+fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::ffi::OsStrExt;
     const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
-    const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
+    let into = into
+        .map(Path::canonicalize)
+        .transpose()
+        .context("finding the build to hand over to")?;
     let before = daemon::endpoint_info(state_dir)?
         .filter(|info| daemon_running(state_dir, info))
         .with_context(|| {
@@ -1036,6 +1053,7 @@ fn restart(state_dir: &Path) -> Result<()> {
     let call = daemon::RestartCall {
         restart: daemon::RestartAsk {
             token: token.trim().to_owned(),
+            exe: into.clone(),
         },
     };
     let mut line = serde_json::to_vec(&call)?;
@@ -1046,40 +1064,74 @@ fn restart(state_dir: &Path) -> Result<()> {
     let reply: daemon::RestartReply = serde_json::from_str(&answer).map_err(|_| {
         anyhow::anyhow!("the running daemon cannot restart in place; restart it to update")
     })?;
+    // A daemon from before `--into` ignores it and answers for the file at its own path.
+    let runs_elsewhere = |pid: u32| {
+        into.as_ref()
+            .is_some_and(|into| cold_restart::executable_of(pid).as_ref() != Some(into))
+    };
+    let restart_cold = |why: &str| -> Result<()> {
+        let exe = into
+            .clone()
+            .or_else(|| cold_restart::executable_of(before.pid))
+            .or_else(|| std::env::current_exe().ok())
+            .context("finding the installed build")?;
+        log_line!("{why}; restarting it, its agents resume their sessions");
+        cold_restart::restart(state_dir, before.pid, before.started_at, &exe)?;
+        println!(
+            "restarted into {}; running agents resumed their sessions",
+            exe.display()
+        );
+        Ok(())
+    };
     match reply {
+        daemon::RestartReply::Current if runs_elsewhere(before.pid) => {
+            restart_cold("the running daemon cannot hand over to another path")
+        }
         daemon::RestartReply::Current => {
             println!("already running the installed build");
             Ok(())
         }
         daemon::RestartReply::Refused(reason) if reason == cold_restart::REFUSED_FOR_LIVE_CHAT => {
-            let exe = cold_restart::executable_of(before.pid)
-                .or_else(|| std::env::current_exe().ok())
-                .context("finding the installed build")?;
-            cold_restart::restart(state_dir, before.pid, before.started_at, &exe)?;
-            println!("restarted into the installed build; running agents resumed their sessions");
-            Ok(())
+            restart_cold("the running daemon cannot hand its agents over")
         }
         daemon::RestartReply::Refused(reason) => bail!("{reason}"),
         daemon::RestartReply::Restarting => {
-            let start = std::time::Instant::now();
-            while start.elapsed() < RESTART_TIMEOUT {
-                std::thread::sleep(Duration::from_millis(100));
-                let now = daemon::endpoint_info(state_dir).ok().flatten();
-                match now {
-                    Some(info) if info.pid == before.pid && info.started_at > before.started_at => {
-                        println!("restarted into the installed build (pid {})", info.pid);
-                        return Ok(());
-                    }
-                    _ if !pid_alive(before.pid) => bail!("the daemon stopped while restarting"),
-                    _ => {}
-                }
+            let info = wait_for_restart(state_dir, &before)?;
+            if runs_elsewhere(info.pid) {
+                let restarted =
+                    daemon::endpoint_info(state_dir)?.context("no daemon after restart")?;
+                let exe = into.clone().context("no build to hand over to")?;
+                cold_restart::restart(state_dir, restarted.pid, restarted.started_at, &exe)?;
+                println!("restarted into {}", exe.display());
+                return Ok(());
             }
-            bail!(
-                "the daemon did not come back within {} s",
-                RESTART_TIMEOUT.as_secs()
-            )
+            println!("restarted into the installed build (pid {})", info.pid);
+            Ok(())
         }
     }
+}
+
+/// Waits for the daemon `before` describes to record a new start in the same process.
+fn wait_for_restart(
+    state_dir: &Path,
+    before: &daemon::EndpointInfo,
+) -> Result<daemon::EndpointInfo> {
+    const RESTART_TIMEOUT: Duration = Duration::from_secs(60);
+    let start = std::time::Instant::now();
+    while start.elapsed() < RESTART_TIMEOUT {
+        std::thread::sleep(Duration::from_millis(100));
+        match daemon::endpoint_info(state_dir).ok().flatten() {
+            Some(info) if info.pid == before.pid && info.started_at > before.started_at => {
+                return Ok(info);
+            }
+            _ if !pid_alive(before.pid) => bail!("the daemon stopped while restarting"),
+            _ => {}
+        }
+    }
+    bail!(
+        "the daemon did not come back within {} s",
+        RESTART_TIMEOUT.as_secs()
+    )
 }
 
 fn relays_label(relays: &proto::TicketRelays) -> String {

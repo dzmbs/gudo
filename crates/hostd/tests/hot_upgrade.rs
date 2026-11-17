@@ -920,3 +920,101 @@ async fn an_app_update_keeps_a_launched_claude_and_its_chat() {
     assert_eq!(after.snapshot.items.len(), before.snapshot.items.len());
     assert_eq!(after.capabilities, before.capabilities);
 }
+
+fn restart_into_command(exe: &Path, state: &Path, into: &Path) -> std::process::Output {
+    Command::new(exe)
+        .arg("--state-dir")
+        .arg(state)
+        .arg("restart")
+        .arg("--into")
+        .arg(into)
+        .output()
+        .unwrap()
+}
+
+fn running_executable(pid: u32) -> PathBuf {
+    daemon::process_executable(pid).unwrap().canonicalize().unwrap()
+}
+
+/// A helper running from one place (a build folder, an old app) hands its panes to the build
+/// at another path, and runs from there from then on: a later update of that path restarts
+/// into it, with the old place gone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_into_hands_the_panes_to_a_build_at_another_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let state = dir.path().join("state");
+    let hostd = run(&exe, &state, &dir.path().join("hostd.log"));
+    let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    let shell = client.attach_and_follow().await;
+    client.type_line(shell, "export KEEP=still-here; echo set-$KEEP");
+    client.wait_text(shell, "set-still-here").await;
+    let info = serde_json::from_slice::<serde_json::Value>(
+        &Command::new(HOSTD)
+            .args(["build-info", "--json"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(info["restart_into"], true);
+
+    let current = dir.path().join("Helper/Versions/Current");
+    std::fs::create_dir_all(&current).unwrap();
+    let next = current.join("gudo-hostd");
+    std::fs::copy(HOSTD, &next).unwrap();
+    let next = next.canonicalize().unwrap();
+    let connections = client.connected;
+    let output = restart_into_command(&next, &state, &next);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    assert_eq!(endpoint_pid(&state), hostd.child.id());
+    assert_eq!(running_executable(hostd.child.id()), next);
+    reconnected(&mut client, connections).await;
+    client.type_line(shell, "echo again-$KEEP");
+    client.wait_text(shell, "again-still-here").await;
+
+    std::fs::remove_dir_all(dir.path().join("bin")).unwrap();
+    replace(&next, &std::fs::read(HOSTD).unwrap());
+    let connections = client.connected;
+    let started = started_at(&state);
+    let output = restart_command(&next, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    assert!(started_at(&state) > started);
+    reconnected(&mut client, connections).await;
+    client.type_line(shell, "echo third-$KEEP");
+    client.wait_text(shell, "third-still-here").await;
+}
+
+fn endpoint_pid(state: &Path) -> u32 {
+    let info: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(state.join("endpoint.json")).unwrap()).unwrap();
+    info["pid"].as_u64().unwrap() as u32
+}
+
+/// An app that puts an older helper where the running one updates from cannot move it back:
+/// the restart is refused and the daemon runs on untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_refuses_an_older_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let state = dir.path().join("state");
+    let _hostd = run(&exe, &state, &dir.path().join("hostd.log"));
+    let _ = ticket(&exe, &state);
+    let first_start = started_at(&state);
+    let info = serde_json::json!({
+        "version": "0.1.0", "build": "older", "built_unix": 1_700_000_000u64,
+        "protocol": 0, "min_client_protocol": 0, "features": 0, "hostname": "test",
+        "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "os_name": "",
+        "handoff": [1],
+    });
+    let older =
+        format!("#!/bin/sh\nif [ \"$1\" = build-info ]; then echo '{info}'; exit 0; fi\nexit 3\n");
+    replace(&exe, older.as_bytes());
+    let output = restart_command(Path::new(HOSTD), &state);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("older than the running"),
+        "{output:?}"
+    );
+    assert_eq!(started_at(&state), first_start);
+}

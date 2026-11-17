@@ -966,7 +966,7 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         encoded.push(b'\n');
         let written = write.write_all(&encoded).await;
         let _ = write.shutdown().await;
-        crate::upgrade::after_restart_reply(core, &reply);
+        crate::upgrade::after_restart_reply(core, &call, &reply);
         return written;
     }
     if let Ok(call) = serde_json::from_str::<crate::agent_input::AgentInputCall>(&line) {

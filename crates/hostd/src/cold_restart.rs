@@ -154,9 +154,8 @@ fn wait_for_start(state_dir: &Path, started_at: u64) -> Result<()> {
 
 /// The executable the helper `pid` runs from: where the update put the new build.
 pub fn executable_of(pid: u32) -> Option<PathBuf> {
-    let program = daemon::process_arguments(pid)?.into_iter().next()?;
-    let program = PathBuf::from(program);
-    program.is_absolute().then_some(program)
+    let program = daemon::process_executable(pid)?;
+    Some(program.canonicalize().unwrap_or(program))
 }
 
 #[cfg(test)]

@@ -111,6 +111,11 @@ pub(crate) fn exe_path(pid: u32) -> Option<PathBuf> {
     imp::exe_path(pid)
 }
 
+/// The file a process runs, if it is ours to inspect.
+pub fn process_executable(pid: u32) -> Option<PathBuf> {
+    imp::exe_path(pid)
+}
+
 /// A process's working directory, if it is ours to inspect.
 pub(crate) fn process_cwd(pid: u32) -> Option<PathBuf> {
     imp::process_cwd(pid)
