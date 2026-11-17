@@ -879,6 +879,8 @@ final class MacSnapshotTests: XCTestCase {
             }
             .chromeBackground(DS.Palette.base)
             .chromeContent()
+            // No toolbar over the panes here: the line between them runs to the window's top.
+            .ignoresSafeArea()
         }, size: CGSize(width: 1000, height: 640))
         await pump(1.5)
         try capture(window, "empty")
