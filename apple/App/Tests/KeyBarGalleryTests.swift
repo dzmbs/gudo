@@ -30,9 +30,9 @@ final class KeyBarGalleryTests: XCTestCase {
     }
 
     func testCaptureKeyBar() async throws {
-        let path = try XCTUnwrap(
-            ProcessInfo.processInfo.environment["GUDO_CHROME_CAPTURE_DIR"].flatMap { $0.isEmpty ? nil : $0 },
-            "set TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR to capture")
+        let capturePath = ProcessInfo.processInfo.environment["GUDO_CHROME_CAPTURE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        try XCTSkipIf(capturePath == nil, "set TEST_RUNNER_GUDO_CHROME_CAPTURE_DIR to capture")
+        let path = try XCTUnwrap(capturePath)
         let directory = URL(fileURLWithPath: path, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
