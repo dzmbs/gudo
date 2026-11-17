@@ -54,16 +54,24 @@ struct CodeTextContent: Equatable {
 /// never in it.
 struct CodeTextView: View {
     let content: CodeTextContent
+    /// The tool leaf the text fills: Find there searches it (`WindowModel.findInFocusedViewer`).
+    var leaf: UUID?
     @Environment(\.terminalTheme) private var theme
     @Environment(\.chrome) private var chrome
 
-    init(_ text: String, firstLine: Int = 1, markedLine: Int? = nil) {
+    init(_ text: String, firstLine: Int = 1, markedLine: Int? = nil, leaf: UUID? = nil) {
         content = CodeTextContent(text: text, firstLine: firstLine, markedLine: markedLine)
+        self.leaf = leaf
     }
 
     var body: some View {
+        #if os(macOS)
+        PlatformCodeView(content: content, colors: CodeTextColors(theme: theme, chrome: chrome), leaf: leaf)
+            .background(theme.background)
+        #else
         PlatformCodeView(content: content, colors: CodeTextColors(theme: theme, chrome: chrome))
             .background(theme.background)
+        #endif
     }
 }
 
@@ -132,9 +140,24 @@ private func codeFont() -> NSFont {
     NSFont.monospacedSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .callout).pointSize, weight: .regular)
 }
 
+/// The text view of each tool leaf showing code, while it is on screen.
+@MainActor
+enum LeafTextViews {
+    private static let views = NSMapTable<NSUUID, NSTextView>.strongToWeakObjects()
+
+    static func register(_ textView: NSTextView, for leaf: UUID) {
+        views.setObject(textView, forKey: leaf as NSUUID)
+    }
+
+    static func textView(for leaf: UUID) -> NSTextView? {
+        views.object(forKey: leaf as NSUUID)
+    }
+}
+
 private struct PlatformCodeView: NSViewRepresentable {
     let content: CodeTextContent
     let colors: CodeTextColors
+    let leaf: UUID?
 
     /// The text system's "no limit": wider than any line, yet finite (it lays glyphs out in floats).
     private static let unbounded: CGFloat = 1e7
@@ -155,7 +178,10 @@ private struct PlatformCodeView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.containerSize = NSSize(width: Self.unbounded, height: Self.unbounded)
         textView.layoutManager?.allowsNonContiguousLayout = true
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.setAccessibilityIdentifier("code-text")
+        if let leaf { LeafTextViews.register(textView, for: leaf) }
 
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true

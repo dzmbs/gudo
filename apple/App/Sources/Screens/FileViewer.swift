@@ -172,6 +172,31 @@ enum FileViewerMode: String, CaseIterable, Identifiable {
 }
 
 extension WindowModel {
+    enum ViewerFind {
+        case open, next, previous
+    }
+
+    /// Find, Find Next and Find Previous in a focused file viewer search its text with the text
+    /// view's own find bar, not the terminal's scrollback. Whether a viewer took it.
+    func findInFocusedViewer(_ find: ViewerFind) -> Bool {
+        #if os(macOS)
+        guard let member = focusedToolLeaf, member.tool == .viewer, let textView = LeafTextViews.textView(for: member.id),
+              let window = textView.window else { return false }
+        window.makeFirstResponder(textView)
+        let action: NSTextFinder.Action = switch find {
+        case .open: .showFindInterface
+        case .next: .nextMatch
+        case .previous: .previousMatch
+        }
+        let sender = NSMenuItem()
+        sender.tag = action.rawValue
+        textView.performTextFinderAction(sender)
+        return true
+        #else
+        return false
+        #endif
+    }
+
     func fileReader(for target: FileTarget) -> any FileReading {
         if LaunchOptions.mock, !hasLiveTools { return MockFileReader() }
         guard let hostId = target.hostId else { return LocalFileReader() }
@@ -326,11 +351,12 @@ struct FileLinesView: View {
     let window: FileWindow
     let target: FileTarget
     @Environment(\.terminalTheme) private var theme
+    @Environment(\.toolLeaf) private var leaf
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if window.hasEarlier { notice("Earlier lines aren't shown.") }
-            CodeTextView(window.lines.joined(separator: "\n"), firstLine: window.firstLine, markedLine: target.line)
+            CodeTextView(window.lines.joined(separator: "\n"), firstLine: window.firstLine, markedLine: target.line, leaf: leaf?.member.id)
             if window.hasLater { notice("Showing part of the file. Open it in VS Code for the rest.") }
         }
         .background(theme.background)

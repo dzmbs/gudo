@@ -255,9 +255,9 @@ enum WorkspaceAction: Hashable {
         case .moveTabDown: withAnimation(DS.Motion.standard) { window.moveCurrentTab(by: 1) }
         case .newWindow: window.newWindow()
         case .commandPalette, .commandPaletteGhostty: window.isPaletteShown.toggle()
-        case .find: window.showSearch()
-        case .findNext: window.findNext()
-        case .findPrevious: window.findPrevious()
+        case .find: if !window.findInFocusedViewer(.open) { window.showSearch() }
+        case .findNext: if !window.findInFocusedViewer(.next) { window.findNext() }
+        case .findPrevious: if !window.findInFocusedViewer(.previous) { window.findPrevious() }
         case .links: window.sheet = .links
         case .inbox: window.destination = .inbox
         case .jumpToWaitingAgent: window.jumpToWaitingAgent()
