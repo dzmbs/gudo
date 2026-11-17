@@ -177,6 +177,10 @@ import Testing
         #expect(rowsAboveViewport(fixture.terminal) == bottom - page)
         try press(.home, modifiers: .command, in: fixture)
         #expect(rowsAboveViewport(fixture.terminal) == 0)
+        var asked: [Int] = []
+        fixture.view.surface.onScroll = { asked.append($0) }
+        try press(.home, modifiers: .command, in: fixture)
+        #expect(asked == [-1], "at the top already, ⌘Home still asks for older rows")
         try press(.end, modifiers: .command, in: fixture)
         #expect(fixture.terminal.viewportAtBottom)
         #expect(fixture.written.bytes.withLock { $0 }.isEmpty)

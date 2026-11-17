@@ -746,6 +746,11 @@ public final class TerminalSurface {
     /// Moves through the scrollback by a page, or to its top or bottom.
     public func scroll(_ move: ScrollbackMove) {
         let scrollbar = terminal.scrollbar
+        if move == .top, scrollbar.offset == 0 {
+            // At the top of what this terminal holds already: the host may hold older rows.
+            onScroll?(-1)
+            return
+        }
         let rows = switch move {
         case .pageUp: -Int(terminal.size.rows)
         case .pageDown: Int(terminal.size.rows)
