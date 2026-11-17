@@ -501,8 +501,8 @@ final class PaneMotionTests: XCTestCase {
     }
 
     /// A pane lifting out into a window, or docking back, changes shape on the way: its still
-    /// scales with the rectangle it travels through, whole and never cut off, instead of
-    /// keeping its old size inside a frame of another shape.
+    /// scales with the rectangle it travels through, filling it whole and never cut off, instead
+    /// of a small picture in a large empty card.
     func testALayerChangingPanesStillScalesWithItsFrame() throws {
         let frame = CGRect(x: 0, y: 0, width: 400, height: 200)
         let shown = CGRect(x: 0, y: 0, width: 400, height: 200)
@@ -523,9 +523,11 @@ final class PaneMotionTests: XCTestCase {
         }.environment(\.displayScale, 1), size: frame.size)
         XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 20, y: 190)), [0, 0, 255]), "its last rows show at the bottom")
         XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 20, y: 40)), [255, 0, 0]), "its top at the top")
-        XCTAssertFalse(Self.close(Self.pixel(image, at: CGPoint(x: 150, y: 40)), [255, 0, 0]), "scaled to the frame's height")
-        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200, height: 400)), 1, "at its own size at the start")
-        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200.4, height: 400.4)), 1, "not blurred by rounding")
+        XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 390, y: 40)), [255, 0, 0]), "as wide as the frame")
+        XCTAssertTrue(Self.close(Self.pixel(image, at: CGPoint(x: 390, y: 190)), [0, 0, 255]), "as tall as the frame")
+        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200, height: 400)), CGSize(width: 1, height: 1), "at its own size at the start")
+        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 200.4, height: 400.4)), CGSize(width: 1, height: 1), "not blurred by rounding")
+        XCTAssertEqual(PaneTravel.stillScale(still: size, shown: CGSize(width: 400, height: 200)), CGSize(width: 2, height: 0.5))
     }
 
     func testOnlyAPaneChangingLayerScalesItsStill() throws {

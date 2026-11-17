@@ -138,15 +138,15 @@ extension SplitLayout.Divider {
 
 /// Draws a view laid out at `frame` within `shown`, the rectangle it travels through: moved so
 /// its top-left corner rides `shown`'s, cut to `shown`, on `background` where it does not
-/// reach, under `still` while it has one (at its own size, or with `scalesStill` scaled to fit
-/// `shown` whole). Only `shown` animates, so nothing inside lays out again on the way. Under
+/// reach, under `still` while it has one (at its own size, or with `scalesStill` scaled to fill
+/// `shown`). Only `shown` animates, so nothing inside lays out again on the way. Under
 /// Reduce Motion it stays at `frame`: a change only crossfades.
 struct PaneTravel: ViewModifier, Animatable {
     var shown: CGRect
     let frame: CGRect
     var still: CGImage?
-    /// The still keeps its proportions and fits `shown`: for a pane changing shape (lifting into
-    /// a window, docking back), whose still at its own size would be cut off or left short.
+    /// The still fills `shown`: for a pane changing shape (lifting into a window, docking back),
+    /// whose still at its own size would be cut off or left small in a larger frame.
     var scalesStill = false
     /// How far down the pane its terminal starts (its header): it travels too, so headers
     /// arriving on a first split make room in the spring.
@@ -172,12 +172,15 @@ struct PaneTravel: ViewModifier, Animatable {
         (CGSize(width: shown.minX, height: shown.minY), CGRect(origin: .zero, size: shown.size))
     }
 
-    /// The scale that fits a still of `still` points whole into `shown`: 1 within a pixel of its
-    /// own size, so it is crisp where the motion starts.
-    static func stillScale(still: CGSize, shown: CGSize) -> CGFloat {
-        guard still.width > 0, still.height > 0 else { return 1 }
-        let scale = min(shown.width / still.width, shown.height / still.height)
-        return abs(scale - 1) * max(still.width, still.height) < 1 ? 1 : max(scale, 0)
+    /// The scale along each axis that fills `shown` with a still of `still` points, so the
+    /// picture changes shape with the pane: 1 along an axis within a pixel of its own size, so it
+    /// is crisp where the motion starts.
+    static func stillScale(still: CGSize, shown: CGSize) -> CGSize {
+        guard still.width > 0, still.height > 0 else { return CGSize(width: 1, height: 1) }
+        func scale(_ shown: CGFloat, _ own: CGFloat) -> CGFloat {
+            abs(shown - own) < 1 ? 1 : max(shown / own, 0)
+        }
+        return CGSize(width: scale(shown.width, still.width), height: scale(shown.height, still.height))
     }
 
     func body(content: Content) -> some View {
@@ -191,10 +194,10 @@ struct PaneTravel: ViewModifier, Animatable {
                 if let still {
                     let size = CGSize(width: CGFloat(still.width) / displayScale, height: CGFloat(still.height) / displayScale)
                     let room = CGSize(width: place.clip.width, height: max(0, place.clip.height - stillTop))
-                    let scale = scalesStill ? Self.stillScale(still: size, shown: room) : 1
+                    let scale = scalesStill ? Self.stillScale(still: size, shown: room) : CGSize(width: 1, height: 1)
                     Image(decorative: still, scale: displayScale)
                         .resizable()
-                        .frame(width: size.width * scale, height: size.height * scale)
+                        .frame(width: size.width * scale.width, height: size.height * scale.height)
                         .padding(.top, stillTop)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
