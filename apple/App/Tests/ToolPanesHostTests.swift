@@ -210,6 +210,48 @@ final class ToolPanesHostTests: XCTestCase {
         try await until("the terminal has the keyboard") { driver.window.firstResponder === self.terminal?.view }
     }
 
+    // MARK: Files
+
+    /// Browse Files opens the host's folder the terminal is in beside it with the keyboard;
+    /// a folder opens in place, a file previews, ⌘[ goes back, and Reveal in Terminal takes the
+    /// shell there.
+    func testFilesBrowsesTheTerminalsFolderOnTheHostAndRevealsOneInTheTerminal() async throws {
+        let driver = try XCTUnwrap(driver)
+        let model = driver.model
+        let project = try XCTUnwrap(project)
+
+        try await runFromPalette("Browse Files")
+        try await until("a Files leaf with the focus") { model.activeMixed?.focusedTool?.tool == .files }
+        let member = try XCTUnwrap(model.activeMixed?.focusedTool)
+        let navigator = try XCTUnwrap(model.filesNavigators[member.id])
+        try await until("it starts in the terminal's folder") { navigator.place == .folder(project.path) }
+        let list = try await filesList()
+        try await until("the list has the keyboard") { (driver.window.firstResponder as? NSView)?.isDescendant(of: list) == true }
+
+        let folder = try await shown("src")
+        try await driver.click(at: center(of: folder))
+        try await until("the folder opens in the leaf") { navigator.place == .folder(project.appending(path: "src").path) }
+        let file = try await shown("main.rs")
+        try await driver.click(at: center(of: file))
+        try await until("the file previews") {
+            if case .file(let entry) = navigator.place { return entry.name == "main.rs" }
+            return false
+        }
+        try await until("its text shows") {
+            let code = driver.window.contentView.flatMap { WindowDriver.descendant(of: $0) { $0 is CodeNSTextView } } as? CodeNSTextView
+            return code?.string.hasPrefix("let value_1 = 1;") == true
+        }
+        try await driver.press(KeyboardShortcut("["))
+        try await until("⌘[ back to the folder") { navigator.place == .folder(project.appending(path: "src").path) }
+        try await driver.press(KeyboardShortcut("["))
+        try await until("and again to where it started") { navigator.place == .folder(project.path) }
+
+        driver.menus.choice = ["Reveal in Terminal"]
+        try await driver.click(at: center(of: try await shown("src")), button: .right)
+        XCTAssertEqual(driver.menus.chosen, ["Reveal in Terminal"], "the row's menu: \(driver.menus.last)")
+        try await until("the shell goes there") { self.terminal?.workingDirectory == project.appending(path: "src").path }
+    }
+
     // MARK: Helpers
 
     private var workspace: Workspace? { driver?.model.workspace }
@@ -355,6 +397,20 @@ final class ToolPanesHostTests: XCTestCase {
         return above.sorted { $0.minX < $1.minX }
     }
 
+    /// The Files leaf's list.
+    private func filesList() async throws -> NSTableView {
+        let window = try XCTUnwrap(driver?.window)
+        let terminalView = try XCTUnwrap(terminal?.view)
+        var found: NSTableView?
+        try await until("the Files list") {
+            func tables(_ view: NSView) -> [NSTableView] { ((view as? NSTableView).map { [$0] } ?? []) + view.subviews.flatMap(tables) }
+            let terminalFrame = terminalView.convert(terminalView.bounds, to: nil)
+            found = window.contentView.map(tables)?.first { !$0.convert($0.bounds, to: nil).intersects(terminalFrame) }
+            return found != nil
+        }
+        return try XCTUnwrap(found)
+    }
+
     /// The browser bar's address field.
     private func addressField() async throws -> NSTextField {
         let window = try XCTUnwrap(driver?.window)
@@ -419,12 +475,13 @@ final class ToolPanesHostTests: XCTestCase {
         }
     }
 
-    /// Where `text` is drawn: the part of a line that starts with it.
+    /// Where `text` is drawn: its part of the line that holds it (read without case, which the
+    /// reading of short words gets wrong).
     private func shown(_ text: String, timeout: Duration = .seconds(15)) async throws -> NSRect {
         var found: NSRect?
         try await until("“\(text)” shows", timeout: timeout) {
-            guard let line = ((try? self.words()) ?? []).first(where: { $0.text.contains(text) }) else { return false }
-            let start = line.text.range(of: text).map { line.text.distance(from: line.text.startIndex, to: $0.lowerBound) } ?? 0
+            guard let line = ((try? self.words()) ?? []).first(where: { $0.text.localizedCaseInsensitiveContains(text) }) else { return false }
+            let start = line.text.range(of: text, options: .caseInsensitive).map { line.text.distance(from: line.text.startIndex, to: $0.lowerBound) } ?? 0
             let share = line.frame.width / CGFloat(max(line.text.count, 1))
             found = NSRect(x: line.frame.minX + share * CGFloat(start), y: line.frame.minY, width: share * CGFloat(text.count), height: line.frame.height)
             return true
