@@ -38,8 +38,17 @@ final class MacSnapshotTests: XCTestCase {
     /// A window that never reaches the screen: far off it, never key, never ordered in front of
     /// another app.
     private final class OffscreenWindow: NSWindow {
+        /// Drawn as the window the user is working in (its title and traffic lights active),
+        /// though it never takes the keyboard from anything.
+        var looksKey = false
         override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
         override var canBecomeKey: Bool { true }
+        // What the title bar asks when it picks its active or inactive ink: the test app is
+        // never the active app, so it would always draw the inactive one.
+        @objc func _hasActiveAppearance() -> Bool { looksKey }
+        @objc func _hasActiveAppearanceIgnoringKeyFocus() -> Bool { looksKey }
+        @objc func _hasKeyAppearance() -> Bool { looksKey }
+        @objc func _hasMainAppearance() -> Bool { looksKey }
     }
 
     private func pump(_ seconds: Double) async {
@@ -1441,6 +1450,8 @@ final class MacSnapshotTests: XCTestCase {
     private func settings(_ name: String, _ navigation: SettingsNavigation = SettingsNavigation(), scrolledBy offset: CGFloat = 0) async throws {
         guard wanted(name) else { return }
         let window = makeWindow(ThemedRoot { SettingsView(navigation: navigation) }, size: CGSize(width: 820, height: 560))
+        // Settings is read in its own key window: its title in full colour.
+        (window as? OffscreenWindow)?.looksKey = true
         await pump(1.5)
         if offset > 0, let content = window.contentView, let scroll = Self.scrollViews(in: content).max(by: { $0.frame.width < $1.frame.width }) {
             let clip = scroll.contentView
