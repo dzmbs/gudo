@@ -83,7 +83,7 @@ final class LiveHostDirectory: HostDirectory {
         let statusLine: String? = switch entry.status {
         case .idle: entry.lastConnected == nil ? "Not connected yet" : nil
         case .suspended: "Paused while in the background"
-        default: nil
+        default: entry.machine
         }
         // A host paired by ticket has no address to show, only its key's id.
         let address = entry.kind == .daemon && app.hosts.record(entry.id)?.ssh == nil ? "" : entry.address
@@ -93,7 +93,7 @@ final class LiveHostDirectory: HostDirectory {
             connection: ConnectionState(listing: entry.status),
             sessionCount: sessions, agentCounts: counts, needsYou: needsYou,
             lastSeen: entry.lastConnected ?? .distantPast, isPinned: entry.pinned,
-            statusLine: statusLine ?? entry.machine,
+            statusLine: statusLine,
             progress: app.hosts.installs[entry.id]?.summary ?? app.hosts.helperUpdates[entry.id]?.summary,
             canInstallHelper: entry.canInstallHelper,
             helper: entry.helper.map(HelperOffer.init),

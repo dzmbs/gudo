@@ -38,6 +38,7 @@ final class HostWindow {
     /// A window showing `content`, with the app's environment around it.
     init(width: CGFloat = 700, height: CGFloat = 600, @ViewBuilder content: @escaping () -> some View) {
         model = WindowModel(app: .shared)
+        model.start()
         window = Self.window(width: width, height: height) { [model] in
             content().environment(model).environment(AppModel.shared)
         }
@@ -228,6 +229,16 @@ final class HostWindow {
         let frame = element.frame
         XCTAssertFalse(frame.isEmpty, "\(element) has a frame")
         let point = target.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
+        // A sheet over the key window is key. One over a test window cannot become key while
+        // the app is not active, and AppKit's own buttons in it take a first click only to
+        // make it key: those are clicked as AppKit clicks them for the keyboard.
+        if target !== window, !target.isKeyWindow, button == .left, let frameView = target.contentView?.superview,
+           let control = frameView.hitTest(frameView.convert(point, from: nil)) as? NSButton
+        {
+            control.performClick(nil)
+            await pump(0.6)
+            return
+        }
         try await click(at: point, in: target, button: button)
     }
 
