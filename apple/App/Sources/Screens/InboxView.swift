@@ -422,26 +422,12 @@ struct InboxView: View {
 
     // MARK: Keys
 
-    /// The list's keys, as shortcuts (they work on iPad hardware keyboards without a focused
-    /// view). They step aside while a row's text field has the keyboard.
-    @ViewBuilder private func keys(_ rows: [AgentItem]) -> some View {
-        let active = typing.isEmpty && editing == nil
-        #if os(iOS)
-        InboxKeyCatcher(active: active) { key in perform(key, rows: rows) }
+    /// The list's keys, read from the key events themselves (they work on iPad hardware keyboards
+    /// without a focused view). They step aside while a row's text field has the keyboard.
+    private func keys(_ rows: [AgentItem]) -> some View {
+        InboxKeyCatcher(active: typing.isEmpty && editing == nil) { key in perform(key, rows: rows) }
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
-        #else
-        Group {
-            key("Previous", .upArrow) { perform(.previous, rows: rows) }
-            key("Next", .downArrow) { perform(.next, rows: rows) }
-            key("Approve or Open", .return) { perform(.approve, rows: rows) }
-            key("Deny", .escape) { perform(.deny, rows: rows) }
-            key("Deny", ".", modifiers: .command) { perform(.deny, rows: rows) }
-            key("Edit, Then Approve", "e") { perform(.edit, rows: rows) }
-            key("Approve All Like This", .return, modifiers: .shift) { perform(.approveAll, rows: rows) }
-        }
-        .disabled(!active)
-        #endif
     }
 
     private func perform(_ key: InboxKey, rows: [AgentItem]) {
@@ -490,14 +476,6 @@ struct InboxView: View {
               feed.approvalOptions(current.id)?.likeThis != nil, Self.mayApprove(feed.approval(current.id))
         else { return }
         approveAll(current)
-    }
-
-    private func key(_ title: String, _ key: KeyEquivalent, modifiers: EventModifiers = [], action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .keyboardShortcut(key, modifiers: modifiers)
-            .frame(width: 0, height: 0)
-            .opacity(0)
-            .accessibilityHidden(true)
     }
 
     private func move(_ step: Int, in rows: [AgentItem]) {

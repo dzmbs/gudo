@@ -83,4 +83,51 @@ struct InboxKeyCatcher: UIViewRepresentable {
         @objc private func keyEdit() { handle(.edit) }
     }
 }
+#elseif os(macOS)
+import AppKit
+
+/// The Inbox's keyboard on the Mac, read from each key event: SwiftUI shortcuts answer a plain ↩
+/// with the ⇧↩ one, and a field that is typing keeps its keys.
+struct InboxKeyCatcher: NSViewRepresentable {
+    var active: Bool
+    var handle: (InboxKey) -> Void
+
+    func makeNSView(context: Context) -> CatcherView { CatcherView() }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.handle = handle
+        view.active = active
+    }
+
+    final class CatcherView: NSView {
+        var handle: (InboxKey) -> Void = { _ in }
+        var active = true
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            guard active, event.type == .keyDown, !(window?.firstResponder is NSText), let key = Self.key(for: event) else {
+                return super.performKeyEquivalent(with: event)
+            }
+            handle(key)
+            return true
+        }
+
+        static func key(for event: NSEvent) -> InboxKey? {
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            let returnKeys: Set<UInt16> = [36, 76]
+            switch (event.keyCode, modifiers) {
+            case (126, []): return .previous
+            case (125, []): return .next
+            case (53, []): return .deny
+            case (let code, []) where returnKeys.contains(code): return .approve
+            case (let code, .shift) where returnKeys.contains(code): return .approveAll
+            default: break
+            }
+            switch (event.charactersIgnoringModifiers, modifiers) {
+            case ("e", []): return .edit
+            case (".", .command): return .deny
+            default: return nil
+            }
+        }
+    }
+}
 #endif
