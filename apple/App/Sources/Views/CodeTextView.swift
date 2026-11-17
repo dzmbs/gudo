@@ -240,7 +240,11 @@ private struct PlatformCodeView: NSViewRepresentable {
         private func scrollToMarkedLine() {
             guard let textView, let scroll, let range = gutter.markedRange, let layout = textView.layoutManager,
                   let container = textView.textContainer else { return }
-            // Brings the line in (sizing the text view to reach it), then centres it.
+            // Lays the text out to the line and sizes the text view to it first: with
+            // non-contiguous layout the view is only as tall as what was laid out so far, which
+            // would stop the scroll short of a line far down.
+            layout.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(range)))
+            textView.sizeToFit()
             textView.scrollRangeToVisible(range)
             let glyphs = layout.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
             let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
