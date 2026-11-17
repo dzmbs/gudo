@@ -148,6 +148,13 @@ struct InboxView: View {
             // With a keyboard at hand the first row starts focused, so ↩ answers at once.
             if focused == nil, Self.hasKeyboard { focused = order(shown).first?.id }
         }
+        // A request answered (here or on another device) takes its editor with it; its row moves
+        // to another section as a new row, so the old one never says it stopped typing.
+        .onChange(of: items.filter { $0.request != nil }.map(\.id)) { _, waiting in
+            guard let edited = editing, !waiting.contains(edited) else { return }
+            editing = nil
+            typing.remove(edited)
+        }
         .onChange(of: filter) { focused = Self.hasKeyboard ? order(feed.items.filter(filter.includes)).first?.id : nil }
         .sensoryFeedback(DS.Haptic.success, trigger: approvedCount)
         .sensoryFeedback(DS.Haptic.attention, trigger: deniedCount)
@@ -362,6 +369,7 @@ struct InboxView: View {
                 try await feed.approveEdited(item.id, input: input)
                 approvedCount += 1
                 editing = nil
+                typing.remove(item.id)
                 advance(from: item)
                 model.agentToasts.dismiss(item: item.id)
             } catch {

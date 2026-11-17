@@ -104,11 +104,17 @@ struct InboxKeyCatcher: NSViewRepresentable {
         var active = true
 
         override func performKeyEquivalent(with event: NSEvent) -> Bool {
-            guard active, event.type == .keyDown, !(window?.firstResponder is NSText), let key = Self.key(for: event) else {
+            guard active, event.type == .keyDown, !isTyping, let key = Self.key(for: event) else {
                 return super.performKeyEquivalent(with: event)
             }
             handle(key)
             return true
+        }
+
+        /// A text field on screen has the keyboard (a field gone from the window keeps no claim).
+        private var isTyping: Bool {
+            guard let text = window?.firstResponder as? NSText else { return false }
+            return text.window === window && !text.isHiddenOrHasHiddenAncestor
         }
 
         static func key(for event: NSEvent) -> InboxKey? {
