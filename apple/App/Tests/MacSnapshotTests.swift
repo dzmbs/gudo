@@ -272,12 +272,15 @@ final class MacSnapshotTests: XCTestCase {
     /// The window on the design fixture `screen`, then whatever `then` opens over it.
     private func window(
         _ name: String, screen: String = "splits", size: CGSize = CGSize(width: 1180, height: 760),
-        early: String? = nil, then: ((WindowModel) async -> Void)? = nil
+        early: String? = nil, reduceMotion: Bool = false, then: ((WindowModel) async -> Void)? = nil
     ) async throws {
         guard wanted(name) else { return }
         let model = WindowModel(app: .shared)
         model.start()
-        let window = makeWindow(WindowContent(request: nil, model: model).environment(AppModel.shared), size: size)
+        let accessibility = reduceMotion ? ChromeAccessibility(reduceMotion: true) : nil
+        let window = makeWindow(
+            WindowContent(request: nil, model: model).environment(AppModel.shared).environment(\.forcedChromeAccessibility, accessibility),
+            size: size)
         current = window
         currentModel = model
         for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
@@ -326,9 +329,13 @@ final class MacSnapshotTests: XCTestCase {
             model.isSidebarShown = false
             for _ in 0..<3 { model.newTab() }
         }
-        try await window("tab-strip-crowded", screen: "single", size: CGSize(width: 900, height: 520)) { model in
+        // Where the strip comes to rest: off every display its animated scroll would never move.
+        try await window("tab-strip-crowded", screen: "single", size: CGSize(width: 900, height: 520), reduceMotion: true) { model in
             model.isSidebarShown = false
-            for _ in 0..<9 { model.newTab() }
+            for _ in 0..<9 {
+                model.newTab()
+                await self.pump(0.3)
+            }
         }
         try await window("tab-strip-overflow", screen: "single", size: CGSize(width: 1260, height: 520)) { model in
             model.isSidebarShown = false
