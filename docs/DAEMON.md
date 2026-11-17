@@ -631,7 +631,26 @@ and only once), `mp::policy` unit test.
   answers `current` when the file is the one it started from, `refused` (nothing changes) when
   the new build fails `build-info` or does not read its hand-off, else `restarting`; the
   command then waits for the same pid to record a new start in `endpoint.json`. There is no
-  rollback check here: the file was put there by someone who can already run it.
+  rollback check here: the file was put there by someone who can already run it. Releases
+  0.1.5 and 0.1.6 refuse while an agent has live Chat ("Live agent Chat cannot survive a helper
+  restart yet."); the command then restarts that helper cold instead of leaving it running
+  (`hostd` `cold_restart`): its launchd job (`launchctl kickstart -k`, only when the job's
+  `pid` is this helper) or systemd unit (`systemctl --user restart`, only when the helper runs in
+  it) restarts it, else it gets SIGTERM and the build at its path is started with its command
+  line. Stopping saves the layout and screens, so the new build resumes every agent in its pane.
+  A daemon that does not answer the request (0.1.3 and earlier) is restarted the same way.
+  `restart --into <exe>` (`RestartAsk.exe`; `build-info --json` says `"restart_into": true`)
+  hands over to the build at another path, which the daemon then runs from; a daemon that
+  ignores the field is restarted cold into that build. A restart into a build older than the
+  running one (protocol level, then build time) is refused. `service install --no-start` only
+  writes (on Linux also enables) the service, leaving the running daemon alone.
+- **Update matrix** (`scripts/upgrade-matrix.sh`, a release gate in `scripts/release-mac.sh`):
+  builds every release from 0.1.3 on (cached in `target/upgrade-matrix/`) and runs the
+  `a_release_*` tests in `crates/hostd/tests/hot_upgrade.rs` from each to this build, by
+  `restart` and by the upgrade stream, with shells, a split, Claude Code, Codex and pi typed by
+  hand, and a launched Claude Code. Each checks the daemon id, pairing, panes, layout and
+  scrollback, agents and their Chat sessions, the new build serving, and a client built from
+  the release connecting.
 - **Agents across a hot upgrade**: an upgrade or `restart` is never refused for a running
   agent. A launched agent's input fence (its launch id, pending or open) is carried, so Chat keeps
   sending to it. A Codex that runs on a daemon-owned app-server is the exception that is not

@@ -19,7 +19,9 @@
 # apple/project.yml). SKIP_RUST=1 reuses the Rust builds already made. RELEASE_SUMMARY names a
 # plain-text file of short notes, one change per line, shown in the app's update card. Codex and
 # Claude Code, when installed, are launched to their start screen first to check they render as
-# in Ghostty (scripts/agent-tui-parity.sh); SKIP_AGENT_TUI_PARITY=1 skips that.
+# in Ghostty (scripts/agent-tui-parity.sh); SKIP_AGENT_TUI_PARITY=1 skips that. Every earlier
+# release that hands its panes on is updated to this build first, keeping panes, agents and
+# pairing (scripts/upgrade-matrix.sh); SKIP_UPGRADE_MATRIX=1 skips that.
 set -euo pipefail
 
 ASC_KEY_ID="${ASC_KEY_ID:-48K8RU3L66}"
@@ -63,6 +65,11 @@ done
 echo "==> coding agents render as in Ghostty"
 if [ "${SKIP_AGENT_TUI_PARITY:-0}" != 1 ]; then
   "$repo_root/scripts/agent-tui-parity.sh"
+fi
+
+echo "==> every release updates to this build"
+if [ "${SKIP_UPGRADE_MATRIX:-0}" != 1 ]; then
+  "$repo_root/scripts/upgrade-matrix.sh"
 fi
 (cd "$apple_dir" && xcodegen generate --quiet)
 

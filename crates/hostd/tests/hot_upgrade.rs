@@ -616,10 +616,14 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
         .parse()
         .unwrap();
     let layout = state.join("layout.json");
-    let deadline = Instant::now() + support::TIMEOUT;
-    while !std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(CODEX_ID)) {
-        assert!(Instant::now() < deadline, "session id never saved");
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    let saved = || std::fs::read_to_string(&layout).is_ok_and(|text| text.contains(CODEX_ID));
+    // Releases before 0.1.5 do not learn a hand-started Codex's session; this build does.
+    if from == to {
+        let deadline = Instant::now() + support::TIMEOUT;
+        while !saved() {
+            assert!(Instant::now() < deadline, "session id never saved");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     // The update moves the old bundle away and puts the new one in its place.
@@ -658,7 +662,14 @@ async fn an_app_update_keeps_codex_running_and_resumable() {
         .await;
     assert!(alive(codex_pid));
     assert!(client.streams[&pane].gaps.is_empty());
-    assert!(std::fs::read_to_string(&layout).unwrap().contains(CODEX_ID));
+    let deadline = Instant::now() + support::TIMEOUT;
+    while !saved() {
+        assert!(
+            Instant::now() < deadline,
+            "session id never saved after the update"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     // A cold restart later (a reboot, a crash) resumes the session.
     drop(client);
@@ -802,13 +813,11 @@ async fn update_keeps_chat_for_a_claude_started_by_hand(command_prefix: &str) {
                 .is_some_and(|meta| meta.agent.is_some())
         })
         .await;
-    let before = client
-        .client
-        .timeline_watch(pane)
-        .await
-        .unwrap_or_else(|error| panic!("Chat: {error}\n{}", client.text(pane)));
-    assert_eq!(before.session.native_session, CLAUDE_ID, "{}", hostd.log());
-    assert!(!before.items.is_empty());
+    let before = chat_if_served(&client, pane).await;
+    if let Some(before) = &before {
+        assert_eq!(before.session.native_session, CLAUDE_ID, "{}", hostd.log());
+        assert!(!before.items.is_empty());
+    }
 
     let connections = client.connected;
     replace(&exe, &std::fs::read(&to).unwrap());
@@ -823,13 +832,29 @@ async fn update_keeps_chat_for_a_claude_started_by_hand(command_prefix: &str) {
                 .is_some_and(|meta| meta.agent.is_some())
         })
         .await;
+    let log = || hostd.log();
+    assert_eq!(chat_session(&mut client, pane, &log).await, CLAUDE_ID);
     let after = client
         .client
         .timeline_watch(pane)
         .await
         .unwrap_or_else(|error| panic!("Chat after the update: {error}\n{}", hostd.log()));
-    assert_eq!(after.session.native_session, CLAUDE_ID, "{}", hostd.log());
-    assert_eq!(after.items.len(), before.items.len());
+    match before {
+        Some(before) => assert_eq!(after.items.len(), before.items.len()),
+        None => assert!(!after.items.is_empty()),
+    }
+}
+
+/// A pane's Chat, or `None` from a release that serves no Chat yet.
+async fn chat_if_served(
+    client: &TestClient,
+    pane: PaneId,
+) -> Option<client_core::proto::TimelineSnapshot> {
+    match client.client.timeline_watch(pane).await {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) if error.to_string().contains("update the helper") => None,
+        Err(error) => panic!("Chat: {error}\n{}", client.text(pane)),
+    }
 }
 
 /// Answers the version check a launch makes, then runs as `FAKE_CLAUDE` does.
@@ -921,6 +946,484 @@ async fn an_app_update_keeps_a_launched_claude_and_its_chat() {
     assert_eq!(after.capabilities, before.capabilities);
 }
 
+// The update matrix: `scripts/upgrade-matrix.sh` runs the `a_release_*` tests once for every
+// release that hands its panes on, with `GUDO_TEST_UPGRADE_FROM` naming that release's
+// helper, `GUDO_TEST_UPGRADE_TO` this build stamped as newer, and `GUDO_TEST_RELEASE_CLIENT`
+// a client built from the release. Without them each test updates this build to itself.
+
+const MATRIX_CLAUDE_ID: &str = "4a6f2e1d-8c3b-4f5a-9e7d-1b2c3d4e5f60";
+const MATRIX_LAUNCHED_ID: &str = "5b7a3f2e-9d4c-4a6b-8f8e-2c3d4e5f6a71";
+const MATRIX_CODEX_ID: &str = "019a1b2c-3d4e-7f50-8a6b-7c8d9e0f1a2b";
+const MATRIX_PI_ID: &str = "019a1b2c-4e5f-7061-8b7c-8d9e0f1a2b3c";
+
+/// Claude Code typed by hand or launched by the helper (in a directory named `launched`): it
+/// answers the launch's version check, writes its transcript and reports it through its hooks.
+const MATRIX_CLAUDE: &str = r#"#!/bin/bash
+case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; esac
+case "$(basename "$PWD")" in launched) id=__LAUNCHED_ID__ ;; *) id=__ID__ ;; esac
+arguments="$*"
+while [ $# -gt 0 ]; do
+  case "$1" in --session-id | --resume) id="$2"; shift ;; esac
+  shift
+done
+dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+transcript="$dir/$id.jsonl"
+sed "s/__FIXTURE_ID__/$id/g" "__TRANSCRIPT__" > "$transcript"
+for event in SessionStart UserPromptSubmit; do
+  printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup","prompt":"hi"}' \
+    "$event" "$id" "$transcript" "$PWD" | "$GUDO_HOOK" claude "$event"
+done
+echo "claude-ready $arguments"
+exec -a claude /bin/sleep 600
+"#;
+
+const MATRIX_CODEX: &str = r#"#!/bin/bash
+case " $* " in *" resume "*) echo "codex-resumed $*"; exec -a codex /bin/sleep 600 ;; esac
+dir="$CODEX_HOME/sessions/2026/11/17"
+mkdir -p "$dir"
+f="$dir/rollout-2026-11-17T10-00-00-__ID__.jsonl"
+printf '{"type":"session_meta","payload":{"id":"__ID__","cwd":"%s"}}\n' "$PWD" > "$f"
+exec 3>>"$f"
+echo codex-ready
+exec -a codex /bin/sleep 600
+"#;
+
+const MATRIX_PI: &str = r#"#!/bin/bash
+case " $* " in *" --session "*) echo "pi-resumed $*"; exec -a pi /bin/sleep 600 ;; esac
+mkdir -p "$PI_CODING_AGENT_SESSION_DIR"
+printf '{"type":"session","id":"__ID__"}\n' > "$PI_CODING_AGENT_SESSION_DIR/2026-11-17T10-00-00-000Z___ID__.jsonl"
+echo pi-ready
+exec -a pi /bin/sleep 600
+"#;
+
+/// How the app moves a helper to its new build.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Update {
+    /// The app replaced the helper's file and runs the new build's `restart`.
+    RestartCommand,
+    /// The app streams the new build to the helper over its connection.
+    UpgradeStream,
+}
+
+/// What runs in the helper while it is updated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Workload {
+    /// Shells, a split, and Claude Code, Codex and pi typed by hand.
+    ByHand,
+    /// Those and a Claude Code the helper launched, with Chat that sends to it.
+    WithLaunchedAgent,
+}
+
+fn matrix_build(variable: &str) -> PathBuf {
+    std::env::var_os(variable).map_or_else(|| PathBuf::from(HOSTD), PathBuf::from)
+}
+
+fn build_id(exe: &Path) -> String {
+    let output = Command::new(exe)
+        .args(["build-info", "--json"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line = text.lines().rfind(|line| line.starts_with('{')).unwrap();
+    let info: serde_json::Value = serde_json::from_str(line).unwrap();
+    info["build"].as_str().unwrap().to_owned()
+}
+
+fn endpoint(state: &Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(state.join("endpoint.json")).unwrap()).unwrap()
+}
+
+fn paired_devices(exe: &Path, state: &Path) -> usize {
+    let output = Command::new(exe)
+        .arg("--state-dir")
+        .arg(state)
+        .args(["devices", "--json"])
+        .output()
+        .unwrap();
+    let devices: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|_| panic!("devices: {output:?}"));
+    devices.as_array().unwrap().len()
+}
+
+/// Stops whichever daemon serves `state` when the test ends: after an update that had to
+/// restart the helper, it is no longer the test's child.
+struct StopsDaemon(PathBuf);
+
+impl Drop for StopsDaemon {
+    fn drop(&mut self) {
+        let pid = std::fs::read(self.0.join("endpoint.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|info| info["pid"].as_u64());
+        if let Some(pid) = pid {
+            // SAFETY: signals the daemon this test started, by the pid it recorded.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        }
+    }
+}
+
+async fn new_pane(client: &mut TestClient, launch: PaneLaunch) -> PaneId {
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id, .. } = client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch,
+        })
+        .await
+    else {
+        panic!("new tab");
+    };
+    client.follow(pane_id).await;
+    pane_id
+}
+
+fn shell_in(directory: &Path) -> PaneLaunch {
+    PaneLaunch::Shell {
+        cwd: Some(directory.display().to_string()),
+    }
+}
+
+fn layout_leaves(client: &TestClient) -> Vec<Vec<PaneId>> {
+    client
+        .layout
+        .as_ref()
+        .unwrap()
+        .tabs
+        .iter()
+        .map(|tab| support::leaves(&tab.root))
+        .collect()
+}
+
+fn wait_saved(state: &Path, needles: &[&str], log: &dyn Fn() -> String) {
+    let layout = state.join("layout.json");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let text = std::fs::read_to_string(&layout).unwrap_or_default();
+        if needles.iter().all(|needle| text.contains(needle)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "never saved {needles:?}:\n{text}\n{}",
+            log()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Whether `needles` are all saved with the layout within `wait`.
+fn saved_within(state: &Path, needles: &[&str], wait: Duration) -> bool {
+    let deadline = Instant::now() + wait;
+    loop {
+        let text = std::fs::read_to_string(state.join("layout.json")).unwrap_or_default();
+        if needles.iter().all(|needle| text.contains(needle)) {
+            return true;
+        }
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+async fn chat_session(client: &mut TestClient, pane: PaneId, log: &dyn Fn() -> String) -> String {
+    let mut last_error = String::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        match client.client.timeline_watch(pane).await {
+            Ok(snapshot) if !snapshot.session.native_session.is_empty() => {
+                return snapshot.session.native_session;
+            }
+            Ok(_) => last_error = "no session yet".into(),
+            Err(error) => last_error = error.to_string(),
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    panic!("no Chat on pane {pane}: {last_error}\n{}", log())
+}
+
+async fn is_agent(client: &mut TestClient, pane: PaneId) {
+    client
+        .until(&format!("pane {pane} is an agent"), |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+}
+
+async fn release_updates(update: Update, workload: Workload) {
+    use std::os::unix::fs::PermissionsExt;
+    let (from, to) = (
+        matrix_build("GUDO_TEST_UPGRADE_FROM"),
+        matrix_build("GUDO_TEST_UPGRADE_TO"),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    replace(&exe, &std::fs::read(&from).unwrap());
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let fixture = dir.path().join("fixture.jsonl");
+    std::fs::write(
+        &fixture,
+        CLAUDE_TRANSCRIPT.replace(CLAUDE_ID, "__FIXTURE_ID__"),
+    )
+    .unwrap();
+    for (name, script) in [
+        (
+            "claude",
+            MATRIX_CLAUDE
+                .replace("__LAUNCHED_ID__", MATRIX_LAUNCHED_ID)
+                .replace("__ID__", MATRIX_CLAUDE_ID)
+                .replace("__TRANSCRIPT__", &fixture.display().to_string()),
+        ),
+        ("codex", MATRIX_CODEX.replace("__ID__", MATRIX_CODEX_ID)),
+        ("pi", MATRIX_PI.replace("__ID__", MATRIX_PI_ID)),
+    ] {
+        let path = tools.join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let work = dir.path().join("work");
+    let launched = dir.path().join("launched");
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::create_dir_all(&launched).unwrap();
+    let env = [
+        (
+            "PATH",
+            format!(
+                "{}:{}",
+                tools.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        ),
+        (
+            "PI_CODING_AGENT_SESSION_DIR",
+            dir.path().join("pi-sessions").display().to_string(),
+        ),
+    ];
+    let state = dir.path().join("state");
+    let log = dir.path().join("hostd.log");
+    let _hostd = run_with_env(&exe, &state, &log, &env);
+    let _stops = StopsDaemon(state.clone());
+    let log = || std::fs::read_to_string(&log).unwrap_or_default();
+    let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+
+    let shell = client.attach_and_follow().await;
+    client.type_line(
+        shell,
+        "export KEEP=kept; echo scroll-$((6*7))-start; seq 1 3000; echo visible-$((6*7))",
+    );
+    client.wait_text(shell, "visible-42").await;
+    let OpOutcome::PaneCreated { pane_id: split } = client
+        .op(LayoutOp::Split {
+            pane_id: shell,
+            axis: client_core::proto::Axis::Horizontal,
+            launch: shell_in(&work),
+        })
+        .await
+    else {
+        panic!("split");
+    };
+    client.follow(split).await;
+    let claude = new_pane(&mut client, shell_in(&work)).await;
+    client.type_line(claude, "claude");
+    client.wait_text(claude, "claude-ready").await;
+    let codex = new_pane(&mut client, shell_in(&work)).await;
+    client.type_line(codex, "codex");
+    client.wait_text(codex, "codex-ready").await;
+    let pi = new_pane(&mut client, shell_in(&work)).await;
+    client.type_line(pi, "pi");
+    client.wait_text(pi, "pi-ready").await;
+    let launched_claude = if workload == Workload::WithLaunchedAgent {
+        let pane = new_pane(
+            &mut client,
+            PaneLaunch::Agent {
+                agent: client_core::proto::AgentKind::Claude,
+                resume: None,
+                cwd: Some(launched.display().to_string()),
+            },
+        )
+        .await;
+        client.wait_text(pane, "claude-ready").await;
+        Some(pane)
+    } else {
+        None
+    };
+    is_agent(&mut client, claude).await;
+    if chat_if_served(&client, claude).await.is_some() {
+        assert_eq!(
+            chat_session(&mut client, claude, &log).await,
+            MATRIX_CLAUDE_ID
+        );
+    }
+    let hands_off = Command::new(&from)
+        .args(["build-info", "--json"])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("\"handoff\""));
+    // Some releases never save the sessions of agents typed by hand; what they saved is
+    // what a cold restart resumes.
+    let sessions = [MATRIX_CLAUDE_ID];
+    saved_within(
+        &state,
+        &sessions,
+        Duration::from_secs(if hands_off { 10 } else { 2 }),
+    );
+    let scrolled = search_total(&mut client, shell, "scroll-42-start").await;
+    assert_eq!(scrolled, 1);
+    let daemon_id = endpoint(&state)["daemon_id"].as_str().unwrap().to_owned();
+    let daemon_pid = endpoint(&state)["pid"].as_u64().unwrap();
+    let devices = paired_devices(&exe, &state);
+    let leaves_before = layout_leaves(&client);
+    // Chat sends only to a launch the helper fences (0.1.5 and later): kept when it was there.
+    let mut sends_before = false;
+    if let Some(pane) = launched_claude
+        && let Ok(chat) = client.client.timeline_watch_capabilities(pane).await
+    {
+        sends_before = chat
+            .capabilities
+            .contains(client_core::proto::AgentCapabilities::SEND);
+    }
+    let connections = client.connected;
+    let saved_before = std::fs::read_to_string(state.join("layout.json")).unwrap_or_default();
+    let claude_saved = saved_before.contains(MATRIX_CLAUDE_ID);
+    let codex_saved = saved_before.contains(MATRIX_CODEX_ID);
+    let pi_saved = saved_before.contains(MATRIX_PI_ID);
+
+    let new_build = build_id(&to);
+    match update {
+        Update::RestartCommand => {
+            replace(&exe, &std::fs::read(&to).unwrap());
+            let output = restart_command(&exe, &state);
+            assert!(output.status.success(), "{output:?}\n{}", log());
+        }
+        Update::UpgradeStream => {
+            let build =
+                DaemonBuild::from_file(&to.display().to_string(), new_build.clone()).unwrap();
+            client
+                .client
+                .upgrade_daemon(build, None)
+                .await
+                .unwrap_or_else(|error| panic!("upgrade: {error}\n{}", log()));
+        }
+    }
+    reconnected(&mut client, connections).await;
+    client
+        .until("the new build serves", |client| {
+            client
+                .client
+                .daemon_info()
+                .is_some_and(|info| info.build == new_build)
+        })
+        .await;
+    assert_eq!(endpoint(&state)["daemon_id"].as_str().unwrap(), daemon_id);
+    assert_eq!(paired_devices(&exe, &state), devices);
+    client
+        .until("the same layout", |client| {
+            layout_leaves(client) == leaves_before
+        })
+        .await;
+    let carried = hands_off && endpoint(&state)["pid"].as_u64() == Some(daemon_pid);
+    if carried {
+        assert_eq!(search_total(&mut client, shell, "scroll-42-start").await, 1);
+        client.type_line(shell, "echo again-$KEEP");
+        client.wait_text(shell, "again-kept").await;
+    } else {
+        // The release cannot or will not hand off and was restarted: agents resume.
+        assert!(
+            !hands_off || workload == Workload::WithLaunchedAgent,
+            "{}",
+            log()
+        );
+        if hands_off {
+            client.wait_text(shell, "visible-42").await;
+        }
+        if claude_saved {
+            client
+                .wait_flat(claude, &format!("--resume {MATRIX_CLAUDE_ID}"))
+                .await;
+        }
+        if codex_saved {
+            client
+                .wait_flat(codex, &format!("resume {MATRIX_CODEX_ID}"))
+                .await;
+        }
+    }
+    if carried || claude_saved {
+        is_agent(&mut client, claude).await;
+        assert_eq!(
+            chat_session(&mut client, claude, &log).await,
+            MATRIX_CLAUDE_ID
+        );
+    }
+    if carried || codex_saved {
+        is_agent(&mut client, codex).await;
+    }
+    if let Some(pane) = launched_claude {
+        is_agent(&mut client, pane).await;
+        // The helper names the session it launches; it is the same before and after.
+        assert!(!chat_session(&mut client, pane, &log).await.is_empty());
+        let chat = client
+            .client
+            .timeline_watch_capabilities(pane)
+            .await
+            .unwrap();
+        assert!(
+            !sends_before
+                || chat
+                    .capabilities
+                    .contains(client_core::proto::AgentCapabilities::SEND),
+            "{:?}",
+            chat.capabilities
+        );
+    }
+    let mut sessions = Vec::new();
+    if carried || claude_saved {
+        sessions.push(MATRIX_CLAUDE_ID);
+    }
+    if carried || codex_saved {
+        sessions.push(MATRIX_CODEX_ID);
+    }
+    if carried || pi_saved {
+        sessions.push(MATRIX_PI_ID);
+    }
+    wait_saved(&state, &sessions, &log);
+
+    if let Some(release_client) = std::env::var_os("GUDO_TEST_RELEASE_CLIENT") {
+        client.type_line(shell, "echo client-$((6*7))-check");
+        client.wait_text(shell, "client-42-check").await;
+        let output = Command::new(release_client)
+            .arg(ticket(&exe, &state))
+            .arg(shell.0.to_string())
+            .arg("client-42-check")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "a client of the release: {output:?}\n{}",
+            log()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_release_updates_with_the_restart_command() {
+    release_updates(Update::RestartCommand, Workload::ByHand).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_release_updates_over_the_upgrade_stream() {
+    release_updates(Update::UpgradeStream, Workload::ByHand).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_release_running_a_launched_agent_updates_with_the_restart_command() {
+    release_updates(Update::RestartCommand, Workload::WithLaunchedAgent).await;
+}
+
 fn restart_into_command(exe: &Path, state: &Path, into: &Path) -> std::process::Output {
     Command::new(exe)
         .arg("--state-dir")
@@ -933,7 +1436,10 @@ fn restart_into_command(exe: &Path, state: &Path, into: &Path) -> std::process::
 }
 
 fn running_executable(pid: u32) -> PathBuf {
-    daemon::process_executable(pid).unwrap().canonicalize().unwrap()
+    daemon::process_executable(pid)
+        .unwrap()
+        .canonicalize()
+        .unwrap()
 }
 
 /// A helper running from one place (a build folder, an old app) hands its panes to the build
