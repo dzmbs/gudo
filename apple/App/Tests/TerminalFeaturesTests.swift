@@ -78,6 +78,12 @@ final class TerminalFeaturesTests: XCTestCase {
         XCTAssertFalse(model.isSearchShown)
         XCTAssertNil(pane.view.surface.search, "no highlights once closed")
         XCTAssertTrue(window.firstResponder === pane.view, "the terminal takes the keyboard back")
+
+        WorkspaceAction.findNext.perform(on: try XCTUnwrap(model.workspace), window: model)
+        await waitUntil { self.model.isSearchShown && self.model.searchStatus.selected != nil }
+        XCTAssertTrue(model.isSearchShown, "⌘G brings the bar back")
+        XCTAssertEqual(model.searchNeedle, "row 1", "with the last needle")
+        XCTAssertEqual(model.searchStatus.total, total)
     }
 
     func testMatchCaseNarrowsTheMatches() async throws {
@@ -86,13 +92,18 @@ final class TerminalFeaturesTests: XCTestCase {
         WorkspaceAction.find.perform(on: try XCTUnwrap(model.workspace), window: model)
         await waitUntil { self.fieldHasKeyboard }
         type("case")
-        await waitUntil { self.model.searchStatus.total >= 4 }
+        await waitUntil { self.model.searchStatus.isComplete && self.model.searchStatus.total >= 4 }
         let insensitive = model.searchStatus.total
 
         // The bar's Aa button: SwiftUI builds no accessibility tree to press it through while no
         // assistive app is running, so the test flips what it is bound to.
         model.searchCaseSensitive.toggle()
-        await waitUntil { self.model.searchStatus.total < insensitive }
+        // The search catches up on the display link's frames, which a window off screen does not get.
+        let surface = try XCTUnwrap(pane?.view.surface)
+        await waitUntil {
+            surface.renderIfDirty(offscreen: true)
+            return self.model.searchStatus.isComplete && self.model.searchStatus.total < insensitive
+        }
         XCTAssertTrue(model.searchCaseSensitive)
         XCTAssertEqual(model.searchStatus.total, insensitive / 2, "only the lower-case ones: \(model.searchStatus)")
     }

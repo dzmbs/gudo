@@ -101,6 +101,30 @@ final class TerminalHostFeaturesTests: XCTestCase {
         }
     }
 
+    /// ⌘- on a reopened window grows the grid: its new top rows are the host's older output,
+    /// in order, never blank rows.
+    func testZoomingOutFillsTheNewRowsFromTheHost() async throws {
+        try await runCommand("seq 1 5000", showing: "5000")
+        closeWindow()
+        try await openWindow()
+        let workspace = try XCTUnwrap(model?.workspace)
+        let pane = try XCTUnwrap(pane)
+        try await until("the reopened pane shows the end") { self.screenText.contains("5000") }
+        let rows = pane.view.surface.terminal.size.rows
+
+        WorkspaceAction.decreaseFontSize.perform(on: workspace, window: try XCTUnwrap(model))
+        WorkspaceAction.decreaseFontSize.perform(on: workspace, window: try XCTUnwrap(model))
+        try await until("more rows") { pane.view.surface.terminal.size.rows > rows }
+        XCTAssertEqual(pane.view.surface.grid.map { Int($0.rows) }, pane.view.surface.terminal.size.rows, "the host took the new grid")
+        try await until("every row shows output", timeout: .seconds(10)) {
+            let numbers = self.screenText.split(separator: "\n").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+            return numbers.count >= pane.view.surface.terminal.size.rows - 3
+        }
+        let numbers = screenText.split(separator: "\n").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        XCTAssertEqual(numbers, Array((numbers.first ?? 0)...(numbers.last ?? 0)), "in order, none missing")
+        XCTAssertEqual(numbers.last, 5000)
+    }
+
     // MARK: Exit
 
     func testAShellThatExitsClosesItsPaneAndTheOtherTakesTheKeyboard() async throws {
@@ -138,6 +162,8 @@ final class TerminalHostFeaturesTests: XCTestCase {
         self.window = window
         model.isSidebarShown = false
         model.show(.host(hostId))
+        // On screen behind another app's window: an offscreen test window's scene is in the background.
+        model.isOnScreen = true
         try await until("a live shell", timeout: .seconds(20)) {
             guard let pane = self.pane else { return false }
             return pane.connection == .live && pane.view.window != nil && self.lastLine == "%"
