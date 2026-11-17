@@ -215,6 +215,25 @@ async fn a_ticket_pairs_only_one_device() {
     daemon.shutdown().await;
 }
 
+/// The apps offer pi in New Agent, and Chat on a pi pane, only where the helper says it can.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_helper_says_it_runs_pi() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = daemon(dir.path()).await;
+    let ticket = daemon
+        .pairing_ticket(daemon::PAIRING_TTL)
+        .unwrap()
+        .to_string();
+    let (client, mut events) = connect(&ticket, true);
+    next_matching(&mut events, |event| {
+        matches!(event, ClientEvent::Connected { .. })
+    })
+    .await;
+    assert!(client.daemon_offers(client_core::proto::MoreDaemonFeatures::PI_AGENT));
+    drop(client);
+    daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_mirror_bytes_and_snapshots_still_flow() {
     let dir = tempfile::tempdir().unwrap();
