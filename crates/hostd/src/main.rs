@@ -1073,9 +1073,6 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
     stream.write_all(&line)?;
     let mut answer = String::new();
     BufReader::new(&stream).read_line(&mut answer)?;
-    let reply: daemon::RestartReply = serde_json::from_str(&answer).map_err(|_| {
-        anyhow::anyhow!("the running daemon cannot restart in place; restart it to update")
-    })?;
     // A daemon from before `--into` ignores it and answers for the file at its own path.
     let runs_elsewhere = |pid: u32| {
         into.as_ref()
@@ -1094,6 +1091,10 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
             exe.display()
         );
         Ok(())
+    };
+    // Builds before 0.1.4 have no hot hand-off and do not answer.
+    let Ok(reply) = serde_json::from_str::<daemon::RestartReply>(&answer) else {
+        return restart_cold("the running daemon cannot restart in place");
     };
     match reply {
         daemon::RestartReply::Current if runs_elsewhere(before.pid) => {

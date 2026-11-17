@@ -85,7 +85,7 @@ pub fn restart(state_dir: &Path, pid: u32, started_at: u64, exe: &Path) -> Resul
             run(Command::new("systemctl").args(["--user", "restart", &unit]))?;
         }
         Supervisor::None(arguments) => {
-            stop(pid)?;
+            stop(pid, state_dir)?;
             start(exe, &arguments[1..])?;
         }
     }
@@ -102,13 +102,15 @@ fn run(command: &mut Command) -> Result<()> {
     Ok(())
 }
 
-fn stop(pid: u32) -> Result<()> {
+/// Stops the helper and waits until it let go of the state directory: an exited helper whose
+/// parent has not reaped it yet still has a pid.
+fn stop(pid: u32, state_dir: &Path) -> Result<()> {
     let process = rustix::process::Pid::from_raw(i32::try_from(pid)?)
         .context("the running helper has no valid pid")?;
     rustix::process::kill_process(process, rustix::process::Signal::TERM)
         .context("stopping the running helper")?;
     let deadline = Instant::now() + STOP_WAIT;
-    while rustix::process::test_kill_process(process).is_ok() {
+    while rustix::process::test_kill_process(process).is_ok() && crate::instance_locked(state_dir) {
         if Instant::now() > deadline {
             bail!(
                 "the running helper did not stop within {} s",
