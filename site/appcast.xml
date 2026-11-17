@@ -10,6 +10,35 @@
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.6</title>
+      <pubDate>Tue, 17 Nov 2026 20:31:55 +0100</pubDate>
+      <sparkle:version>1748</sparkle:version>
+      <sparkle:shortVersionString>0.1.6</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.6</sparkle:releaseNotesLink>
+      <description>This Mac's helper runs as its own copy outside the app, starts again by itself if it ends, and starts at login by default
+If the helper is stopped or hangs, panes come back with their screen and the keys you typed, and a stuck start offers Retry and Disconnect
+Sessions come back faster after a restart: agents resume one by one, those on screen first
+pi: Chat, its own logo, and New Agent offers it where the host can run it
+Program icons for runners, scripts, builds, databases and more, following the program in front of each pane
+Calmer window: sidebar colour up to the traffic lights, tabs in the title bar, one look in every theme
+The project name pinned at the top of the sidebar stays in place as you scroll
+⌘B shows and hides the sidebar at once, resizing each terminal one time
+Panes never flash blank on split, close, zoom or float, and take clicks right after a split
+Every title bar button, menu and shortcut works with a click, right click and middle click
+Inbox: Return approves once, the keys keep working after each answer, and failed agents count as needing you
+New Agent no longer loses its first prompt; a failed agent says failed everywhere
+Ports, Files and the file viewer keep the keyboard when they open; ⌘F finds in the open file
+Settings: ⌘W closes Settings, not the terminal behind it; search reaches every setting by keyboard
+Zooming out fetches the host's older output instead of leaving blank rows
+Find selects the nearest match as you type
+Chat: one-row composer, tables that fit, code on its own surface, tool summaries that read whole, Codex history from its session file
+SSH: works with fish and nushell login shells, clearer errors, faster host setup
+Fixes for a connection leak in the dev server proxy, large text on iPhone, and many more</description>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.6/Gudo.dmg" length="75771507" type="application/octet-stream"
+                 sparkle:edSignature="CjhJ/Jt+eTwpF3vve12xTeQCVNRMrLramjx+PX8cjGHg5AllTXJKbNBDmArGtfOt/hsHzhjYx4Yb9568jhPSAg==" />
+    </item>
+    <item>
       <title>Version 0.1.5</title>
       <pubDate>Tue, 10 Nov 2026 22:27:45 +0100</pubDate>
       <sparkle:version>1311</sparkle:version>
