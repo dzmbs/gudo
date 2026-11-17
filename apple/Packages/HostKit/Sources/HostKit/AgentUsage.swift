@@ -3,20 +3,23 @@ import GudoCore
 
 // Agent plan usage: the words and colours the meters show.
 // The daemon gathers the numbers on the host (`DaemonWorkspace.usage`); this turns them into a
-// compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design: no
-// colour below 80 %, amber above, red when limited; nothing at all when unknown (the reason is
-// in the detail).
+// compact meter ("Claude · 62% of 5h · resets 14:20") and a detail list. Quiet by design: named
+// in a host's header above 80 % but not coloured, amber from 95 %, red when limited; nothing at
+// all when unknown (the reason is in the detail).
 
 /// How loud a meter is.
 public enum UsageTone: Sendable, Equatable {
     case quiet
-    /// Above 80 %: amber.
+    /// Above 80 %: worth naming, in the surface's own text colour.
     case attention
+    /// From 95 %: amber.
+    case warning
     /// Requests refused until the reset: red.
     case limited
 
     static func of(_ window: UsageWindow) -> UsageTone {
         if window.limited || window.usedPermille >= 1000 { return .limited }
+        if window.usedPermille >= 950 { return .warning }
         if window.usedPermille > 800 { return .attention }
         return .quiet
     }

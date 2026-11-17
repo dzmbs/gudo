@@ -20,7 +20,8 @@ final class UsageFeedTests: XCTestCase {
         XCTAssertEqual(meters.map(\.tone), [.quiet, .attention])
         XCTAssertEqual(meters.nearingLimits.map(\.text), ["Codex · 92% of weekly · resets Wed"], "a host's header names only what nears a limit")
         XCTAssertNil(UsageTone.quiet.color, "quiet meters keep the surface's own style")
-        XCTAssertNotNil(UsageTone.attention.color)
+        XCTAssertNil(UsageTone.attention.color, "nearing a limit is named, not coloured")
+        XCTAssertNotNil(UsageTone.warning.color)
         XCTAssertNotNil(UsageTone.limited.color)
     }
 

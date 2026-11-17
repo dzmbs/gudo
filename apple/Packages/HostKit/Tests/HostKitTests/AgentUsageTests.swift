@@ -41,6 +41,8 @@ struct AgentUsageTests {
         #expect(meter.tone == .attention)
         let edge = usage([window("5h", 300, 800, resetIn: 60)])
         #expect(UsageMeter.compact(edge, now: now, calendar: calendar, locale: locale)?.tone == .quiet, "80 % exactly stays quiet")
+        let warning = usage([window("5h", 300, 950, resetIn: 60)])
+        #expect(UsageMeter.compact(warning, now: now, calendar: calendar, locale: locale)?.tone == .warning, "95 % warns")
     }
 
     @Test func limitedIsRedAndComesFirst() throws {

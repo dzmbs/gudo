@@ -7,8 +7,8 @@ extension UsageTone {
     /// The meter's colour; nil keeps the surface's own quiet style.
     var color: ChromeStyle? {
         switch self {
-        case .quiet: nil
-        case .attention: DS.Palette.attention
+        case .quiet, .attention: nil
+        case .warning: DS.Palette.attention
         case .limited: DS.Palette.error
         }
     }
@@ -63,7 +63,7 @@ struct HostUsageMeters: View {
                         ForEach(Array(meters.enumerated()), id: \.element.id) { index, meter in
                             if index > 0 { Text(" · ").foregroundStyle(DS.Palette.textTertiary) }
                             Text(meter.short)
-                                .foregroundStyle(meter.tone.color.map { AnyShapeStyle($0) } ?? AnyShapeStyle(DS.Palette.textTertiary))
+                                .foregroundStyle(meter.tone.color.map { AnyShapeStyle($0) } ?? AnyShapeStyle(DS.Palette.textSecondary))
                         }
                     }
                     .font(DS.Font.meta)
