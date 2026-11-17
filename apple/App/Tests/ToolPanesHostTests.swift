@@ -6,6 +6,7 @@ import SwiftUI
 import TerminalCore
 import TerminalRenderer
 import Vision
+import WebKit
 import XCTest
 @testable import App
 
@@ -20,6 +21,7 @@ final class ToolPanesHostTests: XCTestCase {
     private var project: URL?
     private var hostId: String?
     private var driver: WindowDriver?
+    private var shellPane: PaneId?
 
     override func setUp() async throws {
         try XCTSkipUnless(LaunchOptions.mock, "needs TEST_RUNNER_GUDO_MOCK=1")
@@ -38,12 +40,21 @@ final class ToolPanesHostTests: XCTestCase {
             .write(to: project.appending(path: "two.html"), atomically: true, encoding: .utf8)
         try (1...200).map { "let value_\($0) = \($0);" }.joined(separator: "\n")
             .write(to: project.appending(path: "src/main.rs"), atomically: true, encoding: .utf8)
+        // What an agent's MCP client asks the hook shim: the drawings of its session.
+        try """
+        printf '%s\\n' \\
+          '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}' \\
+          '{"jsonrpc":"2.0","method":"notifications/initialized"}' \\
+          '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_drawings","arguments":{}}}' \\
+          | '\(FakeAgents.hookBinary.path)' mcp | tail -1 | grep -oE '[0-9]+ drawings? in session|[0-9]+ elements' | head -2 | tr '\\n' ' '; echo
+        """.write(to: home.appending(path: "drawings.sh"), atomically: true, encoding: .utf8)
         let daemon = try TestDaemon(shell: "/bin/zsh", environment: ["HOME": home.path, "ZDOTDIR": home.path])
         self.daemon = daemon
         let hostId = try await AppModel.shared.hosts.pair(PairingTicket(try await daemon.ticket()), name: "tool-panes-host")
         self.hostId = hostId
         let driver = try await WindowDriver.start(host: hostId)
         self.driver = driver
+        shellPane = driver.model.workspace?.focusedPane
         try await until("the shell's prompt") { self.lastLine == "%" }
     }
 
@@ -104,7 +115,7 @@ final class ToolPanesHostTests: XCTestCase {
         let port = try await startServer()
         let address = "http://localhost:\(port)/"
         try await runCommand("echo \(address)")
-        let terminalPane = try XCTUnwrap(workspace?.focusedPane)
+        let terminalPane = try XCTUnwrap(shellPane)
 
         try hover(printed: address, modifiers: .command)
         try await until("⌘ over the URL names it") { self.workspace?.notices[terminalPane]?.hoveredURL == address }
@@ -260,7 +271,7 @@ final class ToolPanesHostTests: XCTestCase {
         let driver = try XCTUnwrap(driver)
         let model = driver.model
         let port = try await startServer()
-        let agent = HostPane(hostId: try XCTUnwrap(hostId), pane: try XCTUnwrap(workspace?.focusedPane))
+        let agent = HostPane(hostId: try XCTUnwrap(hostId), pane: try XCTUnwrap(shellPane))
 
         let snapshot = try await agentCall("browser_navigate", ["url": "http://localhost:\(port)/"], from: agent)
         // Two seconds apart, so the steps sit at different times on the playhead.
@@ -314,13 +325,80 @@ final class ToolPanesHostTests: XCTestCase {
         try await until("the menu's New Browser Tab opens a page") { model.activeMixed?.isBrowserOnly == true }
     }
 
+    // MARK: Drawing
+
+    /// New Drawing makes a drawing in the project and opens its canvas; a shape dragged on it
+    /// is drawn, ⌘Z takes it back, Select All and Delete clear it, and an agent's MCP tools list
+    /// the drawing with what is on it.
+    func testANewDrawingDrawsUndoesClearsAndIsListedForAgents() async throws {
+        let driver = try XCTUnwrap(driver)
+        let project = try XCTUnwrap(project)
+        try await runFromPalette("New Drawing")
+        try await until("its file in the project", timeout: .seconds(15)) {
+            ((try? FileManager.default.contentsOfDirectory(atPath: project.path)) ?? []).contains { $0.hasSuffix(".excalidraw") }
+        }
+        var found: WKWebView?
+        try await until("its canvas", timeout: .seconds(15)) {
+            found = driver.window.contentView.flatMap { WindowDriver.descendant(of: $0) { $0 is WKWebView } } as? WKWebView
+            return found != nil
+        }
+        let canvas = try XCTUnwrap(found)
+        try await until("the canvas has the keyboard") { (driver.window.firstResponder as? NSView)?.isDescendant(of: canvas) == true }
+        try await until("the editor is up") { try await self.scene(on: canvas)["tool"] != nil }
+
+        // R picks the rectangle; a drag draws one.
+        try await driver.type(text: "r")
+        try await drag(on: canvas, from: CGPoint(x: 0.3, y: 0.3), to: CGPoint(x: 0.6, y: 0.6))
+        try await until("a rectangle") { try await self.shapes(on: canvas) == 1 }
+        try await driver.press(KeyboardShortcut("z", modifiers: .command))
+        try await until("⌘Z takes it back") { try await self.shapes(on: canvas) == 0 }
+        try await driver.press(KeyboardShortcut("z", modifiers: [.command, .shift]))
+        try await until("⇧⌘Z brings it back") { try await self.shapes(on: canvas) == 1 }
+        try await driver.type(text: "r")
+        try await drag(on: canvas, from: CGPoint(x: 0.1, y: 0.7), to: CGPoint(x: 0.25, y: 0.9))
+        try await until("a second one") { try await self.shapes(on: canvas) == 2 }
+        try await listedForAgents(shapes: 2)
+
+        // Back to the drawing with Focus Next Pane; Select All and Delete clear it.
+        let handled = try await driver.pressInTerminal(WorkspaceAction.focusNextPane.shortcut)
+        XCTAssertTrue(handled, "the terminal takes ⌘]")
+        try await until("the canvas has the keyboard again") { (driver.window.firstResponder as? NSView)?.isDescendant(of: canvas) == true }
+        try await driver.press(KeyboardShortcut("a", modifiers: .command))
+        try await driver.type(KeyboardShortcut(.delete, modifiers: []))
+        try await until("cleared") { try await self.shapes(on: canvas) == 0 }
+        try await listedForAgents(shapes: 0)
+    }
+
+    /// The canvas page's scene: its elements and tool.
+    private func scene(on canvas: WKWebView) async throws -> [String: Any] {
+        let json = try await canvas.evaluateJavaScript("window.canvas.snapshot()") as? String ?? "{}"
+        return try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
+    }
+
+    /// The shapes on the canvas page (deleted ones aside).
+    private func shapes(on canvas: WKWebView) async throws -> Int {
+        let elements = try await scene(on: canvas)["elements"] as? [[String: Any]] ?? []
+        return elements.filter { $0["isDeleted"] as? Bool != true }.count
+    }
+
+    /// An agent's MCP tools list the session's one drawing with `shapes` on it.
+    private func listedForAgents(shapes: Int) async throws {
+        let listed = "1 drawing in session \(shapes) elements"
+        try focusTerminal()
+        try await until("the host has the drawing's shapes", timeout: .seconds(15)) {
+            try await self.runCommand("sh ~/drawings.sh")
+            return self.screenText.split(separator: "\n").last { $0.contains("in session") }?.trimmingCharacters(in: .whitespaces) == listed
+        }
+    }
+
     // MARK: Helpers
 
     private var workspace: Workspace? { driver?.model.workspace }
 
+    /// The host's shell, the window's first pane.
     private var terminal: Pane? {
-        guard let workspace, let id = workspace.focusedPane else { return nil }
-        return workspace.pane(id)
+        guard let workspace, let shellPane else { return nil }
+        return workspace.pane(shellPane)
     }
 
     private var screenText: String { terminal?.view.surface.terminal.visibleText() ?? "" }
@@ -522,6 +600,32 @@ final class ToolPanesHostTests: XCTestCase {
         let row = brightness(NSPoint(x: title.maxX + 24, y: title.midY))
         let list = brightness(NSPoint(x: title.maxX + 24, y: title.minY - 60))
         return row > list + 0.04
+    }
+
+    /// A press, a drag in steps and a release on `view`, at fractions of its size.
+    private func drag(on view: NSView, from start: CGPoint, to end: CGPoint) async throws {
+        let window = try XCTUnwrap(driver?.window)
+        let frame = view.convert(view.bounds, to: nil)
+        func point(_ fraction: CGPoint) -> NSPoint {
+            NSPoint(x: frame.minX + frame.width * fraction.x, y: frame.maxY - frame.height * fraction.y)
+        }
+        func event(_ type: NSEvent.EventType, _ at: NSPoint) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: at, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        }
+        // Straight to the view under the pointer: WebKit takes a made-up press sent through a
+        // window that is never really key only as the click that would make it key.
+        let target = window.contentView?.superview?.hitTest(point(start)) ?? view
+        target.mouseDown(with: try event(.leftMouseDown, point(start)))
+        for step in 1...10 {
+            try await Task.sleep(for: .milliseconds(30))
+            let fraction = CGFloat(step) / 10
+            let at = CGPoint(x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction)
+            target.mouseDragged(with: try event(.leftMouseDragged, point(at)))
+        }
+        target.mouseUp(with: try event(.leftMouseUp, point(end)))
+        try await Task.sleep(for: .milliseconds(300))
     }
 
     /// The browser bar's address field.
