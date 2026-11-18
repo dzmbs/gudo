@@ -18,8 +18,9 @@ fn restart_into_command(exe: &Path, state: &Path, into: &Path) -> std::process::
         .unwrap()
 }
 
-/// A helper from before hot hand-off: it holds the state directory and answers nothing on its
-/// socket; its process is the one a cold restart would stop.
+/// A helper that cannot hand over: it holds the state directory and gives `answer` (nothing,
+/// as builds before hot hand-off) to a restart request; its process is the one a cold restart
+/// would stop.
 struct PreHandOffHelper {
     process: Child,
     _lock: std::fs::File,
@@ -35,6 +36,10 @@ impl Drop for PreHandOffHelper {
 
 impl PreHandOffHelper {
     fn start(state: &Path) -> Self {
+        Self::answering(state, "")
+    }
+
+    fn answering(state: &Path, answer: &'static str) -> Self {
         std::fs::create_dir_all(state).unwrap();
         let lock = std::fs::File::create(state.join("hostd.lock")).unwrap();
         rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
@@ -48,6 +53,7 @@ impl PreHandOffHelper {
                     &mut std::io::BufReader::new(&connection),
                     &mut request,
                 );
+                let _ = std::io::Write::write_all(&mut &connection, answer.as_bytes());
             }
         });
         std::fs::write(
@@ -124,4 +130,37 @@ fn a_cold_restart_refuses_an_older_or_foreign_build() {
         "{output:?}"
     );
     assert!(helper.is_running(), "the running helper was stopped");
+}
+
+fn hot_only_restart_command(state: &Path) -> std::process::Output {
+    Command::new(HOSTD)
+        .arg("--state-dir")
+        .arg(state)
+        .args(["restart", "--hot-only"])
+        .output()
+        .unwrap()
+}
+
+/// `--hot-only` never ends running commands: a helper that could only be restarted cold, from
+/// before hot hand-off or refusing for live Chat, is left alone, and the command says so with
+/// an exit status of its own.
+#[test]
+fn a_hot_only_restart_leaves_a_helper_that_cannot_hand_over_alone() {
+    let refused_for_live_chat =
+        "{\"refused\":\"Live agent Chat cannot survive a helper restart yet.\"}\n";
+    for answer in ["", refused_for_live_chat] {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let mut helper = PreHandOffHelper::answering(&state, answer);
+        let output = hot_only_restart_command(&state);
+        assert_eq!(output.status.code(), Some(3), "{answer}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("only a cold restart"),
+            "{output:?}"
+        );
+        assert!(
+            helper.is_running(),
+            "{answer}: the running helper was stopped"
+        );
+    }
 }

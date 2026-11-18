@@ -130,6 +130,10 @@ enum Command {
         /// Hand over to the build at this path instead, which the daemon then runs from.
         #[arg(long, value_name = "EXE")]
         into: Option<PathBuf>,
+        /// Only hand over in the same process: when the daemon can only be restarted cold
+        /// (ending running commands), change nothing and exit with status 3.
+        #[arg(long)]
+        hot_only: bool,
     },
     /// The paired owner devices (guests are managed in the app). In a terminal: pair a new
     /// one, rename or remove them.
@@ -304,7 +308,20 @@ fn main() -> Result<()> {
             local,
         ),
         Command::Status => status(&state_dir),
-        Command::Restart { into } => restart(&state_dir, into.as_deref()),
+        Command::Restart { into, hot_only } => {
+            let mode = if hot_only {
+                RestartMode::HotOnly
+            } else {
+                RestartMode::HotOrCold
+            };
+            match restart(&state_dir, into.as_deref(), mode) {
+                Err(error) if error.is::<NeedsColdRestart>() => {
+                    eprintln!("{error}");
+                    std::process::exit(NEEDS_COLD_RESTART_EXIT);
+                }
+                result => result,
+            }
+        }
         Command::Devices { json } => devices::run(&state_dir, json),
         Command::Rename { device, name } => devices::rename(&state_dir, &device, &name.join(" ")),
         Command::Unpair { device } => {
@@ -1036,12 +1053,37 @@ fn status(state_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How `restart` may update the running daemon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RestartMode {
+    /// Hand over in the same process, else restart cold: running commands end.
+    HotOrCold,
+    /// Hand over in the same process, or change nothing.
+    HotOnly,
+}
+
+/// What `restart --hot-only` exits with when only a cold restart would update the daemon.
+const NEEDS_COLD_RESTART_EXIT: i32 = 3;
+
+/// Only a cold restart would update the daemon, which `restart --hot-only` leaves alone.
+#[derive(Debug)]
+struct NeedsColdRestart(&'static str);
+
+impl std::fmt::Display for NeedsColdRestart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}; only a cold restart updates it, which ends running commands",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for NeedsColdRestart {}
+
 /// Asks the running daemon over its hook socket to restart into the installed build (or the
 /// one at `into`) and waits until it has (same process, started again).
-fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::ffi::OsStrExt;
-    const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
+fn restart(state_dir: &Path, into: Option<&Path>, mode: RestartMode) -> Result<()> {
     let into = into
         .map(Path::canonicalize)
         .transpose()
@@ -1054,6 +1096,66 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
                 state_dir.display()
             )
         })?;
+    let reply = ask_to_restart(state_dir, into.as_deref())?;
+    // A daemon from before `--into` ignores it and answers for the file at its own path.
+    let runs_elsewhere = |pid: u32| {
+        into.as_ref()
+            .is_some_and(|into| cold_restart::executable_of(pid).as_ref() != Some(into))
+    };
+    let restart_cold = |why: &'static str, running: &daemon::EndpointInfo| -> Result<()> {
+        if mode == RestartMode::HotOnly {
+            return Err(NeedsColdRestart(why).into());
+        }
+        log_line!("{why}; restarting it, its agents resume their sessions");
+        let exe =
+            cold_restart::restart(state_dir, running.pid, running.started_at, into.as_deref())?;
+        println!(
+            "restarted into {}; running agents resumed their sessions",
+            exe.display()
+        );
+        Ok(())
+    };
+    // Builds before 0.1.4 have no hot hand-off and do not answer.
+    let Some(reply) = reply else {
+        return restart_cold("the running daemon cannot restart in place", &before);
+    };
+    match reply {
+        daemon::RestartReply::Current if runs_elsewhere(before.pid) => restart_cold(
+            "the running daemon cannot hand over to another path",
+            &before,
+        ),
+        daemon::RestartReply::Current => {
+            println!("already running the installed build");
+            Ok(())
+        }
+        daemon::RestartReply::Refused(reason) if reason == cold_restart::REFUSED_FOR_LIVE_CHAT => {
+            restart_cold("the running daemon cannot hand its agents over", &before)
+        }
+        daemon::RestartReply::Refused(reason) => bail!("{reason}"),
+        daemon::RestartReply::Restarting => {
+            let mut info = wait_for_restart(state_dir, &before)?;
+            // The build it handed over to, at its own path, reads `--into`: asked once more.
+            if runs_elsewhere(info.pid)
+                && mode == RestartMode::HotOnly
+                && ask_to_restart(state_dir, into.as_deref())?
+                    == Some(daemon::RestartReply::Restarting)
+            {
+                info = wait_for_restart(state_dir, &info)?;
+            }
+            if runs_elsewhere(info.pid) {
+                return restart_cold("the running daemon cannot hand over to another path", &info);
+            }
+            println!("restarted into the installed build (pid {})", info.pid);
+            Ok(())
+        }
+    }
+}
+
+/// Sends the restart request; `None` when the daemon gives no answer it can read.
+fn ask_to_restart(state_dir: &Path, into: Option<&Path>) -> Result<Option<daemon::RestartReply>> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::ffi::OsStrExt;
+    const ANSWER_TIMEOUT: Duration = Duration::from_secs(30);
     let socket = std::fs::read(state_dir.join("hook.endpoint"))
         .map(|bytes| PathBuf::from(std::ffi::OsStr::from_bytes(&bytes)))
         .context("reading the daemon's socket")?;
@@ -1065,7 +1167,7 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
     let call = daemon::RestartCall {
         restart: daemon::RestartAsk {
             token: token.trim().to_owned(),
-            exe: into.clone(),
+            exe: into.map(Path::to_path_buf),
         },
     };
     let mut line = serde_json::to_vec(&call)?;
@@ -1073,54 +1175,7 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
     stream.write_all(&line)?;
     let mut answer = String::new();
     BufReader::new(&stream).read_line(&mut answer)?;
-    // A daemon from before `--into` ignores it and answers for the file at its own path.
-    let runs_elsewhere = |pid: u32| {
-        into.as_ref()
-            .is_some_and(|into| cold_restart::executable_of(pid).as_ref() != Some(into))
-    };
-    let restart_cold = |why: &str| -> Result<()> {
-        log_line!("{why}; restarting it, its agents resume their sessions");
-        let exe = cold_restart::restart(state_dir, before.pid, before.started_at, into.as_deref())?;
-        println!(
-            "restarted into {}; running agents resumed their sessions",
-            exe.display()
-        );
-        Ok(())
-    };
-    // Builds before 0.1.4 have no hot hand-off and do not answer.
-    let Ok(reply) = serde_json::from_str::<daemon::RestartReply>(&answer) else {
-        return restart_cold("the running daemon cannot restart in place");
-    };
-    match reply {
-        daemon::RestartReply::Current if runs_elsewhere(before.pid) => {
-            restart_cold("the running daemon cannot hand over to another path")
-        }
-        daemon::RestartReply::Current => {
-            println!("already running the installed build");
-            Ok(())
-        }
-        daemon::RestartReply::Refused(reason) if reason == cold_restart::REFUSED_FOR_LIVE_CHAT => {
-            restart_cold("the running daemon cannot hand its agents over")
-        }
-        daemon::RestartReply::Refused(reason) => bail!("{reason}"),
-        daemon::RestartReply::Restarting => {
-            let info = wait_for_restart(state_dir, &before)?;
-            if runs_elsewhere(info.pid) {
-                let restarted =
-                    daemon::endpoint_info(state_dir)?.context("no daemon after restart")?;
-                let exe = cold_restart::restart(
-                    state_dir,
-                    restarted.pid,
-                    restarted.started_at,
-                    into.as_deref(),
-                )?;
-                println!("restarted into {}", exe.display());
-                return Ok(());
-            }
-            println!("restarted into the installed build (pid {})", info.pid);
-            Ok(())
-        }
-    }
+    Ok(serde_json::from_str(&answer).ok())
 }
 
 /// Waits for the daemon `before` describes to record a new start in the same process.
