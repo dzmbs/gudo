@@ -23,6 +23,12 @@ final class UIKitPasteTests: XCTestCase {
         XCTAssertEqual(PaneDrawing.terminalDropKind([provider]), .ignore)
     }
 
+    func testAnImageDroppedOnAnAgentIsSentToIt() {
+        let provider = NSItemProvider(object: UIImage())
+        XCTAssertEqual(PaneDrawing.terminalDropKind([provider], toAgent: true), .agentImage)
+        XCTAssertEqual(PaneDrawing.terminalDropKind([NSItemProvider(object: "git status" as NSString)], toAgent: true), .text)
+    }
+
     func testFileDropTakesPrecedenceOverImageRepresentations() {
         let provider = NSItemProvider(object: URL(fileURLWithPath: "/tmp/a b/it's.png") as NSURL)
         provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in

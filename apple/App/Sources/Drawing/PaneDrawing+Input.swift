@@ -1,6 +1,7 @@
 import DesignSystem
 import DrawingKit
 import Foundation
+import PaneLayout
 import SwiftUI
 import TerminalRenderer
 import UniformTypeIdentifiers
@@ -13,12 +14,21 @@ import AppKit
 
 #if os(iOS)
 extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
-    enum TerminalDropKind { case files, text, ignore }
+    enum TerminalDropKind { case files, text, agentImage, ignore }
 
-    static func terminalDropKind(_ providers: [NSItemProvider]) -> TerminalDropKind {
+    /// An image alone (from Photos, a screenshot) is sent to the agent of an agent pane, and
+    /// ignored elsewhere.
+    static func terminalDropKind(_ providers: [NSItemProvider], toAgent: Bool = false) -> TerminalDropKind {
         if providers.contains(where: { $0.canLoadObject(ofClass: NSURL.self) }) { return .files }
+        if toAgent, providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }) { return .agentImage }
         if providers.contains(where: { $0.canLoadObject(ofClass: NSString.self) }) { return .text }
         return .ignore
+    }
+
+    /// Where an image dropped on this pane goes, when it runs an agent.
+    private var imageDestination: AgentDestination? {
+        guard let workspace, let window = ActiveWindow.model(for: workspace) else { return nil }
+        return AgentImageSender.destination(pane: PaneId(paneId), in: workspace, window: window)
     }
 
     /// Pencil on the terminal opens draw mode at that row (held still: Write); a two-finger long
@@ -198,7 +208,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
             return false
         }
         let canvasDrag = session.localDragSession?.items.contains { $0.localObject is DrawingDragRef } == true
-        return !isReadOnly && (canvasDrag || Self.terminalDropKind(session.items.map(\.itemProvider)) != .ignore)
+        let toAgent = imageDestination != nil
+        return !isReadOnly && (canvasDrag || Self.terminalDropKind(session.items.map(\.itemProvider), toAgent: toAgent) != .ignore)
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: any UIDropSession) -> UIDropProposal {
@@ -213,7 +224,8 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
             return
         }
         guard !isReadOnly, let view = pane?.view else { return }
-        switch Self.terminalDropKind(session.items.map(\.itemProvider)) {
+        let destination = imageDestination
+        switch Self.terminalDropKind(session.items.map(\.itemProvider), toAgent: destination != nil) {
         case .files:
             session.loadObjects(ofClass: NSURL.self) { [weak view] objects in
                 let urls = objects.compactMap { $0 as? URL }
@@ -223,6 +235,19 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
             session.loadObjects(ofClass: NSString.self) { [weak view] objects in
                 let text = objects.compactMap { $0 as? String }.joined(separator: "\n")
                 Task { @MainActor [weak view] in view?.pasteText(text) }
+            }
+        case .agentImage:
+            guard let destination, let window = workspace.flatMap(ActiveWindow.model(for:)),
+                  let provider = session.items.map(\.itemProvider).first(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) })
+            else { return }
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                Task { @MainActor in
+                    guard let data else {
+                        window.toasts.show(Toast("That file is not an image", systemImage: "photo", style: .failure))
+                        return
+                    }
+                    await AgentImageSender.send(data, to: destination, window: window)
+                }
             }
         case .ignore: break
         }

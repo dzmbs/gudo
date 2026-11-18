@@ -229,6 +229,8 @@ final class WindowModel {
     var pairDeviceHostId: String?
     /// The invite link the Join sheet starts with (a `<scheme>://join/…` deep link).
     var joinInvite = ""
+    /// The agent "Send Image to Agent…" asks a picture for (`AgentImagePicker`).
+    var agentImageDestination: AgentDestination?
     /// Every host this window shows at once (sidebar groups, the unified tab order).
     let groups: HostGroups
     /// What the detail column shows: this device or a host (`show`, `focus`).

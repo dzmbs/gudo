@@ -2184,6 +2184,13 @@ nothing and creates no placement, including in agent panes. Placement is explici
 (on either platform). Option-drop onto an agent retains `send_to_agent(pane, None, None,
 Some(png))`. Internal drawing drags still move/place the existing artifact.
 
+**Images for an agent.** An agent pane's menu has “Send Image to <agent>…”: the photo library
+on iPhone and iPad, a file on the Mac. On iPhone and iPad an image alone dropped on an agent
+pane (from Photos, a screenshot) is sent to it; elsewhere it is still ignored. Either way the
+app writes the picture again from its pixels first (`AgentImage`: upright, at most 2048 px,
+PNG stays PNG, anything else JPEG, no metadata) and sends it with `send_to_agent` to that
+pane's own host. Viewers get no such entry.
+
 **Explicit image previews.** `import_to_pane(pane, name, bytes)` automatically sizes the preview
 to at most a third of the pane's columns and rows, preserving aspect ratio to cell rounding.
 Small images are not expanded to fill that budget; explicitly requested drawing geometry is

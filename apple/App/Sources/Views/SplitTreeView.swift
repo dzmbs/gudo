@@ -815,6 +815,13 @@ struct PaneMenuItems: View {
         Divider()
         Button("Find…", systemImage: "magnifyingglass") { focusThen { model.showSearch() } }
         Button("Links & Paths…", systemImage: "link") { focusThen { model.sheet = .links } }
+        if let target = pane ?? workspace.focusedPane,
+           let destination = AgentImageSender.destination(pane: target, in: workspace, window: model) {
+            Button("Send Image to \(destination.agent.title)…", systemImage: "photo.badge.plus") {
+                model.agentImageDestination = destination
+            }
+            .accessibilityIdentifier("pane-send-image")
+        }
         Button("Share Session…", systemImage: "person.crop.circle.badge.plus") { model.sheet = .invite }
         Divider()
         Button("Close Pane", systemImage: "xmark", role: .destructive) {

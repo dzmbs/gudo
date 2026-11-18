@@ -102,6 +102,7 @@ struct WorkspaceView: View {
                     .environment(model)
                     .environment(model.app)
             }
+            .agentImagePicker(model)
             // The whole window follows the terminal theme, light or dark by `window-theme`.
             .chromeWindow()
             .chromeTheme(theme, windowTheme: windowTheme)
