@@ -239,8 +239,8 @@ private struct ThisMacHelperNotice: View {
             }
         }
         .onChange(of: helper.updatedCount) {
-            let version = helper.appBuild.map { " \($0.version)" } ?? ""
-            model.toasts.show(Toast("This Mac runs helper\(version)", systemImage: "checkmark.circle.fill", style: .success))
+            let message = helper.appBuild.map { "This Mac runs helper \($0.version)" } ?? "This Mac runs the new helper"
+            model.toasts.show(Toast(message, systemImage: "checkmark.circle.fill", style: .success))
         }
     }
 }
