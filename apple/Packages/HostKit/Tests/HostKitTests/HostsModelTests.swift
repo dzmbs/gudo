@@ -258,6 +258,17 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(files.keys().isEmpty)
     }
 
+    @Test func keyCommandsKeepAQuoteInTheKeyFromEndingTheShellWord() {
+        let key = SSHKey(
+            id: "0123456789", label: "hostile", kind: .imported,
+            publicKey: "ssh-ed25519 AAAA x'; touch /tmp/owned; echo '", fingerprint: "SHA256:x")
+        let endpoint = SSHEndpoint(user: "me", host: "box", identity: .password)
+        for command in [key.authorizeCommand, key.sshCopyIdCommand(for: endpoint)] {
+            #expect(!command.contains("x'"), "\(command)")
+            #expect(command.contains("ssh-ed25519 AAAA x; touch /tmp/owned; echo "), "\(command)")
+        }
+    }
+
     @Test func keysGenerateImportAndAuthenticate() async throws {
         let secrets = MemorySecretStore()
         let directory = temporaryDirectory()

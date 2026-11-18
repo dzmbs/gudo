@@ -47,10 +47,15 @@ nonisolated public struct SSHKey: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
+    /// The public key with no `'`, which no key has, so it stays one single-quoted shell word.
+    private var quotableKey: String {
+        publicKey.replacingOccurrences(of: "'", with: "")
+    }
+
     /// Appends the key to `~/.ssh/authorized_keys` on a host (what `ssh-copy-id` does), safe
     /// to paste into a shell there.
     public var authorizeCommand: String {
-        let line = publicKey.replacingOccurrences(of: "'", with: "")
+        let line = quotableKey
         return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qxF '\(line)' ~/.ssh/authorized_keys 2>/dev/null || echo '\(line)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
     }
 
@@ -58,7 +63,7 @@ nonisolated public struct SSHKey: Codable, Identifiable, Hashable, Sendable {
     /// public key saved as a file next to it.
     public func sshCopyIdCommand(for endpoint: SSHEndpoint) -> String {
         let port = endpoint.port == 22 ? "" : " -p \(endpoint.port)"
-        return "echo '\(publicKey)' > /tmp/\(id.prefix(8)).pub && ssh-copy-id -f -i /tmp/\(id.prefix(8)).pub\(port) \(endpoint.user)@\(endpoint.host)"
+        return "echo '\(quotableKey)' > /tmp/\(id.prefix(8)).pub && ssh-copy-id -f -i /tmp/\(id.prefix(8)).pub\(port) \(endpoint.user)@\(endpoint.host)"
     }
 }
 
