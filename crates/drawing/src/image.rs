@@ -30,7 +30,7 @@ pub fn encode_png(image: &Rgba) -> Vec<u8> {
     out
 }
 
-fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+pub(crate) fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
     out.extend_from_slice(kind);
     out.extend_from_slice(data);

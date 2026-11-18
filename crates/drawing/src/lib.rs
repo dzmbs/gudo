@@ -9,10 +9,12 @@
 //! - [`ExScene`]: Excalidraw scenes reconciled per element, `.excalidraw` files.
 //! - [`to_ascii`]: box-glyph text rendering for terminals and agents.
 //! - [`sniff`]: PNG/JPEG format and size from the header.
+//! - [`strip_metadata`]: a PNG/JPEG without its EXIF, XMP, IPTC and text chunks.
 
 mod ascii;
 mod excalidraw;
 mod image;
+mod metadata;
 mod points;
 mod raster;
 mod scene;
@@ -21,6 +23,7 @@ mod svg;
 pub use ascii::{ASCII_CELL, to_ascii};
 pub use excalidraw::{ExScene, ExcalidrawFile, parse_element, parse_file, wins};
 pub use image::{encode_png, sniff, sniff_reader};
+pub use metadata::strip_metadata;
 pub use points::{InkPoint, MAX_POINTS, PointsError, QUANTUM, count, pack, simplify, unpack};
 pub use raster::{RasterOptions, Rgba, braille, rasterize};
 pub use scene::{Scene, VersionGap};
