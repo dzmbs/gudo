@@ -25,6 +25,7 @@ nonisolated final class FakeClient: DaemonClientAPI, GeneratedInputClient, PaneS
     /// As client-core keeps them: the assist listener, each pane's last foreground, the panes asked about.
     let assist = Mutex<(listener: (any AssistListener)?, known: [UInt64: Foreground], asked: [UInt64])>((nil, [:], []))
     private let recorded = Mutex<[Call]>([])
+    let upgradeRefusal = Mutex<UpgradeError?>(nil)
     private let nextOp = Atomic<UInt64>(1)
 
     init(listener: any ClientEventListener) {
@@ -91,9 +92,10 @@ extension FakeClient: LowDataModeClient {
 
 extension FakeClient: DaemonUpgradeAPI {
     /// Installs at once and answers with the build it was sent, as a daemon does before it
-    /// restarts.
+    /// restarts; or refuses as `upgradeRefusal` says.
     func upgradeDaemon(path: String, build: String, progress: TransferProgress?) async throws -> DaemonInfo {
-        daemonInfo(build: build)
+        if let refusal = upgradeRefusal.withLock({ $0 }) { throw refusal }
+        return daemonInfo(build: build)
     }
 }
 

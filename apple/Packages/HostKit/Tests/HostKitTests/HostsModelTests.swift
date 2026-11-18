@@ -91,6 +91,33 @@ nonisolated func temporaryDirectory() -> URL {
         #expect(model.helperUpdates["h"] == nil)
     }
 
+    /// 0.1.5 and 0.1.6 refuse an update over the connection while an agent has live Chat,
+    /// before anything is installed: said plainly, never in the daemon's words.
+    @Test func aHelperThatRefusesWhileAgentChatIsLiveSaysSo() async throws {
+        var configuration = HostsModel.Configuration()
+        configuration.bundledDaemons = { bundled }
+        let model = HostsModel(
+            secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()),
+            configuration: configuration)
+        model.dialer = { _, _, listener in FakeClient(listener: listener) }
+        model.upsert(HostRecord(id: "h", name: "studio", kind: .daemon, daemonId: "d1"))
+        try model.secrets.set("ticket", for: "host.h.ticket")
+        let connection = try #require(try model.open("h") as? DaemonConnection)
+        let client = try #require(connection.client as? FakeClient)
+        client.send(.daemonInfo(info: daemonInfo(build: "aaa")))
+        client.send(.connected(epoch: 1, resumed: false))
+        client.send(.attached(sessionId: 7, via: .requested, missing: nil))
+        client.send(.layout(layout: sampleLayout()))
+        try await eventually("live on the old build") { connection.status.isLive && connection.daemonInfo?.build == "aaa" }
+        client.upgradeRefusal.withLock {
+            $0 = .Daemon(code: .forbidden, message: "Live agent Chat cannot survive a helper restart yet.")
+        }
+
+        await #expect(throws: HelperUpdateError.agentChatLive) { try await model.updateHelper("h") }
+        #expect(model.helperUpdates["h"] == nil)
+        #expect(!client.calls.contains(.reconnect), "nothing was installed")
+    }
+
     /// One record this app cannot read (damaged, or written by a newer app) costs that record,
     /// never every saved host; the file is kept aside so nothing is lost.
     @Test func anUnreadableRecordKeepsTheOthers() throws {

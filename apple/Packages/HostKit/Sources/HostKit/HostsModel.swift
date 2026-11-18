@@ -803,13 +803,21 @@ public final class HostsModel {
                 throw HelperUpdateError.unavailable
             }
             helperUpdates[id]?.step = .uploading(sent: 0, total: 0)
-            installedBuild = try await daemon.updateHelper(path: manifest.path(of: bundled), build: bundled.build) { [weak self] sent, total in
-                Task { @MainActor in
-                    if case .uploading = self?.helperUpdates[id]?.step {
-                        self?.helperUpdates[id]?.step = .uploading(sent: sent, total: total)
+            do {
+                installedBuild = try await daemon.updateHelper(path: manifest.path(of: bundled), build: bundled.build) { [weak self] sent, total in
+                    Task { @MainActor in
+                        if case .uploading = self?.helperUpdates[id]?.step {
+                            self?.helperUpdates[id]?.step = .uploading(sent: sent, total: total)
+                        }
                     }
-                }
-            }.build
+                }.build
+            } catch UpgradeError.Daemon(.forbidden, let message) where message == Self.liveAgentChatRefusal {
+                // 0.1.5 and 0.1.6 refuse before installing anything. Over SSH the new build is
+                // renamed into place and its `restart` restarts that helper cold instead.
+                guard record.ssh != nil else { throw HelperUpdateError.agentChatLive }
+                guard try await updateOverSSH(record) else { return }
+                installedBuild = advice.bundled?.build
+            }
         case .none:
             throw HelperUpdateError.unavailable
         }
@@ -830,6 +838,9 @@ public final class HostsModel {
         }
         throw HelperUpdateError.didNotComeBack
     }
+
+    /// What helpers 0.1.5 and 0.1.6 answer an update while an agent has live Chat.
+    static let liveAgentChatRefusal = "Live agent Chat cannot survive a helper restart yet."
 
     /// Runs the SSH bootstrap with the host's saved login: it uploads the bundled build when
     /// it differs and restarts the service. The device stays paired. Returns whether the
@@ -1049,11 +1060,15 @@ public enum HelperUpdateError: Error, Equatable, LocalizedError {
     case unavailable
     /// The helper was updated but the host did not answer within a minute.
     case didNotComeBack
+    /// An older helper refuses while an agent has live Chat, and there is no SSH login to
+    /// update it another way.
+    case agentChatLive
 
     public var errorDescription: String? {
         switch self {
         case .unavailable: "This host's helper can't be updated from here. Reinstall it over SSH."
         case .didNotComeBack: "The helper was updated but the host hasn't come back yet. It retries on its own."
+        case .agentChatLive: "This host's helper can't update while an agent's Chat is live. End the agent and try again, or reinstall the helper over SSH."
         }
     }
 }
