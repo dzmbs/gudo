@@ -411,29 +411,43 @@ final class LocalHelper {
             servesForeign = running?.location == .foreign
             await apply(earlier)
             Self.log.info("helper: keeping the running helper (pid \(runningEndpoint?.pid ?? 0))")
-        case .restartInPlace(let earlier):
+        case .restart(let target, let earlier):
+            guard let runningEndpoint else { break }
+            if isReplacing {
+                try await replace(pid: runningEndpoint.pid, with: executable)
+                outcome = .updated
+                break
+            }
             launched = false
             await apply(earlier)
-            if await restartInPlace(running: runningEndpoint, executable: executable, app: appBuild) {
-                servesForeign = running?.location == .foreign
+            let into = target == .installed ? executable : nil
+            // A build that cannot hand over is restarted cold by `restart` itself: its
+            // commands end, its agents resume.
+            _ = await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory, into: into)
+            timeline.mark("restart")
+            let after = Self.runningEndpoint(in: stateDirectory)
+            var now: Running?
+            if let after { now = await Self.running(pid: after.pid, versions: versionsDirectory, app: appBuild) }
+            switch Self.afterRestart(before: runningEndpoint, after: after, build: now?.build) {
+            case .updated:
+                servesForeign = now?.location == .foreign
                 outcome = .updated
-            } else if isReplacing, let runningEndpoint {
-                try await replace(pid: runningEndpoint.pid, with: executable)
+                if into != nil { await pointLoginServiceAtInstalled(executable) }
+            case .replace:
+                if let after { try await replace(pid: after.pid, with: executable) } else { try await launch(executable) }
                 launched = true
                 outcome = .updated
-            } else {
+            case .ask:
+                servesForeign = now?.location == .foreign
                 outcome = .needsRestart(failure: nil)
             }
-        case .askToReplace(let earlier):
-            if isReplacing, let runningEndpoint {
+        case .replace:
+            if let runningEndpoint {
                 try await replace(pid: runningEndpoint.pid, with: executable)
-                outcome = .updated
             } else {
-                launched = false
-                servesForeign = running?.location == .foreign
-                await apply(earlier)
-                outcome = .needsRestart(failure: nil)
+                try await launch(executable)
             }
+            outcome = .updated
         }
         update = outcome
         let endpoint = try await waitForEndpoint()
@@ -454,14 +468,12 @@ final class LocalHelper {
         }
     }
 
-    /// Hands the running helper's sessions to the build at its own path (`hostd restart`), and
-    /// checks it then runs the app's build or a newer one: a build that answers that it runs
-    /// the file already, or restarts into an older one, does not count.
-    private func restartInPlace(running: Endpoint?, executable: URL, app: HelperBuild?) async -> Bool {
-        guard await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory) else { return false }
-        timeline.mark("restart in place")
-        guard let pid = Self.runningEndpoint(in: stateDirectory)?.pid ?? running?.pid else { return false }
-        return await Self.running(pid: pid, versions: versionsDirectory, app: app).build != .older
+    /// After a hand-off into `Versions/Current`, the login service starts that build at the
+    /// next login too (`service install --no-start`: the plist alone).
+    private func pointLoginServiceAtInstalled(_ executable: URL) async {
+        guard startsAtLogin, executable == installed else { return }
+        _ = await Self.installLoginService(executable, stateDirectory: stateDirectory, startsNow: false)
+        timeline.mark("login service points at the installed build")
     }
 
     /// Replaces an older helper that cannot hand over: it saves its sessions and stops
@@ -489,14 +501,13 @@ final class LocalHelper {
     /// What runs as `pid`: where from, and its build against the app's, read from the file it
     /// runs while that is still at its path. When the app's build cannot be told, what runs is
     /// kept, as before builds were compared. A process whose file the system no longer names
-    /// (removed, or swapped out of `Current`) is asked to restart into its own path: whether
-    /// it can tells what it was.
+    /// (removed, or swapped out of `Current`) hands over to the installed build.
     nonisolated static func running(pid: Int32, versions: URL, app: HelperBuild?) async -> Running {
         guard let app else {
             return Running(location: runningHelper(pid: pid, versions: versions), build: .same, buildAtItsPath: .same)
         }
         guard let executable = RunningExecutable.of(pid: pid) else {
-            return Running(location: .installed, build: .older, buildAtItsPath: .same)
+            return Running(location: .installed, build: .older, buildAtItsPath: .older)
         }
         let atItsPath = BuildAge(await HelperBuild.read(URL(fileURLWithPath: executable.path)), against: app)
         return Running(
@@ -585,12 +596,19 @@ final class LocalHelper {
         case launch(EarlierLoginItem)
         /// The app's build or a newer one runs, from wherever it runs: kept.
         case keep(EarlierLoginItem)
-        /// An older build runs, and its own path holds the app's build or a newer one: it hands
-        /// its sessions to that build in the same process.
-        case restartInPlace(EarlierLoginItem)
-        /// An older build runs that cannot hand over: replacing it restarts running commands,
-        /// so the user is asked first. It serves This Mac meanwhile.
-        case askToReplace(EarlierLoginItem)
+        /// An older build runs: it hands its sessions over in the same process (`restart`),
+        /// or, a build that cannot, is restarted cold on the new build.
+        case restart(into: RestartTarget, EarlierLoginItem)
+        /// An older app's login item runs an older build: launchd would start that build
+        /// again, so the login item goes first and the installed build starts in its place.
+        case replace
+    }
+
+    nonisolated enum RestartTarget: Equatable {
+        case installed
+        /// The app's build or a newer one now at the path the helper runs from (`Current`
+        /// swapped, an app replaced in place, a rebuilt build folder).
+        case itsOwnPath
     }
 
     nonisolated static func plan(running: Running?, loginItem: LoginItem) -> StartPlan {
@@ -602,7 +620,25 @@ final class LocalHelper {
         case (.installed, _), (.foreign, _): .retire
         }
         if running.build != .older { return .keep(earlier) }
-        return running.buildAtItsPath == .older ? .askToReplace(earlier) : .restartInPlace(earlier)
+        // Released builds hand over only to the file at their own path.
+        if running.buildAtItsPath != .older { return .restart(into: .itsOwnPath, earlier) }
+        if running.location == .bundled, loginItem != .none { return .replace }
+        return .restart(into: .installed, earlier)
+    }
+
+    nonisolated enum AfterRestart: Equatable {
+        case updated
+        /// Still older, but its commands ended already (it restarted cold, onto the old path
+        /// launchd knows): replaced at once.
+        case replace
+        /// Still older and untouched: replacing it would end running commands.
+        case ask
+    }
+
+    nonisolated static func afterRestart(before: Endpoint?, after: Endpoint?, build: BuildAge?) -> AfterRestart {
+        guard let after, let build else { return .replace }
+        if build != .older { return .updated }
+        return after.pid == before?.pid && after.startedAt == before?.startedAt ? .ask : .replace
     }
 
     /// Stops the helper of a build from before the product's rename and keeps its login items
@@ -682,9 +718,11 @@ final class LocalHelper {
         if uninstallsLoginService { _ = try? await output(executable, ["service", "uninstall"]) }
     }
 
-    nonisolated static func installLoginService(_ executable: URL, stateDirectory: URL) async -> Bool {
+    /// `hostd service install`; `startsNow` false writes the plist alone, for the next login.
+    nonisolated static func installLoginService(_ executable: URL, stateDirectory: URL, startsNow: Bool = true) async -> Bool {
         do {
-            _ = try await output(executable, ["--state-dir", stateDirectory.path, "service", "install"])
+            _ = try await output(
+                executable, ["--state-dir", stateDirectory.path, "service", "install"] + (startsNow ? [] : ["--no-start"]))
             return true
         } catch {
             log.error("helper: installing the login service: \(String(describing: error), privacy: .public)")
@@ -756,10 +794,13 @@ final class LocalHelper {
     nonisolated struct Endpoint: Equatable, Decodable {
         var daemonId: String
         var pid: Int32
+        /// Unix ms; a hand-off keeps the pid and records a new start.
+        var startedAt: UInt64?
 
         enum CodingKeys: String, CodingKey {
             case daemonId = "daemon_id"
             case pid
+            case startedAt = "started_at"
         }
     }
 
@@ -804,9 +845,10 @@ final class LocalHelper {
     /// Asks the running helper to hand its sessions to the build now in the app and become it
     /// (`restart`): false when it cannot (a build from before this, or the new build cannot
     /// take the sessions over), which leaves it running as it was.
-    static func restartInPlace(binary: URL, stateDirectory: URL) async -> Bool {
+    static func restartInPlace(binary: URL, stateDirectory: URL, into target: URL? = nil) async -> Bool {
         do {
-            let output = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"])
+            let into = target.map { ["--into", $0.path] } ?? []
+            let output = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"] + into)
             let said = String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             Self.log.info("helper: \(said, privacy: .public)")
             return true

@@ -2,6 +2,7 @@
 import AppKit
 import DesignSystem
 import HostKit
+import PaneLayout
 import SwiftUI
 import XCTest
 @testable import App
@@ -214,41 +215,62 @@ final class ThisMacHelperTests: XCTestCase {
 
     // MARK: Older helpers
 
-    /// A login service from a build folder that runs a released build: it serves This Mac and
-    /// the app asks; Update Helper puts This Mac on the installed build with its panes.
-    func testAnOlderHelperFromABuildFolderIsReplacedOnceAskedAndItsPanesComeBack() async throws {
+    /// A login service from a build folder that runs a released build: it hands over to the
+    /// installed build, or one from before hot hand-off is restarted cold onto it, with its
+    /// tabs, panes and screens.
+    func testAnOlderHelperFromABuildFolderMovesOntoTheInstalledBuild() async throws {
         let older = try olderBuild(at: "build/hostd/macos")
-        try await replacesOlderHelper(startedFrom: older)
-    }
-
-    /// An earlier app's helper whose app was replaced by this one: the build at its path is
-    /// this app's, but a release from before hand-offs refuses to restart into it.
-    func testAnOlderHelperThatRefusesToHandOverIsReplacedOnceAsked() async throws {
-        let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
-        try XCTSkipIf(try readsHandOffs(older), "GUDO_OLD_HOSTD_BIN hands over: a release before 0.1.4 refuses")
-        try await replacesOlderHelper(startedFrom: older) { try self.replaceFile(older) }
-    }
-
-    /// The same with a release that hands over: its sessions stay, nothing to ask.
-    func testAnEarlierAppsHelperHandsOverToThisAppsBuildAtItsPath() async throws {
-        let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
-        try XCTSkipUnless(try readsHandOffs(older), "GUDO_OLD_HOSTD_BIN is a release before hand-offs")
-        let running = try startOutsideTheApp(older)
-        try replaceFile(older)
+        let serving = try await olderHelperServing(older)
         let helper = try makeHelper()
-        _ = try await serve(helper)
-        let window = try XCTUnwrap(window)
+
+        try await updates(serving, with: helper)
 
         XCTAssertEqual(helper.update, .updated)
-        XCTAssertEqual(helper.updatedCount, 1)
-        XCTAssertEqual(endpoint?.pid, running.processIdentifier, "handed over in the same process")
-        XCTAssertEqual(RunningExecutable.of(pid: running.processIdentifier)?.isOnDisk, true, "runs this app's build")
-        try await window.run("echo after-$((2+3))", showing: "after-5")
+        try assertRunsTheInstalledBuild()
     }
 
-    func testAnOlderHelperWhoseFileIsGoneIsReplacedOnceAsked() async throws {
+    /// An earlier app's helper whose app was replaced by this one: it hands over to the build
+    /// at its path (a release from before hot hand-off restarts cold onto it).
+    func testAnEarlierAppsHelperMovesOntoThisAppsBuildAtItsPath() async throws {
+        let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
+        let handsOver = try readsHandOffs(older)
+        let serving = try await olderHelperServing(older)
+        try replaceFile(older)
+        let helper = try makeHelper()
+
+        try await updates(serving, with: helper)
+
+        XCTAssertEqual(helper.update, .updated)
+        let now = try XCTUnwrap(endpoint)
+        XCTAssertEqual(RunningExecutable.of(pid: now.pid)?.isOnDisk, true, "runs the build now at its path, this app's")
+        if handsOver {
+            XCTAssertEqual(now.pid, serving.process.processIdentifier, "handed over in the same process")
+        }
+    }
+
+    /// A helper whose file was removed: a release that answers hand-offs refuses, as nothing
+    /// is at its path, and the user is asked; one from before restarts cold onto the
+    /// installed build.
+    func testAnOlderHelperWhoseFileIsGoneMovesOntoTheInstalledBuild() async throws {
         let older = try olderBuild(at: "removed")
-        try await replacesOlderHelper(startedFrom: older) { try FileManager.default.removeItem(at: older) }
+        let refuses = try readsHandOffs(older)
+        let serving = try await olderHelperServing(older)
+        try FileManager.default.removeItem(at: older)
+        let helper = try makeHelper()
+
+        if refuses {
+            AppModel.shared.serveThisMac(with: helper)
+            let window = try XCTUnwrap(window)
+            try await window.until("the app asks", timeout: .seconds(40)) {
+                helper.state == .running && helper.update == .needsRestart(failure: nil)
+            }
+            XCTAssertEqual(endpoint?.pid, serving.process.processIdentifier, "it serves This Mac until the user says")
+            helper.replaceOlderHelper()
+        }
+        try await updates(serving, with: helper)
+
+        XCTAssertEqual(helper.update, .updated)
+        try assertRunsTheInstalledBuild()
     }
 
     func testANewerHelperFromABuildFolderIsKept() async throws {
@@ -261,41 +283,56 @@ final class ThisMacHelperTests: XCTestCase {
         XCTAssertEqual(endpoint?.pid, running.processIdentifier, "the newer build serves This Mac")
     }
 
-    private func replacesOlderHelper(startedFrom older: URL, afterStart: () throws -> Void = {}) async throws {
-        let running = try startOutsideTheApp(older)
-        try afterStart()
-        let helper = try makeHelper()
-        _ = try await serve(helper)
+    private struct OlderHelper {
+        var process: Process
+        var pane: PaneId
+        var tabs: [TabId]
+        var daemonId: String
+        /// Releases before 0.1.5 keep no screens: their panes come back with a fresh prompt.
+        var savesScreens: Bool
+    }
+
+    /// An older helper serving This Mac (an app that carries that build keeps it), with a line
+    /// on its screen.
+    private func olderHelperServing(_ older: URL) async throws -> OlderHelper {
+        let process = try startOutsideTheApp(older)
+        let carriesIt = try makeHelper(binary: try Self.olderBinary())
+        _ = try await serve(carriesIt)
+        XCTAssertNil(carriesIt.update)
         let window = try XCTUnwrap(window)
-        XCTAssertEqual(helper.update, .needsRestart(failure: nil), "the older helper serves This Mac until the user says")
-        XCTAssertEqual(endpoint?.pid, running.processIdentifier)
         try await window.run("echo before-$((6*7))", showing: "before-42")
         // The helper saves a screen a few seconds after its output.
         await HostWindow.sleep(7)
-        let paneBefore = try XCTUnwrap(window.pane?.id)
-        let tabsBefore = try XCTUnwrap(window.model.workspace?.session.tabs.map(\.id))
-        let daemonBefore = try XCTUnwrap(endpoint?.daemonId)
-        // Releases before 0.1.5 keep no screens: their panes come back with a fresh prompt.
-        let savesScreens = FileManager.default.fileExists(atPath: try XCTUnwrap(stateDirectory).appending(path: "screens").path)
+        carriesIt.appWillTerminate()
+        return OlderHelper(
+            process: process, pane: try XCTUnwrap(window.pane?.id),
+            tabs: try XCTUnwrap(window.model.workspace?.session.tabs.map(\.id)),
+            daemonId: try XCTUnwrap(endpoint?.daemonId),
+            savesScreens: FileManager.default.fileExists(atPath: try XCTUnwrap(stateDirectory).appending(path: "screens").path))
+    }
 
-        helper.replaceOlderHelper()
-
-        try await window.until("This Mac runs the installed build", timeout: .seconds(60)) {
-            guard let now = self.endpoint, now.pid != running.processIdentifier else { return false }
-            return helper.update == .updated && helper.state == .running
+    /// This app starts on `older` and This Mac ends on the app's build, with what it had.
+    private func updates(_ older: OlderHelper, with helper: LocalHelper) async throws {
+        let window = try XCTUnwrap(window)
+        if AppModel.shared.localHelper !== helper { AppModel.shared.serveThisMac(with: helper) }
+        try await window.until("This Mac runs the app's build", timeout: .seconds(90)) {
+            helper.update == .updated && helper.state == .running
                 && window.model.connection.isLive && window.pane?.connection == .live
         }
-        let now = try XCTUnwrap(endpoint)
-        XCTAssertEqual(now.daemonId, daemonBefore, "its keys and pairings kept")
-        let executable = try XCTUnwrap(RunningExecutable.of(pid: now.pid))
-        XCTAssertTrue(executable.path.hasSuffix("/Helper/Versions/Current/\(try Self.daemonBinary().lastPathComponent)"), executable.path)
         XCTAssertEqual(helper.updatedCount, 1)
-        XCTAssertEqual(window.model.workspace?.session.tabs.map(\.id), tabsBefore, "the same tabs")
-        XCTAssertEqual(window.pane?.id, paneBefore, "the same pane")
-        if savesScreens {
+        XCTAssertEqual(endpoint?.daemonId, older.daemonId, "its keys and pairings kept")
+        XCTAssertEqual(window.model.workspace?.session.tabs.map(\.id), older.tabs, "the same tabs")
+        XCTAssertEqual(window.pane?.id, older.pane, "the same pane")
+        if older.savesScreens {
             try await window.until("the pane shows its screen from before") { window.screenText.contains("before-42") }
         }
         try await window.run("echo after-$((2+3))", showing: "after-5")
+    }
+
+    private func assertRunsTheInstalledBuild() throws {
+        let now = try XCTUnwrap(endpoint)
+        let executable = try XCTUnwrap(RunningExecutable.of(pid: now.pid))
+        XCTAssertTrue(executable.path.hasSuffix("/Helper/Versions/Current/\(try Self.daemonBinary().lastPathComponent)"), executable.path)
     }
 
     /// This app replaced in place: another file at the older helper's path.
@@ -309,7 +346,6 @@ final class ThisMacHelperTests: XCTestCase {
         let info = try JSONSerialization.jsonObject(with: try runOutput(executable, ["build-info", "--json"])) as? [String: Any]
         return (info?["handoff"] as? [Int])?.isEmpty == false
     }
-
     /// A released build at `folder` under the test's temporary folder (`GUDO_OLD_HOSTD_BIN`:
     /// a release tag built with `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX` older than the test build).
     private func olderBuild(at folder: String) throws -> URL {

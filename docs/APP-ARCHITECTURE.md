@@ -474,21 +474,29 @@ re-signing or updating the app leaves the running helper and its launchd job alo
 
   | Running helper | Action | The user sees |
   |---|---|---|
-  | none | start `Versions/Current` (login service, job or child) | nothing (or the toast, after Update Helper) |
+  | none | start `Versions/Current` (login service, job or child) | nothing |
   | the app's build or newer, from anywhere | keep it | nothing |
-  | older, its own path now holds the app's build or newer (`Current` swapped, an app replaced in place, a rebuilt build folder) | `hostd restart`: hand-off in the same process, then the build is checked again | toast "This Mac runs helper 0.1.7" |
-  | older, the hand-off refused (a release before hand-offs, a live agent Chat) or unsupported, or its path holds an older build or nothing | keep it serving This Mac and ask | notice "This Mac runs an older helper. Updating it restarts running commands." with **Update Helper** |
+  | older, its own path now holds the app's build or newer (`Current` swapped, an app replaced in place, a rebuilt build folder) | `hostd restart`: released builds hand over hot only to the file at their own path | toast "This Mac runs helper 0.1.7" |
+  | older, its path holds an older build or nothing (a build folder, an old app copy, a removed file) | `hostd restart --into Versions/Current`, then `service install --no-start` when Start Helper at Login is on, so `dev.gudo.hostd` names `Current` at the next login | the toast |
+  | older, from an older app's login item (`SMAppService`) whose app holds an older build | replaced: the login item goes first (launchd would start its build again), then `Current` starts | the toast |
 
-  **Update Helper** (`replaceOlderHelper`): `service stop` (the app's job), the earlier login
-  item unregistered, then SIGTERM (every released build saves screens and layout on it and
-  exits 0, so a `KeepAlive` LaunchAgent does not start it again), up to 30 s; then
-  `Versions/Current` starts as the login service when Start Helper at Login is on (so
-  `dev.gudo.hostd` points at `Versions/Current` from then on), else as the job or a child. Same
-  folder, keys, pairings and layout: tabs and panes come back with their screens, shells start
-  again in their folders, agents resume. A failure keeps the notice with the reason. Settings ▸
-  This Mac shows the running helper's version and build (from `DaemonInfo`) and the build the
-  app carries, and Update Helper while one is needed. An older app started after a newer one
-  leaves the newer build in `Current`.
+  `restart` restarts a build that cannot hand over (before 0.1.4, or 0.1.5 and 0.1.6 with a
+  live agent Chat) cold by itself: its commands end and its agents resume. The build is then
+  read again (`LocalHelper.afterRestart`): still older after a cold restart (launchd started the
+  old path again) means it is replaced at once; still older and untouched (a refusal before
+  anything stopped, such as a release whose file is gone) keeps it serving This Mac with a notice
+  "This Mac runs an older helper. Updating it restarts running commands." and **Update Helper**
+  (`replaceOlderHelper`).
+
+  Replacing: `service stop` (the app's job), the earlier login item unregistered, then SIGTERM
+  (every released build saves its layout on it, from 0.1.5 its screens too, and exits 0, so a
+  `KeepAlive` LaunchAgent does not start it again), up to 30 s; then `Versions/Current` starts
+  as the login service when Start Helper at Login is on, else as the job or a child. Same
+  folder, keys, pairings and layout: tabs and panes come back, shells start again in their
+  folders, agents resume. A failure keeps the notice with the reason. Settings ▸ This Mac shows
+  the running helper's version and build (from `DaemonInfo`) and the build the app carries, and
+  Update Helper while one is needed. An older app started after a newer one leaves the newer
+  build in `Current`.
 - **Migration from the login item.** Earlier versions registered `Contents/Library/LaunchAgents/
   <bundle id>.hostd.plist` (`BundleProgram`) with `SMAppService`; the plist stays in the bundle
   so it can be unregistered, and nothing registers it any more. Once nothing of it runs (the
@@ -536,7 +544,7 @@ Tests: `HelperInstallTests` (copy, check, quarantine, swap while the old file is
 of a copy that is another build, pruning), `LocalHelperTests` (the start plan for every running helper and
 login item, build order, a replaced file told apart, the job's answers and refusal), `LocalHelperJobTests` (a real helper as a launchd job from its
 installed copy, found again after `kill -9`, gone after Stop Helper; its own state folder and
-job label), `LocalHelperRespawnTests` (the child), `ThisMacHelperTests` (a released build run from a build folder, an `.app` replaced in place, or a removed file is replaced on Update Helper with its tabs, panes and screens; a newer build folder is kept; `GUDO_OLD_HOSTD_BIN` is a release tag built with an older `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX`). Daemon side: `cargo test -p hostd --test
+job label), `LocalHelperRespawnTests` (the child), `ThisMacHelperTests` (a released build run from a build folder, an `.app` replaced in place or a removed file ends on the app's build with its tabs, panes and screens, by hand-off, a cold restart, or Update Helper where it refuses; a newer build folder is kept; `GUDO_OLD_HOSTD_BIN` is a release tag built with an older `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX`). Daemon side: `cargo test -p hostd --test
 service_job`.
 
 **What the app bundles.** `cargo xtask build-hostd-linux` writes `build/hostd/hostd-manifest.json`

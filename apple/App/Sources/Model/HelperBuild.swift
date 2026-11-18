@@ -81,12 +81,30 @@ nonisolated struct RunningExecutable: Equatable, Sendable {
 
     static func of(pid: Int32) -> RunningExecutable? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
-        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
-        let path = String(cString: buffer)
+        // The kernel names no path for a file replaced or removed since; the path it was
+        // started from still tells where it runs from.
+        guard let path = proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 ? String(cString: buffer) : startedFrom(pid: pid)
+        else { return nil }
         guard let mapped = mappedFile(pid: pid, path: path) else { return RunningExecutable(path: path, isOnDisk: false) }
         var onDisk = stat()
         let isOnDisk = stat(path, &onDisk) == 0 && UInt32(bitPattern: onDisk.st_dev) == mapped.device && onDisk.st_ino == mapped.inode
         return RunningExecutable(path: path, isOnDisk: isOnDisk)
+    }
+
+    /// The path `pid` was executed from (`KERN_PROCARGS2`: argc, then that path), resolved
+    /// while it names a file.
+    private static func startedFrom(pid: Int32) -> String? {
+        var size = 0
+        var name: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        guard sysctl(&name, 3, nil, &size, nil, 0) == 0, size > MemoryLayout<Int32>.size else { return nil }
+        var arguments = [UInt8](repeating: 0, count: size)
+        guard sysctl(&name, 3, &arguments, &size, nil, 0) == 0 else { return nil }
+        let path = String(decoding: arguments[MemoryLayout<Int32>.size..<size].prefix { $0 != 0 }, as: UTF8.self)
+        guard !path.isEmpty else { return nil }
+        return realpath(path, nil).map { resolved in
+            defer { free(resolved) }
+            return String(cString: resolved)
+        } ?? path
     }
 
     /// The file behind the process's first memory region mapped from `path`: its text.

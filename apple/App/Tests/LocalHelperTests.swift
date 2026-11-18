@@ -32,32 +32,55 @@ final class LocalHelperTests: XCTestCase {
         }
     }
 
-    func testAnOlderBuildHandsOverInPlaceWhenItsOwnPathHoldsTheAppsBuildOrNewer() {
+    func testAnOlderBuildHandsOverWhereverItRunsFrom() {
         XCTAssertEqual(
             LocalHelper.plan(running: Running(location: .installed, build: .older, buildAtItsPath: .same), loginItem: .none),
-            .restartInPlace(.leave), "the app swapped a new build into Current")
-        XCTAssertEqual(
-            LocalHelper.plan(running: Running(location: .bundled, build: .older, buildAtItsPath: .same), loginItem: .enabled),
-            .restartInPlace(.keepFromStartingAtLogin), "an earlier version's login item, its app replaced by this one")
-        XCTAssertEqual(
-            LocalHelper.plan(running: Running(location: .foreign, build: .older, buildAtItsPath: .newer), loginItem: .none),
-            .restartInPlace(.leave), "a build folder that holds a newer build since")
-    }
-
-    func testAnOlderBuildThatCannotHandOverIsReplacedOnceTheUserSaysSo() {
+            .restart(into: .itsOwnPath, .leave), "the app swapped a new build into Current")
         XCTAssertEqual(
             LocalHelper.plan(running: Running(location: .foreign, build: .older, buildAtItsPath: .older), loginItem: .none),
-            .askToReplace(.leave), "a login service that runs an older build from a build folder")
+            .restart(into: .installed, .leave), "a login service that runs an older build from a build folder")
         XCTAssertEqual(
-            LocalHelper.plan(running: Running(location: .bundled, build: .older, buildAtItsPath: .older), loginItem: .enabled),
-            .askToReplace(.keepFromStartingAtLogin), "an older app's login item")
+            LocalHelper.plan(running: Running(location: .bundled, build: .older, buildAtItsPath: .same), loginItem: .enabled),
+            .restart(into: .itsOwnPath, .keepFromStartingAtLogin), "an earlier version's login item, its app replaced by this one")
+        XCTAssertEqual(
+            LocalHelper.plan(running: Running(location: .bundled, build: .older, buildAtItsPath: .older), loginItem: .none),
+            .restart(into: .installed, .leave), "an older app's child")
         let unknown = BuildAge(nil, against: Self.app)
         XCTAssertEqual(
             LocalHelper.plan(running: Running(location: .foreign, build: unknown, buildAtItsPath: unknown), loginItem: .enabled),
-            .askToReplace(.retire), "a helper whose file was removed")
+            .restart(into: .installed, .retire), "a helper whose file was removed")
+    }
+
+    /// Released builds hand over hot only to the file at their own path.
+    func testTheAppsBuildOrANewerOneAtItsOwnPathIsWhatItHandsOverTo() {
         XCTAssertEqual(
-            LocalHelper.plan(running: Running(location: .installed, build: .older, buildAtItsPath: .older), loginItem: .none),
-            .askToReplace(.leave), "Current could not be updated")
+            LocalHelper.plan(running: Running(location: .foreign, build: .older, buildAtItsPath: .newer), loginItem: .none),
+            .restart(into: .itsOwnPath, .leave), "a build folder rebuilt with a newer build")
+    }
+
+    /// launchd starts an earlier version's login item from its own app again, so restarting it
+    /// cold would bring back the older build: it is retired before the installed build starts.
+    func testAnOlderAppsLoginItemIsRetiredBeforeItsHelperIsReplaced() {
+        for loginItem in [LocalHelper.LoginItem.enabled, .disabled] {
+            XCTAssertEqual(
+                LocalHelper.plan(running: Running(location: .bundled, build: .older, buildAtItsPath: .older), loginItem: loginItem),
+                .replace)
+        }
+    }
+
+    func testWhatARestartLeavesDecidesWhetherToAsk() {
+        let before = LocalHelper.Endpoint(daemonId: "d", pid: 10, startedAt: 100)
+        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: before, build: .same), .updated, "handed over")
+        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: before, build: .newer), .updated)
+        XCTAssertEqual(
+            LocalHelper.afterRestart(before: before, after: before, build: .older), .ask,
+            "refused before anything stopped: running commands are the user's to end")
+        XCTAssertEqual(
+            LocalHelper.afterRestart(before: before, after: .init(daemonId: "d", pid: 11, startedAt: 200), build: .older), .replace,
+            "restarted cold into an older build again (launchd ran the old path): its commands ended already")
+        XCTAssertEqual(
+            LocalHelper.afterRestart(before: before, after: .init(daemonId: "d", pid: 10, startedAt: 200), build: .older), .replace)
+        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: nil, build: nil), .replace, "stopped and not started again")
     }
 
     func testAnEarlierLoginItemGoesUnlessItsHelperIsTheOneRunning() {
@@ -109,7 +132,9 @@ final class LocalHelperTests: XCTestCase {
         let replacement = folder.appending(path: "next")
         try FileManager.default.copyItem(at: executable, to: replacement)
         _ = try FileManager.default.replaceItemAt(executable, withItemAt: replacement)
-        XCTAssertNotEqual(RunningExecutable.of(pid: process.processIdentifier)?.isOnDisk, true, "another file at its path, or none named")
+        XCTAssertEqual(
+            RunningExecutable.of(pid: process.processIdentifier), RunningExecutable(path: realPath, isOnDisk: false),
+            "another file at its path, which still tells where it runs from")
     }
 
     func testWhatRunsIsToldByWhereItRunsFrom() {
@@ -179,6 +204,25 @@ final class LocalHelperTests: XCTestCase {
 
         let refused = await LocalHelper.restartInPlace(binary: try helper(exiting: 1), stateDirectory: state)
         XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted")
+
+        let installed = folder.appending(path: "Current/gudo-hostd")
+        _ = await LocalHelper.restartInPlace(binary: try helper(exiting: 0), stateDirectory: state, into: installed)
+        XCTAssertEqual(
+            try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) restart --into \(installed.path)\n",
+            "a helper at another path hands over to the installed build")
+    }
+
+    func testTheLoginServiceIsPointedAtTheInstalledBuildWithoutRestartingIt() async throws {
+        let folder = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let arguments = folder.appending(path: "arguments")
+        let state = folder.appending(path: "state", directoryHint: .isDirectory)
+        let helper = try Self.script(in: folder, "echo \"$@\" > '\(arguments.path)'")
+
+        let installed = await LocalHelper.installLoginService(helper, stateDirectory: state, startsNow: false)
+
+        XCTAssertTrue(installed)
+        XCTAssertEqual(try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) service install --no-start\n")
     }
 
     func testAHelperThatEndsStartsAgainOnceAfterAPause() {
