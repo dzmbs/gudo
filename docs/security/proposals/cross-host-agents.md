@@ -184,11 +184,13 @@ The agent never pulls anything: images move only when the user drops, pastes or 
   `import_to_pane`, `blob_upload`), so the position never leaves the device; the daemon strips
   what it stores from inline images and what it hands an agent (the send copy and `get_drawing`
   exports), so images from older apps are clean too.
-- **The app re-encodes photos it picks** (ImageIO, orientation applied, at most 2048 px on the
-  long side, JPEG, no metadata), as the chat view already does.
-- **Entry points**: "Send Image to Agent…" in the pane menu of an agent pane (photo picker, on
-  iPhone, iPad and Mac), and on iPhone and iPad an image dropped on an agent pane is sent to it.
-  The host is the one whose pane the user picked.
+- **The app writes pictures it sends again from their pixels** (ImageIO, orientation applied,
+  at most 2048 px on the long side, PNG stays PNG, anything else JPEG, no metadata), as the
+  chat view already does for photos.
+- **Entry points**: "Send Image to <agent>…" in the pane menu of an agent pane (the photo
+  library on iPhone and iPad, a file on the Mac), and on iPhone and iPad an image alone dropped
+  on an agent pane is sent to it. The host is the one whose pane the user picked. Viewers get
+  no such entry, and the daemon refuses them anyway.
 - **Retention**: deleting an image artifact deletes its send copies; closing the session
   deletes everything (as today).
 - **No wire change.** The request, roles and storage are the existing ones, so there is no new
@@ -213,9 +215,10 @@ neither send to it nor see the image. Tests pin each.
 
 1. Should guests with Prompter keep the right to send images to an agent? Recommended: yes, it
    is the same as typing a prompt, and already rate limited.
-2. Pasting an image into an agent pane on iPhone and iPad places it in the terminal today
-   rather than sending it to the agent. Change paste on agent panes to send? Recommended: yes,
-   it matches what pasting an image into Claude Code does on a local terminal; left unchanged
-   until you say so.
+2. Pasting an image into an agent pane does nothing today (decided so that a paste never
+   surprises). Should paste on an agent pane send the image to the agent? Recommended: yes, it
+   matches pasting an image into Claude Code in a local terminal; left unchanged until you say
+   so. The same for dropping an image file (not a photo) on an agent pane on iPhone and iPad,
+   which pastes the device's own path today.
 3. Retention beyond the session: delete send copies after a fixed age (say 30 days)?
    Recommended: not now; they go with the image or the session.
