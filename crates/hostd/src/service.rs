@@ -19,7 +19,6 @@ fn exe() -> Result<PathBuf> {
 
 /// `path` as one quoted systemd `ExecStart` word: spaces, quotes, `%` specifiers and `$`
 /// expansion would otherwise change the command.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn systemd_word(path: &Path) -> Result<String> {
     let text = path.to_str().context("the path is not UTF-8")?;
     if text.chars().any(char::is_control) {
@@ -34,12 +33,10 @@ fn systemd_word(path: &Path) -> Result<String> {
 }
 
 /// `path` as XML text for the property list.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn xml_text(path: &Path) -> String {
     xml_escape(&path.to_string_lossy())
 }
 
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn xml_escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -123,10 +120,9 @@ pub fn hand_over(exe: &Path, state_dir: &Path) -> Result<()> {
     retire_legacy()
 }
 
-#[cfg(target_os = "linux")]
-fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
-    let path = unit_path()?;
-    let unit = format!(
+/// The systemd user unit `service install` writes: it starts `exe` serving `state_dir`.
+pub(crate) fn systemd_unit(exe: &Path, state_dir: &Path) -> Result<String> {
+    Ok(format!(
         "[Unit]\n\
          Description={name} terminal and coding-agent host daemon\n\
          After=network-online.target\n\
@@ -143,7 +139,13 @@ fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
         name = brand::PRODUCT_NAME,
         exe = systemd_word(exe)?,
         state = systemd_word(state_dir)?,
-    );
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
+    let path = unit_path()?;
+    let unit = systemd_unit(exe, state_dir)?;
     write_unit(&path, &unit, Path::new("systemctl"))?;
     let unit = format!("{}.service", brand::DAEMON_BIN);
     run(Command::new("systemctl").args(["--user", "enable", &unit]))?;
@@ -218,12 +220,13 @@ fn retire_legacy() -> Result<()> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
-    let path = plist_path()?;
-    let logs = home()?.join("Library/Logs").join(brand::MAC_DIR_NAME);
-    std::fs::create_dir_all(&logs)?;
-    let plist = format!(
+fn logs_dir() -> Result<PathBuf> {
+    Ok(home()?.join("Library/Logs").join(brand::MAC_DIR_NAME))
+}
+
+/// The LaunchAgent `service install` writes: the job `label` starts `exe` serving `state_dir`.
+pub(crate) fn launch_agent(label: &str, exe: &Path, state_dir: &Path, logs: &Path) -> String {
+    format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -243,11 +246,19 @@ fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
 </dict>
 </plist>
 "#,
-        label = brand::SERVICE_LABEL,
+        label = xml_escape(label),
         exe = xml_text(exe),
         state = xml_text(state_dir),
-        logs = xml_text(&logs),
-    );
+        logs = xml_text(logs),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn install_exe(exe: &Path, state_dir: &Path, start: Start) -> Result<()> {
+    let path = plist_path()?;
+    let logs = logs_dir()?;
+    std::fs::create_dir_all(&logs)?;
+    let plist = launch_agent(brand::SERVICE_LABEL, exe, state_dir, &logs);
     std::fs::create_dir_all(path.parent().expect("plist path has a parent"))?;
     std::fs::write(&path, plist)?;
     if start == Start::AtNextLogin {
@@ -278,6 +289,48 @@ pub fn uninstall() -> Result<()> {
     }
     println!("removed {}", path.display());
     Ok(())
+}
+
+/// Rewrites the LaunchAgent at `path`, which `service install` wrote for the job `label`
+/// serving `state_dir`, to start `exe`.
+pub(crate) fn repoint_launch_agent(
+    path: &Path,
+    label: &str,
+    exe: &Path,
+    state_dir: &Path,
+) -> Result<()> {
+    let installed =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let written_by_install = installed.contains(&format!("<string>{}</string>", xml_escape(label)))
+        && installed.contains(&format!("<string>{}</string>", xml_text(state_dir)));
+    if !written_by_install {
+        bail!(
+            "{} was not installed by `{} service install` for this state directory; install the service from {} instead",
+            path.display(),
+            brand::DAEMON_BIN,
+            exe.display()
+        );
+    }
+    std::fs::write(path, launch_agent(label, exe, state_dir, &logs_dir()?))
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// Rewrites the systemd unit at `path`, which `service install` wrote for `state_dir`, to
+/// start `exe`.
+pub(crate) fn repoint_systemd_unit(path: &Path, exe: &Path, state_dir: &Path) -> Result<()> {
+    let installed =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let serves = |state: &str| installed.contains(&format!(" --state-dir {state} run\n"));
+    if !serves(&systemd_word(state_dir)?) && !serves(&state_dir.to_string_lossy()) {
+        bail!(
+            "{} was not installed by `{} service install` for this state directory; install the service from {} instead",
+            path.display(),
+            brand::DAEMON_BIN,
+            exe.display()
+        );
+    }
+    std::fs::write(path, systemd_unit(exe, state_dir)?)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
 /// Writes the unit at `path` and has systemd's user manager load it. Where that cannot work
