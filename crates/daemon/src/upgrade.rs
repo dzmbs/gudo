@@ -441,10 +441,31 @@ pub async fn restart_target(path: &Path) -> Result<DaemonInfo, String> {
     if !path.is_absolute() {
         return Err(format!("{} is not an absolute path", path.display()));
     }
+    only_this_user_can_change(path)?;
     check(path)
         .await
         .map(|(info, _)| info)
         .map_err(|(_, message)| message)
+}
+
+/// Refuses a build another user could have put there: the file, or the directory it is in,
+/// writable by its group or by everyone.
+fn only_this_user_can_change(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let resolved = path
+        .canonicalize()
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    let directory = resolved.parent().unwrap_or(Path::new("/"));
+    for checked in [resolved.as_path(), directory] {
+        let mode = fs::metadata(checked)
+            .map_err(|error| format!("{}: {error}", checked.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o022 != 0 {
+            return Err(format!("{} is writable by other users", checked.display()));
+        }
+    }
+    Ok(())
 }
 
 /// Whether a `build-info --json` line says the build continues panes handed off in this
@@ -498,7 +519,15 @@ pub enum RestartReply {
 
 /// Answers a local restart request; on [`RestartReply::Restarting`] the caller asks the host
 /// process to restart once the answer is sent ([`after_restart_reply`]).
-pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> RestartReply {
+pub(crate) async fn serve_restart(
+    core: &Arc<Core>,
+    call: &RestartCall,
+    peer_uid: Option<u32>,
+) -> RestartReply {
+    if !crate::agent::same_user(peer_uid) {
+        tracing::warn!(?peer_uid, "refused a restart request from another user");
+        return RestartReply::Refused("not allowed".into());
+    }
     if !core.hooks.is_daemon_token(&call.restart.token) {
         tracing::warn!("refused a restart request with a bad token");
         return RestartReply::Refused("not allowed".into());
@@ -511,6 +540,9 @@ pub(crate) async fn serve_restart(core: &Arc<Core>, call: &RestartCall) -> Resta
     }
     if core.upgrade.started_from.is_some() && core.upgrade.started_from == file_identity(&exe) {
         return RestartReply::Current;
+    }
+    if let Err(reason) = only_this_user_can_change(&exe) {
+        return RestartReply::Refused(reason);
     }
     let Some(busy) = Busy::acquire(&core.upgrade.busy) else {
         return RestartReply::Refused("an update is already running".into());

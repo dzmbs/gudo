@@ -1497,6 +1497,35 @@ fn endpoint_pid(state: &Path) -> u32 {
     info["pid"].as_u64().unwrap() as u32
 }
 
+/// A build another user could have changed is never run: neither one writable by its group or
+/// by everyone, nor one in a directory they can write to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_refuses_a_build_other_users_can_change() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let state = dir.path().join("state");
+    let _hostd = run(&exe, &state, &dir.path().join("hostd.log"));
+    let _ = ticket(&exe, &state);
+    let first_start = started_at(&state);
+    let shared = dir.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let next = shared.join("gudo-hostd");
+    std::fs::copy(HOSTD, &next).unwrap();
+    let next = next.canonicalize().unwrap();
+    for (file_mode, directory_mode) in [(0o775, 0o755), (0o757, 0o755), (0o755, 0o775)] {
+        std::fs::set_permissions(&next, std::fs::Permissions::from_mode(file_mode)).unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(directory_mode)).unwrap();
+        let output = restart_into_command(Path::new(HOSTD), &state, &next);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("writable by other users"),
+            "{file_mode:o} in {directory_mode:o}: {output:?}"
+        );
+        assert_eq!(started_at(&state), first_start);
+    }
+}
+
 /// An app that puts an older helper where the running one updates from cannot move it back:
 /// the restart is refused and the daemon runs on untouched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

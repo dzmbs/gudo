@@ -904,7 +904,7 @@ impl HookServer {
 }
 
 /// Whether a hook-socket peer runs as this daemon's user; an unknown peer does not.
-fn same_user(peer_uid: Option<u32>) -> bool {
+pub(crate) fn same_user(peer_uid: Option<u32>) -> bool {
     // SAFETY: getuid has no preconditions and cannot fail.
     peer_uid == Some(unsafe { libc::getuid() })
 }
@@ -961,7 +961,7 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
     }
     // And the local restart into an installed build (`gudo-hostd restart`).
     if let Ok(call) = serde_json::from_str::<crate::upgrade::RestartCall>(&line) {
-        let reply = crate::upgrade::serve_restart(core, &call).await;
+        let reply = crate::upgrade::serve_restart(core, &call, peer_uid).await;
         let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
         encoded.push(b'\n');
         let written = write.write_all(&encoded).await;
