@@ -8,12 +8,12 @@ use client_core::drawing::{self, InkPoint, Scene};
 use client_core::grants::GrantSpec;
 use client_core::proto::{
     AnchorRequest, AnchorState, ArtifactCreate, ArtifactError, ArtifactEvent, ArtifactId,
-    ArtifactKind, Axis, CoordSpace, DetachReason, DrawOp, Element, ElementId, ElementKind,
-    ExportFormat, InkLive, LayoutOp, OpOutcome, PaneId, PaneLaunch, Roles, Scope, SessionId,
-    Stroke, Style, Tool, UnixMillis,
+    ArtifactKind, ArtifactRequest, ArtifactResponse, ArtifactSend, Axis, CoordSpace, DetachReason,
+    DrawOp, Element, ElementId, ElementKind, ExportFormat, InkLive, LayoutOp, OpOutcome, PaneId,
+    PaneLaunch, PngSource, Roles, Scope, SessionId, Stroke, Style, Tool, UnixMillis,
 };
 use client_core::{ArtifactEventQueue, ArtifactUpdate, ClientConfig, MultiplayerEvent, now_millis};
-use daemon::{HookRequest, HookResponse};
+use daemon::{HookRequest, HookResponse, PullOp, PullReply};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -625,6 +625,217 @@ async fn send_to_agent_pastes_an_escaped_path_without_enter() {
     );
     drop(owner);
     daemon.shutdown().await;
+}
+
+const LOCATION: &[u8] = b"GPS 48.8584 N 2.2945 E";
+
+/// A photo as a phone takes it: turned (EXIF orientation 6), with its position and camera in
+/// the EXIF and a comment.
+fn photo_with_location() -> Vec<u8> {
+    fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![0xff, marker];
+        bytes.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+    let mut exif = b"Exif\0\0MM\0*\0\0\0\x08\0\x01".to_vec();
+    exif.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0]);
+    exif.extend_from_slice(&[0, 0, 0, 0]);
+    exif.extend_from_slice(LOCATION);
+    [
+        vec![0xff, 0xd8],
+        segment(0xe0, b"JFIF\0\x01\x02\0\0\x01\0\x01\0\0"),
+        segment(0xe1, &exif),
+        segment(0xfe, LOCATION),
+        segment(0xdb, &[0; 65]),
+        segment(0xc0, &[8, 0, 2, 0, 3, 1, 1, 0x11, 0]),
+        segment(0xda, &[1, 1, 0, 0, 63, 0]),
+        vec![0x12, 0x34, 0xff, 0xd9],
+    ]
+    .concat()
+}
+
+fn holds(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window == needle)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_photo_reaches_the_agent_without_where_it_was_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start(dir.path()).await;
+    let token = std::fs::read_to_string(dir.path().join("hook.token")).unwrap();
+    let mut owner = Drawer::new(TestClient::connect(
+        &ticket(&daemon),
+        ClientConfig::generate_key(),
+    ));
+    let shell = owner.client.attach_and_follow().await;
+    let session = owner.session();
+    let OpOutcome::PaneCreated { pane_id: agent } = owner
+        .client
+        .op(LayoutOp::Split {
+            pane_id: shell,
+            axis: Axis::Horizontal,
+            launch: PaneLaunch::Command {
+                argv: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    "stty -echo -icanon; printf 'AGENT-READY\\n'; exec cat -v".into(),
+                ],
+                cwd: None,
+            },
+        })
+        .await
+    else {
+        panic!("split failed")
+    };
+    owner.client.follow(agent).await;
+    owner.client.wait_text(agent, "AGENT-READY").await;
+    make_agent(&daemon, dir.path(), agent).await;
+    let photo = photo_with_location();
+
+    // This app strips the photo before it leaves the device.
+    let sent = owner
+        .client
+        .client
+        .send_to_agent(agent, None, None, Some(photo.clone()))
+        .await
+        .unwrap();
+    let copy = std::fs::read(&sent.path).unwrap();
+    assert!(sent.path.ends_with(".jpg"), "{}", sent.path);
+    assert!(!holds(&copy, LOCATION));
+    assert!(holds(&copy, b"Exif\0\0MM\0*"), "the orientation stays");
+
+    // An older app sends it as it is; the host strips it.
+    let ArtifactResponse::Sent(old_app) = owner
+        .client
+        .client
+        .artifact(ArtifactRequest::Send(ArtifactSend {
+            pane_id: agent,
+            artifact_id: None,
+            version: None,
+            png: PngSource::Inline(photo.clone()),
+        }))
+        .await
+        .unwrap()
+    else {
+        panic!("not sent")
+    };
+    assert!(!holds(&std::fs::read(&old_app.path).unwrap(), LOCATION));
+
+    // What the agent reads through its tools is clean too, even a photo an older host stored
+    // as it came.
+    let stored = owner
+        .client
+        .client
+        .artifacts(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|info| info.artifact_id == old_app.artifact_id)
+        .and_then(|info| info.image)
+        .unwrap();
+    std::fs::write(
+        dir.path()
+            .join("artifacts/blobs")
+            .join(stored.hash.to_hex()),
+        &photo,
+    )
+    .unwrap();
+    let PullReply::Export(export) = crate::pull::pull(
+        daemon.hook_socket(),
+        &token,
+        agent.0,
+        PullOp::Get {
+            id: Some(old_app.artifact_id.0),
+            format: Some("png".into()),
+            version: None,
+        },
+    )
+    .await
+    else {
+        panic!("pull failed")
+    };
+    assert_eq!(export.mime, "image/jpeg");
+    let pulled = data_encoding::BASE64
+        .decode(export.data.as_bytes())
+        .unwrap();
+    assert!(!holds(&pulled, LOCATION));
+
+    // Guests: a viewer cannot send; a prompter on the shell pane neither sends to the agent
+    // beside it nor sees the photo.
+    let viewer_invite = owner
+        .client
+        .client
+        .create_invite(
+            guest_spec(Roles::VIEWER, Scope::Daemon, "vic"),
+            "owner".into(),
+        )
+        .await
+        .unwrap();
+    let mut viewer = TestClient::join(&viewer_invite.to_string(), ClientConfig::generate_key());
+    viewer.client.attach(None);
+    viewer
+        .until("viewer layout", |client| client.layout.is_some())
+        .await;
+    let result = viewer
+        .client
+        .send_to_agent(agent, None, None, Some(photo.clone()))
+        .await;
+    assert!(
+        matches!(result, Err(ArtifactError::Forbidden(_))),
+        "{result:?}"
+    );
+    let prompter_invite = owner
+        .client
+        .client
+        .create_invite(
+            guest_spec(Roles::PROMPTER, Scope::Pane(shell), "pat"),
+            "owner".into(),
+        )
+        .await
+        .unwrap();
+    let mut prompter = TestClient::join(&prompter_invite.to_string(), ClientConfig::generate_key());
+    prompter.client.attach(None);
+    prompter
+        .until("prompter layout", |client| client.layout.is_some())
+        .await;
+    let result = prompter
+        .client
+        .send_to_agent(agent, None, None, Some(photo.clone()))
+        .await;
+    assert!(
+        matches!(result, Err(ArtifactError::Forbidden(_))),
+        "{result:?}"
+    );
+    let seen = prompter.client.artifacts(session).await.unwrap();
+    assert!(
+        !seen.iter().any(|info| info.kind == ArtifactKind::Image),
+        "{seen:?}"
+    );
+    let result = prompter
+        .client
+        .artifact_export(sent.artifact_id, None, ExportFormat::Png)
+        .await;
+    assert!(result.is_err(), "{result:?}");
+
+    // Deleting the photo deletes the copy the agent was given.
+    owner
+        .client
+        .client
+        .artifact_delete(sent.artifact_id)
+        .await
+        .unwrap();
+    assert!(!std::path::Path::new(&sent.path).exists());
+    assert!(std::path::Path::new(&old_app.path).exists());
+    drop((owner, viewer, prompter));
+    daemon.shutdown().await;
+}
+
+fn guest_spec(roles: Roles, scope: Scope, label: &str) -> GrantSpec {
+    let mut spec = GrantSpec::new(roles, scope);
+    spec.label = label.into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    spec
 }
 
 #[tokio::test(flavor = "multi_thread")]

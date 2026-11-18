@@ -1264,7 +1264,8 @@ running), Linux 705 / 393 MB/s.
 
 Each connection serves 4 transfers and 4 blob streams at once (more wait their turn), and a
 transfer, blob or `bulk` stream that moves no bytes for 30 s is failed or reset. Blobs stream
-in 64 KiB pieces to and from disk; only their headers are read for their format and size.
+in 64 KiB pieces to and from disk; an upload is read whole once, to strip its metadata
+(§7.1), and served blobs only have their headers read for their format and size.
 Pane queries (search, links, commands, command output), history pages and drawing requests
 run 2 at a time per kind and connection, with 32 accepted; more are answered "busy". A
 stream's header must arrive within 10 s, and each stream is served by its own task
@@ -1937,6 +1938,13 @@ ink points, scene from the op log, SVG writer, rasteriser, PNG), `crates/daemon/
 - **Blobs**: SHA-256 content addressed, PNG or JPEG only (sniffed from the header), shared by
   all sessions, garbage-collected when no image artifact, preview or image element refers to
   them (after a grace period, so an upload waiting for its `Create` survives).
+- **Metadata**: images are stored without their metadata (`drawing::strip_metadata`): EXIF
+  (GPS position, camera, time), XMP, IPTC, comments, PNG text and `eXIf` chunks, and anything
+  after the image's end. Only the EXIF orientation is kept, rewritten as the only field, so a
+  photo is not turned on its side. client-core strips before every upload, so the position
+  never leaves the device; the daemon strips again what it stores and what it hands an agent
+  (the send copy, `get_drawing`), so images from older apps, or stored by an older daemon, reach
+  agents clean too. No wire change: old apps and old daemons need nothing new.
 
 ### 7.2 Protocol
 
@@ -1979,7 +1987,8 @@ bracketed when the program enabled it, escaped (backslash before every
 character outside `[A-Za-z0-9_./@:-]`, e.g. `Application\ Support`), never followed by Enter.
 The answer (`Sent{path, pasted, bracketed}`) comes 120 ms after the paste so the client's next
 keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifact) is kept as
-an image artifact. Each send is audited (`Prompt` kind, path only).
+an image artifact. Each send is audited (`Prompt` kind, path only). Deleting the artifact
+deletes its send copies.
 
 ### 7.5 Export
 

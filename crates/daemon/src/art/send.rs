@@ -82,6 +82,8 @@ pub(crate) async fn send(
     };
     let (media, _, _) = drawing::sniff(&png)
         .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
+    let png = drawing::strip_metadata(&png)
+        .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
 
     let (artifact_id, version) = match artifact_id {
         Some(id) => {

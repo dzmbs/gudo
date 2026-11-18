@@ -72,14 +72,10 @@ struct Prepared {
 pub(crate) struct BlobUpload {
     temp: TempFile,
     file: fs::File,
-    digest: ring::digest::Context,
-    size: u64,
 }
 
 impl BlobUpload {
     pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        self.digest.update(bytes);
-        self.size += bytes.len() as u64;
         self.file.write_all(bytes).map_err(failed)
     }
 }
@@ -263,9 +259,13 @@ impl Art {
         self.dir.join("blobs").join(hash.to_hex())
     }
 
+    /// Stores an image without its metadata (an agent could read where a photo was taken).
     pub fn put_blob(&self, bytes: &[u8]) -> Result<ImageRef> {
         let (media, width, height) = drawing::sniff(bytes)
             .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
+        let stripped = drawing::strip_metadata(bytes)
+            .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
+        let bytes = &stripped[..];
         let size = bytes.len() as u64;
         if size > self.limits.blob_max {
             return Err(ArtifactError::TooLarge(format!(
@@ -354,54 +354,15 @@ impl Art {
         Ok(BlobUpload {
             temp: TempFile(temp_path),
             file,
-            digest: ring::digest::Context::new(&ring::digest::SHA256),
-            size: 0,
         })
     }
 
-    /// Stores the blob `upload` received, unless the store holds it already.
+    /// Stores the blob `upload` received, as [`put_blob`](Self::put_blob) does.
     pub fn finish_blob(&self, upload: BlobUpload) -> Result<ImageRef> {
-        let BlobUpload {
-            temp,
-            file,
-            digest,
-            size,
-        } = upload;
-        file.sync_all().map_err(failed)?;
-        let mut reader = io::BufReader::new(fs::File::open(&temp.0).map_err(failed)?);
-        let (media, width, height) = drawing::sniff_reader(&mut reader)
-            .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?;
-        let hash = BlobHash(
-            digest
-                .finish()
-                .as_ref()
-                .try_into()
-                .expect("SHA-256 is 32 bytes"),
-        );
-        let image = ImageRef {
-            hash,
-            media,
-            size,
-            width,
-            height,
-        };
-        let path = self.blob_path(&hash);
-        if path.exists() {
-            // Touch it so a pending garbage collection keeps it.
-            let _ = fs::File::options()
-                .append(true)
-                .open(&path)
-                .and_then(|file| file.set_modified(std::time::SystemTime::now()));
-            return Ok(image);
-        }
-        self.reserve(size)?;
-        let stored = fs::rename(&temp.0, &path)
-            .and_then(|()| fs::File::open(self.dir.join("blobs"))?.sync_all());
-        if let Err(error) = stored {
-            lock(&self.state).total -= size;
-            return Err(failed(error));
-        }
-        Ok(image)
+        let BlobUpload { temp, file } = upload;
+        drop(file);
+        let bytes = fs::read(&temp.0).map_err(failed)?;
+        self.put_blob(&bytes)
     }
 
     /// Room for `bytes` more under the store's cap.
@@ -774,8 +735,23 @@ impl Art {
             item.info
         };
         let _ = fs::remove_dir_all(self.item_dir(&info));
+        self.remove_sent_copies(&info);
         self.gc_blobs(false);
         Ok(info)
+    }
+
+    /// The copies of `info` written for agents (`send/<id>@<version>.<ext>`).
+    fn remove_sent_copies(&self, info: &ArtifactInfo) {
+        let sent = self.dir.join(info.session_id.0.to_string()).join("send");
+        let prefix = format!("{}@", info.artifact_id);
+        let Ok(entries) = fs::read_dir(&sent) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
     }
 
     pub fn delete_session(&self, session: SessionId) {
@@ -1212,5 +1188,38 @@ mod tests {
             (loaded.version, loaded.title),
             (applied.version, applied.title)
         );
+    }
+
+    /// An older app uploads a photo as it is, inline or streamed; the store keeps it without
+    /// the text chunks that could say where it was taken.
+    #[test]
+    fn stored_images_lose_their_metadata() {
+        let directory = tempfile::tempdir().unwrap();
+        let art = Art::open(directory.path(), ArtifactLimits::default());
+        let png = drawing::encode_png(&drawing::Rgba {
+            width: 1,
+            height: 1,
+            data: vec![0; 4],
+        });
+        let location = b"GPS 48.8584 N 2.2945 E";
+        let iend = png.len() - 12;
+        let mut tagged = png[..iend].to_vec();
+        tagged.extend_from_slice(&u32::try_from(location.len()).unwrap().to_be_bytes());
+        tagged.extend_from_slice(b"tEXt");
+        tagged.extend_from_slice(location);
+        tagged.extend_from_slice(&[0; 4]);
+        tagged.extend_from_slice(&png[iend..]);
+
+        let inline = art.put_blob(&tagged).unwrap();
+        let mut upload = art.begin_blob().unwrap();
+        for piece in tagged.chunks(7) {
+            upload.write(piece).unwrap();
+        }
+        let streamed = art.finish_blob(upload).unwrap();
+        for image in [inline, streamed] {
+            assert_eq!(art.read_blob(&image.hash).unwrap().1, png);
+            assert_eq!(image.size, png.len() as u64);
+            assert_eq!(image.hash, BlobHash(grants::sha256(&[&png])));
+        }
     }
 }

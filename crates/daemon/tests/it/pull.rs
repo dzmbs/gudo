@@ -15,7 +15,7 @@ use tokio::net::UnixStream;
 
 use crate::support::{TestClient, start, ticket};
 
-async fn pull(socket: &Path, token: &str, pane: impl ToString, op: PullOp) -> PullReply {
+pub(crate) async fn pull(socket: &Path, token: &str, pane: impl ToString, op: PullOp) -> PullReply {
     let call = PullCall {
         v: PULL_VERSION,
         token: token.into(),

@@ -230,6 +230,11 @@ makes, and then without its old invites.
   that would run them is checked separately 80 ms later.
   A sketch sent to an agent pastes only a path the daemon wrote, escaped, without Enter. The
   agents' own drive tools are covered in agent-terminal.md.
+- **Images carry no location.** A photo sent to an agent would otherwise tell the host, the
+  agent and its model provider where and when it was taken. The app strips EXIF, XMP, IPTC and
+  PNG text before upload, and the daemon strips again what it stores and what agents read;
+  only the orientation stays (docs/DAEMON.md §7.1). Deleting an image deletes the copy agents
+  were given.
 - **Attention is per viewer.** "Seen" on the attention feed belongs to whoever marked it: the
   owner's devices share one, each guest has its own, and a guest marks or counts only items of
   panes in its scope. A guest marking, focusing or merely watching a pane never makes the
@@ -354,6 +359,7 @@ was confirmed to fail.
 | Pane-scoped guest marking, focusing or watching to clear the owner's attention items | `redteam::a_guest_cannot_mark_the_owners_attention_seen`, `ws::attention::tests::*` (unit) |
 | zstd bomb / huge declared length from a hostile daemon | `client-core conn::tests::inflating_is_bounded` (unit) |
 | Random and mangled bytes as every wire type, ticket and invite | `proto/tests/decode_untrusted.rs` (proptest) |
+| A photo's GPS position reaching the agent from this app, an older app or an older daemon's store; a viewer or a guest scoped to another pane sending it or reading it; its copy left after deletion | `artifacts::a_photo_reaches_the_agent_without_where_it_was_taken`, `art::tests::stored_images_lose_their_metadata` (unit), `drawing metadata::tests` (unit) |
 
 Checked and not changed:
 

@@ -276,6 +276,8 @@ fn get(
         ));
     }
     let (mime, data) = if format.binary {
+        // Images stored before uploads were stripped still carry their metadata.
+        let data = drawing::strip_metadata(&data).ok_or("the image could not be read")?;
         (
             sniff(&data).unwrap_or(format.mime),
             data_encoding::BASE64.encode(&data),
