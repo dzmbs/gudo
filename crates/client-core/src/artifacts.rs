@@ -342,6 +342,12 @@ fn failed(err: impl std::fmt::Display) -> ArtifactError {
     ArtifactError::Failed(err.to_string())
 }
 
+/// An image as it may leave this device: without its position, camera or other metadata.
+fn without_metadata(image: Vec<u8>) -> Result<Vec<u8>, ArtifactError> {
+    drawing::strip_metadata(&image)
+        .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))
+}
+
 macro_rules! expect {
     ($response:expr, $pat:pat => $out:expr) => {
         match $response {
@@ -515,7 +521,7 @@ impl Client {
         version: Option<u64>,
         png: Option<Vec<u8>>,
     ) -> Result<Sent, ArtifactError> {
-        let png = match png {
+        let png = match png.map(without_metadata).transpose()? {
             None => PngSource::Artifact,
             Some(bytes) if bytes.len() <= 1 << 20 => PngSource::Inline(bytes),
             Some(bytes) => {
@@ -725,6 +731,11 @@ impl Client {
         name: String,
         data: Vec<u8>,
     ) -> Result<proto::Placement, ArtifactError> {
+        let data = if drawing::sniff(&data).is_some() {
+            without_metadata(data)?
+        } else {
+            data
+        };
         let (data, blob) = if data.len() > 1 << 20 && drawing::sniff(&data).is_some() {
             let session = self.session_of(pane_id)?;
             (
@@ -793,6 +804,7 @@ impl Client {
         bytes: Vec<u8>,
         progress: Option<Arc<dyn TransferProgress>>,
     ) -> Result<ImageRef, ArtifactError> {
+        let bytes = without_metadata(bytes)?;
         let media = drawing::sniff(&bytes)
             .ok_or_else(|| ArtifactError::Invalid("not a PNG or JPEG image".into()))?
             .0;
@@ -894,4 +906,31 @@ async fn connection(inner: &Inner) -> Result<iroh::endpoint::Connection, Artifac
         .connection_within(crate::workspace::LINK_WAIT, crate::WhileSuspended::GiveUp)
         .await
         .ok_or(ArtifactError::Disconnected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn images_leave_this_device_without_their_metadata() {
+        let png = drawing::encode_png(&drawing::Rgba {
+            width: 1,
+            height: 1,
+            data: vec![0; 4],
+        });
+        let location = b"GPS 48.8584 N 2.2945 E";
+        let iend = png.len() - 12;
+        let mut tagged = png[..iend].to_vec();
+        tagged.extend_from_slice(&u32::try_from(location.len()).unwrap().to_be_bytes());
+        tagged.extend_from_slice(b"tEXt");
+        tagged.extend_from_slice(location);
+        tagged.extend_from_slice(&[0; 4]);
+        tagged.extend_from_slice(&png[iend..]);
+        assert_eq!(without_metadata(tagged).unwrap(), png);
+        assert!(matches!(
+            without_metadata(b"GIF89a".to_vec()),
+            Err(ArtifactError::Invalid(_))
+        ));
+    }
 }
