@@ -80,8 +80,23 @@ fn runs_in_systemd_unit(pid: u32) -> bool {
 }
 
 /// Stops the helper `pid` (serving `state_dir`, started at `started_at`), lets what supervises
-/// it start the build at `exe` in its place, and waits until that build serves.
-pub fn restart(state_dir: &Path, pid: u32, started_at: u64, exe: &Path) -> Result<()> {
+/// it start the build at `into` (else the one at the helper's path) in its place, and waits
+/// until that build serves. Returns the build it started.
+pub fn restart(
+    state_dir: &Path,
+    pid: u32,
+    started_at: u64,
+    into: Option<&Path>,
+) -> Result<PathBuf> {
+    let exe = into
+        .map(Path::to_path_buf)
+        .or_else(|| executable_of(pid))
+        .or_else(|| std::env::current_exe().ok())
+        .context("finding the installed build")?;
+    let exe = exe
+        .canonicalize()
+        .with_context(|| format!("finding {}", exe.display()))?;
+    check_target(&exe)?;
     match Supervisor::of(pid)? {
         Supervisor::Launchd(label) => {
             let target = format!("gui/{}/{label}", rustix::process::getuid().as_raw());
@@ -96,10 +111,33 @@ pub fn restart(state_dir: &Path, pid: u32, started_at: u64, exe: &Path) -> Resul
             environment,
         } => {
             stop(pid, state_dir)?;
-            start(exe, &arguments[1..], environment.as_deref())?;
+            start(&exe, &arguments[1..], environment.as_deref())?;
         }
     }
-    wait_for_start(state_dir, started_at)
+    wait_for_start(state_dir, started_at)?;
+    Ok(exe)
+}
+
+/// The checks a hand-off makes before a helper restarts into `exe`, made here because the
+/// helper restarted cold cannot make them: the build runs on this host and is not older than
+/// the build of this command, which the update installed.
+fn check_target(exe: &Path) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let target = runtime
+        .block_on(daemon::restart_target(exe))
+        .map_err(anyhow::Error::msg)?;
+    let this = daemon::info::build_info(proto::DaemonFeatures::EMPTY);
+    if target.is_older_than(&this) {
+        bail!(
+            "the build {} at {} is older than this command's {}",
+            target.build,
+            exe.display(),
+            this.build
+        );
+    }
+    Ok(())
 }
 
 fn run(command: &mut Command) -> Result<()> {

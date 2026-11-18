@@ -124,7 +124,7 @@ pub use procinfo::{
 pub use term::SOURCE_SHARED as TERM_SOURCE_SHARED;
 pub use term::{ErrorCode as TermErrorCode, TERM_VERSION, TermAsk, TermCall, TermReply, ToolError};
 pub use upgrade::prev_path as upgrade_prev_path;
-pub use upgrade::{RestartAsk, RestartCall, RestartReply};
+pub use upgrade::{RestartAsk, RestartCall, RestartReply, restart_target};
 pub use usage::UsageConfig;
 pub use ws::Policy as PathPolicy;
 

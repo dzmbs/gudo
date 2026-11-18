@@ -435,6 +435,18 @@ async fn check(path: &Path) -> Result<(DaemonInfo, bool), Failure> {
     Ok((info, reads_handoff(line)))
 }
 
+/// The build at `path` as a target to restart into: an absolute path to a build that runs on
+/// this host and reports this OS and CPU, or why it is not one.
+pub async fn restart_target(path: &Path) -> Result<DaemonInfo, String> {
+    if !path.is_absolute() {
+        return Err(format!("{} is not an absolute path", path.display()));
+    }
+    check(path)
+        .await
+        .map(|(info, _)| info)
+        .map_err(|(_, message)| message)
+}
+
 /// Whether a `build-info --json` line says the build continues panes handed off in this
 /// build's format (`"handoff": [versions]`; builds before hot upgrades report none).
 fn reads_handoff(line: &str) -> bool {

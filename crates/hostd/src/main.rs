@@ -1079,13 +1079,8 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
             .is_some_and(|into| cold_restart::executable_of(pid).as_ref() != Some(into))
     };
     let restart_cold = |why: &str| -> Result<()> {
-        let exe = into
-            .clone()
-            .or_else(|| cold_restart::executable_of(before.pid))
-            .or_else(|| std::env::current_exe().ok())
-            .context("finding the installed build")?;
         log_line!("{why}; restarting it, its agents resume their sessions");
-        cold_restart::restart(state_dir, before.pid, before.started_at, &exe)?;
+        let exe = cold_restart::restart(state_dir, before.pid, before.started_at, into.as_deref())?;
         println!(
             "restarted into {}; running agents resumed their sessions",
             exe.display()
@@ -1113,8 +1108,12 @@ fn restart(state_dir: &Path, into: Option<&Path>) -> Result<()> {
             if runs_elsewhere(info.pid) {
                 let restarted =
                     daemon::endpoint_info(state_dir)?.context("no daemon after restart")?;
-                let exe = into.clone().context("no build to hand over to")?;
-                cold_restart::restart(state_dir, restarted.pid, restarted.started_at, &exe)?;
+                let exe = cold_restart::restart(
+                    state_dir,
+                    restarted.pid,
+                    restarted.started_at,
+                    into.as_deref(),
+                )?;
                 println!("restarted into {}", exe.display());
                 return Ok(());
             }

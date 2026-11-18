@@ -1524,3 +1524,111 @@ async fn restart_refuses_an_older_build() {
     );
     assert_eq!(started_at(&state), first_start);
 }
+
+/// A helper from before hot hand-off: it holds the state directory and answers nothing on its
+/// socket; its process is the one a cold restart would stop.
+struct PreHandOffHelper {
+    process: Child,
+    _lock: std::fs::File,
+    _socket: std::os::unix::net::UnixListener,
+}
+
+impl Drop for PreHandOffHelper {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = self.process.wait();
+    }
+}
+
+impl PreHandOffHelper {
+    fn start(state: &Path) -> Self {
+        std::fs::create_dir_all(state).unwrap();
+        let lock = std::fs::File::create(state.join("hostd.lock")).unwrap();
+        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        let socket_path = state.join("hook.sock");
+        let socket = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+        let answers = socket.try_clone().unwrap();
+        std::thread::spawn(move || {
+            for connection in answers.incoming().flatten() {
+                let mut request = String::new();
+                let _ = std::io::BufRead::read_line(
+                    &mut std::io::BufReader::new(&connection),
+                    &mut request,
+                );
+            }
+        });
+        std::fs::write(
+            state.join("hook.endpoint"),
+            socket_path.as_os_str().as_encoded_bytes(),
+        )
+        .unwrap();
+        std::fs::write(state.join("hook.token"), "token").unwrap();
+        let process = Command::new("/bin/sleep").arg("600").spawn().unwrap();
+        let endpoint = serde_json::json!({
+            "daemon_id": "00", "addrs": [], "relay_url": null,
+            "pid": process.id(), "started_at": 1u64,
+        });
+        std::fs::write(state.join("endpoint.json"), endpoint.to_string()).unwrap();
+        Self {
+            process,
+            _lock: lock,
+            _socket: socket,
+        }
+    }
+
+    fn is_running(&mut self) -> bool {
+        self.process.try_wait().unwrap().is_none()
+    }
+}
+
+fn fake_build(dir: &Path, name: &str, info: &serde_json::Value) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    let script =
+        format!("#!/bin/sh\nif [ \"$1\" = build-info ]; then echo '{info}'; exit 0; fi\nexit 3\n");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// A helper that cannot hand over is restarted cold, and that restart passes the same checks
+/// as a hand-off: never onto an older build, nor onto one that does not run here.
+#[test]
+fn a_cold_restart_refuses_an_older_or_foreign_build() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let mut helper = PreHandOffHelper::start(&state);
+    let older = fake_build(
+        dir.path(),
+        "older",
+        &serde_json::json!({
+            "version": "0.1.0", "build": "older", "built_unix": 1_700_000_000u64,
+            "protocol": 0, "min_client_protocol": 0, "features": 0, "hostname": "test",
+            "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "os_name": "",
+        }),
+    );
+    let output = restart_into_command(Path::new(HOSTD), &state, &older);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("older than"),
+        "{output:?}"
+    );
+    assert!(helper.is_running(), "the running helper was stopped");
+
+    let foreign = fake_build(
+        dir.path(),
+        "foreign",
+        &serde_json::json!({
+            "version": "9.9.9", "build": "foreign", "built_unix": 4_000_000_000u64,
+            "protocol": 999, "min_client_protocol": 0, "features": 0, "hostname": "test",
+            "os": "plan9", "arch": std::env::consts::ARCH, "os_name": "",
+        }),
+    );
+    let output = restart_into_command(Path::new(HOSTD), &state, &foreign);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("plan9"),
+        "{output:?}"
+    );
+    assert!(helper.is_running(), "the running helper was stopped");
+}
