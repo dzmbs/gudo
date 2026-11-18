@@ -421,20 +421,19 @@ final class LocalHelper {
             launched = false
             await apply(earlier)
             let into = target == .installed ? executable : nil
-            // A build that cannot hand over is restarted cold by `restart` itself: its
-            // commands end, its agents resume.
+            // Hot only: a build that cannot hand over keeps running until the user says.
             _ = await Self.restartInPlace(binary: executable, stateDirectory: stateDirectory, into: into)
             timeline.mark("restart")
             let after = Self.runningEndpoint(in: stateDirectory)
             var now: Running?
             if let after { now = await Self.running(pid: after.pid, versions: versionsDirectory, app: appBuild) }
-            switch Self.afterRestart(before: runningEndpoint, after: after, build: now?.build) {
+            switch Self.afterRestart(after: after, build: now?.build) {
             case .updated:
                 servesForeign = now?.location == .foreign
                 outcome = .updated
                 if into != nil { await pointLoginServiceAtInstalled(executable) }
             case .replace:
-                if let after { try await replace(pid: after.pid, with: executable) } else { try await launch(executable) }
+                try await launch(executable)
                 launched = true
                 outcome = .updated
             case .ask:
@@ -442,6 +441,12 @@ final class LocalHelper {
                 outcome = .needsRestart(failure: nil)
             }
         case .replace:
+            if runningEndpoint != nil, !isReplacing {
+                launched = false
+                servesForeign = running?.location == .foreign
+                outcome = .needsRestart(failure: nil)
+                break
+            }
             if let runningEndpoint {
                 try await replace(pid: runningEndpoint.pid, with: executable)
             } else {
@@ -596,11 +601,12 @@ final class LocalHelper {
         case launch(EarlierLoginItem)
         /// The app's build or a newer one runs, from wherever it runs: kept.
         case keep(EarlierLoginItem)
-        /// An older build runs: it hands its sessions over in the same process (`restart`),
-        /// or, a build that cannot, is restarted cold on the new build.
+        /// An older build runs: it hands its sessions over in the same process (`restart
+        /// --hot-only`); a build that cannot keeps running until the user updates it.
         case restart(into: RestartTarget, EarlierLoginItem)
         /// An older app's login item runs an older build: launchd would start that build
-        /// again, so the login item goes first and the installed build starts in its place.
+        /// again, so once the user updates it the login item goes first and the installed
+        /// build starts in its place.
         case replace
     }
 
@@ -628,17 +634,15 @@ final class LocalHelper {
 
     nonisolated enum AfterRestart: Equatable {
         case updated
-        /// Still older, but its commands ended already (it restarted cold, onto the old path
-        /// launchd knows): replaced at once.
+        /// Nothing serves the folder any more: the installed build starts.
         case replace
-        /// Still older and untouched: replacing it would end running commands.
+        /// Still older: replacing it would end running commands, which only the user decides.
         case ask
     }
 
-    nonisolated static func afterRestart(before: Endpoint?, after: Endpoint?, build: BuildAge?) -> AfterRestart {
-        guard let after, let build else { return .replace }
-        if build != .older { return .updated }
-        return after.pid == before?.pid && after.startedAt == before?.startedAt ? .ask : .replace
+    nonisolated static func afterRestart(after: Endpoint?, build: BuildAge?) -> AfterRestart {
+        guard after != nil, let build else { return .replace }
+        return build == .older ? .ask : .updated
     }
 
     /// Stops the helper of a build from before the product's rename and keeps its login items
@@ -843,12 +847,13 @@ final class LocalHelper {
     }
 
     /// Asks the running helper to hand its sessions to the build now in the app and become it
-    /// (`restart`): false when it cannot (a build from before this, or the new build cannot
-    /// take the sessions over), which leaves it running as it was.
+    /// in the same process (`restart --hot-only`): false when it cannot (a build from before
+    /// hot hand-off, one refusing for live Chat, or the new build cannot take the sessions
+    /// over), which leaves it running as it was.
     static func restartInPlace(binary: URL, stateDirectory: URL, into target: URL? = nil) async -> Bool {
         do {
             let into = target.map { ["--into", $0.path] } ?? []
-            let output = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart"] + into)
+            let output = try await Self.output(binary, ["--state-dir", stateDirectory.path, "restart", "--hot-only"] + into)
             let said = String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             Self.log.info("helper: \(said, privacy: .public)")
             return true

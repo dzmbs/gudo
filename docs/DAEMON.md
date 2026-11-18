@@ -630,19 +630,24 @@ and only once), `mp::policy` unit test.
   daemon's own `hook.token`, not a pane's) to hand off into the build now at its path. It
   answers `current` when the file is the one it started from, `refused` (nothing changes) when
   the new build fails `build-info` or does not read its hand-off, else `restarting`; the
-  command then waits for the same pid to record a new start in `endpoint.json`. There is no
-  rollback check here: the file was put there by someone who can already run it. Releases
-  0.1.5 and 0.1.6 refuse while an agent has live Chat ("Live agent Chat cannot survive a helper
-  restart yet."); the command then restarts that helper cold instead of leaving it running
-  (`hostd` `cold_restart`): its launchd job (`launchctl kickstart -k`, only when the job's
-  `pid` is this helper) or systemd unit (`systemctl --user restart`, only when the helper runs in
-  it) restarts it, else it gets SIGTERM and the build at its path is started with its command
+  command then waits for the same pid to record a new start in `endpoint.json`. The daemon
+  takes the request only from its own uid, and refuses a build that is older than it
+  (protocol level, then build time), does not run here, or that other users could change (the
+  file or its directory group- or world-writable). Releases 0.1.5 and 0.1.6 refuse while an
+  agent has live Chat ("Live agent Chat cannot survive a helper restart yet."); the command
+  then restarts that helper cold instead of leaving it running (`hostd` `cold_restart`), after
+  the same checks against its own build. Its launchd job (only when the job's `pid` is this
+  helper) or systemd unit (only when the helper runs in it) restarts it: `launchctl kickstart
+  -k` or `systemctl --user restart` when the job starts the target build, else the LaunchAgent
+  or unit (one `service install` wrote for this state folder) is rewritten to the target and
+  loaded again; otherwise the helper gets SIGTERM and the target is started with its command
   line. Stopping saves the layout and screens, so the new build resumes every agent in its pane.
   A daemon that does not answer the request (0.1.3 and earlier) is restarted the same way.
   `restart --into <exe>` (`RestartAsk.exe`; `build-info --json` says `"restart_into": true`)
   hands over to the build at another path, which the daemon then runs from; a daemon that
-  ignores the field is restarted cold into that build. A restart into a build older than the
-  running one (protocol level, then build time) is refused. `service install --no-start` only
+  ignores the field is restarted cold into that build. `restart --hot-only` never restarts
+  cold: when only that would update the daemon it changes nothing and exits 3 (the Mac app's
+  automatic update, which leaves the cold path to its Update Helper). `service install --no-start` only
   writes (on Linux also enables) the service, leaving the running daemon alone.
 - **Update matrix** (`scripts/upgrade-matrix.sh`, a release gate in `scripts/release-mac.sh`):
   builds every release from 0.1.3 on (cached in `target/upgrade-matrix/`) and runs the

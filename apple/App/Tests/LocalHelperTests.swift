@@ -69,18 +69,16 @@ final class LocalHelperTests: XCTestCase {
     }
 
     func testWhatARestartLeavesDecidesWhetherToAsk() {
-        let before = LocalHelper.Endpoint(daemonId: "d", pid: 10, startedAt: 100)
-        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: before, build: .same), .updated, "handed over")
-        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: before, build: .newer), .updated)
+        let endpoint = LocalHelper.Endpoint(daemonId: "d", pid: 10, startedAt: 100)
+        XCTAssertEqual(LocalHelper.afterRestart(after: endpoint, build: .same), .updated, "handed over")
+        XCTAssertEqual(LocalHelper.afterRestart(after: endpoint, build: .newer), .updated)
         XCTAssertEqual(
-            LocalHelper.afterRestart(before: before, after: before, build: .older), .ask,
-            "refused before anything stopped: running commands are the user's to end")
+            LocalHelper.afterRestart(after: endpoint, build: .older), .ask,
+            "refused, or could only restart cold: running commands are the user's to end")
         XCTAssertEqual(
-            LocalHelper.afterRestart(before: before, after: .init(daemonId: "d", pid: 11, startedAt: 200), build: .older), .replace,
-            "restarted cold into an older build again (launchd ran the old path): its commands ended already")
-        XCTAssertEqual(
-            LocalHelper.afterRestart(before: before, after: .init(daemonId: "d", pid: 10, startedAt: 200), build: .older), .replace)
-        XCTAssertEqual(LocalHelper.afterRestart(before: before, after: nil, build: nil), .replace, "stopped and not started again")
+            LocalHelper.afterRestart(after: .init(daemonId: "d", pid: 10, startedAt: 200), build: .older), .ask,
+            "handed over in the same process to a build still older: its commands run on, so the user decides")
+        XCTAssertEqual(LocalHelper.afterRestart(after: nil, build: nil), .replace, "stopped and not started again")
     }
 
     func testAnEarlierLoginItemGoesUnlessItsHelperIsTheOneRunning() {
@@ -200,15 +198,15 @@ final class LocalHelperTests: XCTestCase {
 
         let restarted = await LocalHelper.restartInPlace(binary: try helper(exiting: 0), stateDirectory: state)
         XCTAssertTrue(restarted)
-        XCTAssertEqual(try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) restart\n")
+        XCTAssertEqual(try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) restart --hot-only\n")
 
         let refused = await LocalHelper.restartInPlace(binary: try helper(exiting: 1), stateDirectory: state)
-        XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted")
+        XCTAssertFalse(refused, "a helper that cannot hand off (an older build) is not restarted, hot or cold")
 
         let installed = folder.appending(path: "Current/gudo-hostd")
         _ = await LocalHelper.restartInPlace(binary: try helper(exiting: 0), stateDirectory: state, into: installed)
         XCTAssertEqual(
-            try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) restart --into \(installed.path)\n",
+            try String(contentsOf: arguments, encoding: .utf8), "--state-dir \(state.path) restart --hot-only --into \(installed.path)\n",
             "a helper at another path hands over to the installed build")
     }
 

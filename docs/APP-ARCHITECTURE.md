@@ -476,17 +476,17 @@ re-signing or updating the app leaves the running helper and its launchd job alo
   |---|---|---|
   | none | start `Versions/Current` (login service, job or child) | nothing |
   | the app's build or newer, from anywhere | keep it | nothing |
-  | older, its own path now holds the app's build or newer (`Current` swapped, an app replaced in place, a rebuilt build folder) | `hostd restart`: released builds hand over hot only to the file at their own path | toast "This Mac runs helper 0.1.7" |
-  | older, its path holds an older build or nothing (a build folder, an old app copy, a removed file) | `hostd restart --into Versions/Current`, then `service install --no-start` when Start Helper at Login is on, so `dev.gudo.hostd` names `Current` at the next login | the toast |
-  | older, from an older app's login item (`SMAppService`) whose app holds an older build | replaced: the login item goes first (launchd would start its build again), then `Current` starts | the toast |
+  | older, its own path now holds the app's build or newer (`Current` swapped, an app replaced in place, a rebuilt build folder) | `hostd restart --hot-only`: released builds hand over hot only to the file at their own path | toast "This Mac runs helper 0.1.7" |
+  | older, its path holds an older build or nothing (a build folder, an old app copy, a removed file) | `hostd restart --hot-only --into Versions/Current`, then `service install --no-start` when Start Helper at Login is on, so `dev.gudo.hostd` names `Current` at the next login | the toast |
+  | older, and it cannot hand over hot (before 0.1.4; 0.1.5 and 0.1.6 with a live agent Chat; a release that hands over only to its own path while that holds an older build or nothing) | kept serving This Mac, untouched | notice "This Mac runs an older helper. Updating it restarts running commands." with **Update Helper** |
+  | older, from an older app's login item (`SMAppService`) whose app holds an older build | kept serving This Mac, untouched | the notice; Update Helper retires the login item first (launchd would start its build again), then `Current` starts |
 
-  `restart` restarts a build that cannot hand over (before 0.1.4, or 0.1.5 and 0.1.6 with a
-  live agent Chat) cold by itself: its commands end and its agents resume. The build is then
-  read again (`LocalHelper.afterRestart`): still older after a cold restart (launchd started the
-  old path again) means it is replaced at once; still older and untouched (a refusal before
-  anything stopped, such as a release whose file is gone) keeps it serving This Mac with a notice
-  "This Mac runs an older helper. Updating it restarts running commands." and **Update Helper**
-  (`replaceOlderHelper`).
+  Nothing that ends running commands happens before the user clicks **Update Helper**
+  (`replaceOlderHelper`). The automatic path runs `restart --hot-only`, which hands over in the
+  same process or changes nothing and exits 3 when only a cold restart would update the helper.
+  The build is then read again (`LocalHelper.afterRestart`): the app's build or newer is the
+  update; still older (refused, ignored, or handed over to a build still older) asks with the
+  notice; nothing serving starts `Current`.
 
   Replacing: `service stop` (the app's job), the earlier login item unregistered, then SIGTERM
   (every released build saves its layout on it, from 0.1.5 its screens too, and exits 0, so a

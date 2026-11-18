@@ -216,13 +216,16 @@ final class ThisMacHelperTests: XCTestCase {
     // MARK: Older helpers
 
     /// A login service from a build folder that runs a released build: it hands over to the
-    /// installed build, or one from before hot hand-off is restarted cold onto it, with its
-    /// tabs, panes and screens.
+    /// installed build, with its tabs, panes and screens. A release that cannot hand over to
+    /// another path (`restart --into`) waits for Update Helper, as updating it ends running
+    /// commands.
     func testAnOlderHelperFromABuildFolderMovesOntoTheInstalledBuild() async throws {
         let older = try olderBuild(at: "build/hostd/macos")
+        let handsOverElsewhere = try buildInfo(older)?["restart_into"] as? Bool == true
         let serving = try await olderHelperServing(older)
         let helper = try makeHelper()
 
+        if !handsOverElsewhere { try await asksBeforeUpdating(serving, with: helper) }
         try await updates(serving, with: helper)
 
         XCTAssertEqual(helper.update, .updated)
@@ -230,7 +233,7 @@ final class ThisMacHelperTests: XCTestCase {
     }
 
     /// An earlier app's helper whose app was replaced by this one: it hands over to the build
-    /// at its path (a release from before hot hand-off restarts cold onto it).
+    /// at its path without asking; a release from before hot hand-off waits for Update Helper.
     func testAnEarlierAppsHelperMovesOntoThisAppsBuildAtItsPath() async throws {
         let older = try olderBuild(at: "Gudo.app/Contents/MacOS")
         let handsOver = try readsHandOffs(older)
@@ -238,6 +241,7 @@ final class ThisMacHelperTests: XCTestCase {
         try replaceFile(older)
         let helper = try makeHelper()
 
+        if !handsOver { try await asksBeforeUpdating(serving, with: helper) }
         try await updates(serving, with: helper)
 
         XCTAssertEqual(helper.update, .updated)
@@ -249,24 +253,14 @@ final class ThisMacHelperTests: XCTestCase {
     }
 
     /// A helper whose file was removed: a release that answers hand-offs refuses, as nothing
-    /// is at its path, and the user is asked; one from before restarts cold onto the
-    /// installed build.
+    /// is at its path, and one from before cannot hand over; either way the user is asked.
     func testAnOlderHelperWhoseFileIsGoneMovesOntoTheInstalledBuild() async throws {
         let older = try olderBuild(at: "removed")
-        let refuses = try readsHandOffs(older)
         let serving = try await olderHelperServing(older)
         try FileManager.default.removeItem(at: older)
         let helper = try makeHelper()
 
-        if refuses {
-            AppModel.shared.serveThisMac(with: helper)
-            let window = try XCTUnwrap(window)
-            try await window.until("the app asks", timeout: .seconds(40)) {
-                helper.state == .running && helper.update == .needsRestart(failure: nil)
-            }
-            XCTAssertEqual(endpoint?.pid, serving.process.processIdentifier, "it serves This Mac until the user says")
-            helper.replaceOlderHelper()
-        }
+        try await asksBeforeUpdating(serving, with: helper)
         try await updates(serving, with: helper)
 
         XCTAssertEqual(helper.update, .updated)
@@ -288,6 +282,7 @@ final class ThisMacHelperTests: XCTestCase {
         var pane: PaneId
         var tabs: [TabId]
         var daemonId: String
+        var startedAt: UInt64?
         /// Releases before 0.1.5 keep no screens: their panes come back with a fresh prompt.
         var savesScreens: Bool
     }
@@ -308,7 +303,21 @@ final class ThisMacHelperTests: XCTestCase {
             process: process, pane: try XCTUnwrap(window.pane?.id),
             tabs: try XCTUnwrap(window.model.workspace?.session.tabs.map(\.id)),
             daemonId: try XCTUnwrap(endpoint?.daemonId),
+            startedAt: endpoint?.startedAt,
             savesScreens: FileManager.default.fileExists(atPath: try XCTUnwrap(stateDirectory).appending(path: "screens").path))
+    }
+
+    /// This app starts while `older` serves This Mac and cannot be updated without ending its
+    /// commands: it keeps serving with the notice until Update Helper.
+    private func asksBeforeUpdating(_ older: OlderHelper, with helper: LocalHelper) async throws {
+        AppModel.shared.serveThisMac(with: helper)
+        let window = try XCTUnwrap(window)
+        try await window.until("the app asks", timeout: .seconds(40)) {
+            helper.state == .running && helper.update == .needsRestart(failure: nil)
+        }
+        XCTAssertEqual(endpoint?.pid, older.process.processIdentifier, "it serves This Mac until the user says")
+        XCTAssertEqual(endpoint?.startedAt, older.startedAt, "untouched: its commands still run")
+        helper.replaceOlderHelper()
     }
 
     /// This app starts on `older` and This Mac ends on the app's build, with what it had.
@@ -342,9 +351,12 @@ final class ThisMacHelperTests: XCTestCase {
         _ = try FileManager.default.replaceItemAt(older, withItemAt: replacement)
     }
 
+    private func buildInfo(_ executable: URL) throws -> [String: Any]? {
+        try JSONSerialization.jsonObject(with: try runOutput(executable, ["build-info", "--json"])) as? [String: Any]
+    }
+
     private func readsHandOffs(_ executable: URL) throws -> Bool {
-        let info = try JSONSerialization.jsonObject(with: try runOutput(executable, ["build-info", "--json"])) as? [String: Any]
-        return (info?["handoff"] as? [Int])?.isEmpty == false
+        (try buildInfo(executable)?["handoff"] as? [Int])?.isEmpty == false
     }
     /// A released build at `folder` under the test's temporary folder (`GUDO_OLD_HOSTD_BIN`:
     /// a release tag built with `GUDO_BUILD_ID`/`GUDO_BUILD_UNIX` older than the test build).
