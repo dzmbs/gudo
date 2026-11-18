@@ -280,9 +280,20 @@ unless the owner asked for a downgrade, and is then swapped in atomically (the o
   A build that cannot read it (another version, damage) still reads the fixed header and ends
   the panes cleanly: hang-up, then the process group killed after 3 s, then reaped. No program
   is left running unseen.
-- The local restart (`gudo-hostd restart`) takes the daemon's own `hook.token`, not a pane's,
-  over the 0600 hook socket that checks the peer's uid. It only re-runs the file at the
-  daemon's own path, after the same `build-info` check.
+- The local restart (`gudo-hostd restart [--into <exe>]`) takes the daemon's own `hook.token`,
+  not a pane's, over the 0600 hook socket, and only from a peer of the daemon's own uid. It
+  runs the build at the daemon's own path, or the absolute path the caller names with
+  `--into`, and only after that build passes the checks an upgrade makes: the file and its
+  directory are writable by no one but their owner (no group or world write bit), the build
+  answers `build-info --json` with this OS and CPU, it is not older than the running build,
+  and it reads the running build's hand-off format.
+- A helper that cannot hand off (builds before 0.1.4, or one refusing for live Chat) is
+  restarted cold by the `restart` command itself. The command makes the same checks first,
+  against its own build since the old helper cannot: a writable, foreign or older target is
+  refused and the running helper is left alone. Under launchd or systemd the command starts
+  the program the job names; when that is not the checked build, it first rewrites the
+  LaunchAgent or unit (only one `service install` wrote for this state directory) to that build
+  and loads it again, so what it reports as started is what runs.
 
 ## Residual risk (by design or not yet built)
 
@@ -327,9 +338,11 @@ unless the owner asked for a downgrade, and is then swapped in atomically (the o
   the pane closes or its scrollback moves past it. Text typed at a hidden password prompt is
   never echoed, so it is not saved. Protection is the same as `layout.json`: file mode and
   the user's disk encryption; anyone who can read the user's files can read them.
-- **The local restart has no rollback check.** It runs whatever build is at the daemon's own
-  path, put there by someone who could run it anyway (the same user, a package manager, the Mac
-  app's update).
+- **The local restart trusts the same user.** Anyone who can run `gudo-hostd restart` can
+  already run any program as the user; its checks stop mistakes and other users, not the user.
+  A cold restart compares the target with the build of the command asking, so an older copy
+  of the command can restart into a build as old as itself. The target's path is checked,
+  then run: a same-user process could swap the file in between.
 
 ## Decisions
 
