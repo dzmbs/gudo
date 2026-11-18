@@ -216,6 +216,7 @@ targets:
           - $(DERIVED_FILE_DIR)/$(BRAND_DAEMON_BIN)
           - $(DERIVED_FILE_DIR)/$(BRAND_DAEMON_BIN).cstemp
           - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(BRAND_DAEMON_BIN)
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/$(BRAND_DAEMON_BIN).new
           - $(HELPER_LAUNCH_AGENT)
         script: |
           [ "$PLATFORM_NAME" = macosx ] || exit 0
@@ -233,7 +234,10 @@ targets:
             identity="${EXPANDED_CODE_SIGN_IDENTITY:--}"
             [ "$identity" != "-" ] && flags="$flags --timestamp"
             codesign --force --sign "$identity" --identifier "$PRODUCT_BUNDLE_IDENTIFIER.hostd" $flags "$signed"
-            cp -f "$signed" "$dst"
+            # Renamed into place: a running helper's file written over is killed at its next
+            # exec (code signing pages no longer match).
+            cp -f "$signed" "$dst.new"
+            mv -f "$dst.new" "$dst"
           else
             rm -f "$dst"
           fi
