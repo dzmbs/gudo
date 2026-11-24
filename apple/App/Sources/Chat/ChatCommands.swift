@@ -14,7 +14,6 @@ nonisolated extension ChatCommands {
 
 nonisolated enum ChatCommands {}
 
-#if os(iOS)
 import DesignSystem
 import SwiftUI
 
@@ -85,9 +84,8 @@ struct ChatCommandSheet: View {
                     Text("No matching commands").font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
                 }
             }
-            .navigationTitle("Commands").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Commands").toolbarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
-#endif

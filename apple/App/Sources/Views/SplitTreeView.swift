@@ -725,7 +725,6 @@ struct PaneSlot: View {
     }
 
     @ViewBuilder private func paneContent(_ pane: Pane) -> some View {
-        #if os(iOS)
         if let state = pane.chat, state.agent != nil, let daemon = workspace.host as? DaemonConnection {
             let working = daemon.meta[pane.id]?.agent?.state == .running
             // A question or plan Chat can answer is not a wait in Terminal.
@@ -744,9 +743,6 @@ struct PaneSlot: View {
                 hub: daemon.workspace, pane: pane.id.rawValue,
                 canChange: daemon.multiplayer.isOwner, isWorking: working))
         } else { terminalContent(pane) }
-        #else
-        terminalContent(pane)
-        #endif
     }
 
     private func terminalContent(_ pane: Pane, isActive: Bool = true) -> some View {

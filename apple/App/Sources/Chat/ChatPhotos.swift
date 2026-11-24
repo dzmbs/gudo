@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import Observation
 
@@ -151,4 +150,3 @@ final class ChatPhotos {
         }.joined()
     }
 }
-#endif

@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import HostKit
 import SwiftUI
@@ -11,7 +10,7 @@ struct ChatWorkingIndicator: View {
 
     var body: some View {
         Text(verbatim: Self.dots)
-            .font(DS.Font.proseHeading)
+            .font(ChatFont.proseHeading)
             .foregroundStyle(DS.Palette.textSecondary)
             .shimmering(true, text: Self.dots)
             .padding(.horizontal, DS.Space.m).padding(.vertical, DS.Space.xs)
@@ -41,4 +40,3 @@ enum ChatImageReader {
         return data
     }
 }
-#endif

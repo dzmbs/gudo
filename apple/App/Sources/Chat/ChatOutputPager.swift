@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import SwiftUI
 
@@ -72,4 +71,3 @@ struct ChatOutputNote: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(DS.Space.l)
     }
 }
-#endif

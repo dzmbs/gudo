@@ -1,4 +1,3 @@
-#if os(iOS)
 import ChatSyntax
 import DesignSystem
 import Foundation
@@ -37,4 +36,3 @@ import SwiftUI
         return text
     }
 }
-#endif

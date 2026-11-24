@@ -271,7 +271,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         // grows upward as the field wraps.
         footer.view.invalidateIntrinsicContentSize()
         latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
-            Label("New", systemImage: "arrow.down").font(DS.Font.button).padding(.horizontal, DS.Space.l)
+            Label("New", systemImage: "arrow.down").font(ChatFont.button).padding(.horizontal, DS.Space.l)
                 .frame(minHeight: DS.Size.touchTarget)
         }.buttonStyle(.plain).floatingCapsule(interactive: true).environment(\.self, environment))
         latest.view.isHidden = !(model.hasNewItems || frame.hasNewerGap)

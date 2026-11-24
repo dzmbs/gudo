@@ -16,7 +16,7 @@ struct ChatAutocompleteList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if autocomplete.suggestions.isEmpty, let note = autocomplete.note {
-                Text(note).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
+                Text(note).font(ChatFont.subtitle).foregroundStyle(DS.Palette.textSecondary)
                     .padding(.horizontal, DS.Space.l)
                     .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
                     .accessibilityIdentifier("chat-autocomplete-note")
@@ -53,14 +53,14 @@ struct ChatAutocompleteList: View {
     private func row(_ suggestion: ChatAutocomplete.Suggestion, isSelected: Bool) -> some View {
         HStack(spacing: DS.Space.m) {
             Image(systemName: suggestion.symbol)
-                .font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+                .font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
                 .frame(width: DS.Space.l)
             Text(Self.emphasised(suggestion.title, at: suggestion.emphasis))
-                .font(DS.Font.rowSubtitle)
+                .font(ChatFont.subtitle)
                 .lineLimit(1).truncationMode(.middle)
                 .layoutPriority(1)
             if !suggestion.detail.isEmpty {
-                Text(verbatim: suggestion.detail).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                Text(verbatim: suggestion.detail).font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 0)
@@ -101,7 +101,7 @@ struct ChatAttachmentPills: View {
                         ProgressView().controlSize(.mini)
                         Text(verbatim: pending).lineLimit(1)
                     }
-                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                     .padding(.horizontal, DS.Space.m)
                     .frame(height: Self.height)
                     .background(DS.Palette.selectedFill, in: .rect(cornerRadius: DS.Radius.control, style: .continuous))
@@ -124,13 +124,13 @@ struct ChatAttachmentPills: View {
                     .frame(width: Self.height - DS.Space.s, height: Self.height - DS.Space.s)
                     .clipShape(.rect(cornerRadius: DS.Radius.chip, style: .continuous))
             } else {
-                Image(systemName: "doc").font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                Image(systemName: "doc").font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
             }
-            Text(verbatim: attachment.name).font(DS.Font.caption).lineLimit(1).truncationMode(.middle)
+            Text(verbatim: attachment.name).font(ChatFont.caption).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: 140, alignment: .leading)
             Button { remove(attachment.id) } label: {
                 Label("Remove \(attachment.name)", systemImage: "xmark").labelStyle(.iconOnly)
-                    .font(DS.Font.captionDetail.weight(.semibold)).foregroundStyle(DS.Palette.textSecondary)
+                    .font(ChatFont.captionDetail.weight(.semibold)).foregroundStyle(DS.Palette.textSecondary)
                     .frame(width: DS.Size.touchTarget * 0.6, height: Self.height)
                     .contentShape(.rect)
             }
@@ -165,13 +165,13 @@ struct ChatQueueStrip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(messages.count == 1 ? "Queued, sends when the turn ends" : "\(messages.count) queued, sent one per turn")
-                .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                 .padding(.horizontal, DS.Space.l).padding(.top, DS.Space.s)
             ForEach(messages) { message in
                 HStack(spacing: DS.Space.xs) {
-                    Image(systemName: "clock").font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+                    Image(systemName: "clock").font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
                         .frame(width: DS.Space.l)
-                    Text(verbatim: Self.oneLine(message.text)).font(DS.Font.rowSubtitle)
+                    Text(verbatim: Self.oneLine(message.text)).font(ChatFont.subtitle)
                         .lineLimit(1).truncationMode(.tail)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     action("Edit", symbol: "pencil", identifier: "chat-queued-edit") { edit(message) }
@@ -191,7 +191,7 @@ struct ChatQueueStrip: View {
                         perform: @escaping () -> Void) -> some View {
         Button(action: perform) {
             Label(title, systemImage: symbol).labelStyle(.iconOnly)
-                .font(DS.Font.rowSubtitle)
+                .font(ChatFont.subtitle)
                 .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
                 .contentShape(.rect)
         }

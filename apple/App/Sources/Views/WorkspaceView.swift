@@ -870,10 +870,11 @@ private struct TerminalToolbar: ToolbarContent {
         var shown: [TitleBarMetrics.Control] = [.host]
         if let session = workspace.multiplayer, !session.others.isEmpty { shown.append(.presence) }
         if model.destination == .terminal, model.git.worktree != nil { shown.append(.pullRequest) }
+        let chat = model.destination == .terminal && workspace.soleAgentPaneChat != nil ? TitleBarFit.chatControl : 0
         return TitleBarFit(
             window: model.windowWidth,
             contentStart: overSidebar ? SidebarWidth.effective(sidebarWidth, for: dynamicTypeSize) : TitleBarFit.leadingReserve - DS.Space.m,
-            controls: metrics.width(of: shown))
+            controls: metrics.width(of: shown) + chat)
     }
     #endif
 }
@@ -900,6 +901,9 @@ private struct PaneControls: View {
 
     var body: some View {
         #if os(macOS)
+        if model.destination == .terminal, let sole = workspace.soleAgentPaneChat {
+            PaneChatButton(pane: sole.pane, state: sole.chat)
+        }
         LazyMenuButton("Split", systemImage: "rectangle.split.2x1") { splitItems }
             .help("Split, zoom, float or close the pane")
             .disabled(isSplitDisabled)
@@ -966,6 +970,8 @@ struct TitleBarFit {
     static let leadingReserve: CGFloat = 148
     /// Split and the command palette: two toolbar glyphs.
     static let paneControls: CGFloat = 2 * DS.Size.touchTarget
+    /// The Chat switch beside them, for a tab whose one pane runs an agent.
+    static let chatControl = DS.Size.touchTarget
     /// The one menu the controls fold into.
     static let foldedControls = DS.Size.touchTarget
     /// The least the title or the strip is given before the controls fold.
@@ -1128,6 +1134,12 @@ private struct TitleBarOverflowMenu: View {
             }
             .disabled((workspace.focusedPane == nil && model.activeMixed == nil) || model.destination != .terminal)
             Button("Command Palette", systemImage: "command") { model.isPaletteShown = true }
+            if model.destination == .terminal, let sole = workspace.soleAgentPaneChat {
+                let showsChat = sole.chat.presentation == .chat
+                Button(showsChat ? "Show Terminal" : "Show Chat", systemImage: showsChat ? "terminal" : "text.bubble") {
+                    _ = sole.chat.show(showsChat ? .terminal : .chat, terminal: sole.pane)
+                }
+            }
         }
         .help("\(model.hostName), Split and Command Palette")
         .accessibilityIdentifier("toolbar-overflow")

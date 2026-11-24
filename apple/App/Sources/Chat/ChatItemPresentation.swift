@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import HostKit
 
@@ -96,4 +95,3 @@ nonisolated enum ChatItemPresentation {
     }
 
 }
-#endif

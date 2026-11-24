@@ -1,4 +1,3 @@
-#if os(iOS)
 import CoreTransferable
 import Foundation
 import ImageIO
@@ -68,6 +67,15 @@ nonisolated final class ChatPhotoFile: Transferable, Sendable {
         }
     }
 
+    /// Complete protection on touch; writing it to the Mac's temporary folder fails.
+    private static var writeOptions: Data.WritingOptions {
+        #if os(iOS)
+        [.atomic, .completeFileProtection]
+        #else
+        [.atomic]
+        #endif
+    }
+
     private static func privateDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "chat-photo-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
@@ -91,7 +99,7 @@ nonisolated final class ChatPhotoFile: Transferable, Sendable {
         let directory = try privateDirectory()
         do {
             let url = directory.appending(path: "photo.jpg")
-            try (encoded as Data).write(to: url, options: [.atomic, .completeFileProtection])
+            try (encoded as Data).write(to: url, options: writeOptions)
             return ChatPhotoFile(url: url, bytes: encoded.length, name: name, thumbnail: thumbnail(of: imageSource))
         } catch {
             try? FileManager.default.removeItem(at: directory)
@@ -116,4 +124,3 @@ nonisolated extension ChatPhotoFile {
 }
 
 nonisolated enum ChatPhotoError: Error { case invalidImage, invalidPath }
-#endif

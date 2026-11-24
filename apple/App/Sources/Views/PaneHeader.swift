@@ -75,11 +75,13 @@ struct PaneHeader: View {
                 }
             }
             Spacer(minLength: 0)
-            #if os(iOS)
             if let pane = workspace.panes[id], let chat = pane.chat, chat.agent != nil {
+                #if os(iOS)
                 PaneChatToggle(pane: pane, state: chat)
+                #else
+                PaneChatHeaderButton(pane: pane, state: chat)
+                #endif
             }
-            #endif
             // Before the status: hidden at rest on the Mac, they would leave it floating where
             // they stand.
             PaneHeaderButtons(id: id, workspace: workspace, window: window, focus: focus)
@@ -403,6 +405,30 @@ private struct HeaderButtonStyle: ButtonStyle {
         return isEnabled ? rest : rest.disabled
     }
 }
+
+#if os(macOS)
+/// The Mac header's Chat switch: lit while Chat shows, and in view at rest, unlike the buttons
+/// beside it, so the way back to the terminal never hides.
+private struct PaneChatHeaderButton: View {
+    let pane: Pane
+    @Bindable var state: PaneChatState
+
+    var body: some View {
+        let showsChat = state.presentation == .chat
+        Button {
+            withAnimation(DS.Motion.structural) { _ = state.show(showsChat ? .terminal : .chat, terminal: pane) }
+        } label: {
+            Image(systemName: showsChat ? "text.bubble.fill" : "text.bubble")
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(HeaderButtonStyle(isLit: showsChat))
+        .help(showsChat ? "Show Terminal" : "Show Chat")
+        .accessibilityLabel("Chat")
+        .accessibilityAddTraits(showsChat ? .isSelected : [])
+        .accessibilityIdentifier("pane-presentation")
+    }
+}
+#endif
 
 /// The pane header's context menu.
 struct PaneContextItems: View {

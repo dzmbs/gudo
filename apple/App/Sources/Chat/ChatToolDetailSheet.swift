@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import HostKit
 import SwiftUI
@@ -29,7 +28,7 @@ struct ChatToolDetailSheet: View {
                 if section == .input { input } else { ChatOutputPager(reader: reader, offset: $offset) }
             }
             .background(DS.Palette.base).foregroundStyle(DS.Palette.text)
-            .navigationTitle(String(tool.title.prefix(160))).navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(String(tool.title.prefix(160))).toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Terminal", systemImage: "terminal", action: openTerminal)
@@ -60,4 +59,3 @@ struct ChatToolDetailSheet: View {
             < ChatOutputLimits.pageLines
     }
 }
-#endif

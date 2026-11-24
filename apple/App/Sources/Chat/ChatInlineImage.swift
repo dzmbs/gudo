@@ -1,4 +1,3 @@
-#if os(iOS)
 import CoreGraphics
 import DesignSystem
 import Foundation
@@ -51,7 +50,7 @@ struct ChatInlineImage: View {
                 } icon: {
                     Image(systemName: failed ? "photo.badge.exclamationmark" : "photo")
                 }
-                .font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+                .font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
                 .padding(DS.Space.m)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DS.Palette.sidebar, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
@@ -67,4 +66,3 @@ struct ChatInlineImage: View {
 
     private var name: String { (path as NSString).lastPathComponent }
 }
-#endif

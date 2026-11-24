@@ -27,7 +27,7 @@ final class ChatParagraphMetrics {
               block.text.runs.allSatisfy({ $0.attributes == AttributeContainer() }) else { return nil }
         let text = String(block.text.characters)
         guard !text.isEmpty, text.utf8.allSatisfy({ (32...126).contains($0) }) else { return nil }
-        let font = DS.Font.prose.resolve(in: environment.fontResolutionContext)
+        let font = ChatFont.prose.resolve(in: environment.fontResolutionContext)
         let available = ChatReadingColumn.textWidth(in: width)
         guard available > 0, let lines = lineCount(text, font: font.ctFont, width: available) else { return nil }
         let key = Key(lines: lines, topSpacing: topSpacing, font: font, scale: environment.displayScale,

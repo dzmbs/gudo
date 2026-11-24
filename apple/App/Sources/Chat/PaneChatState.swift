@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import HostKit
 import Observation
@@ -53,7 +52,11 @@ final class PaneChatState {
         guard let model, model.error == nil else { return [] }
         return model.frame.capabilities
     }
+    #if canImport(UIKit)
     @ObservationIgnored weak var controller: ChatViewController?
+    #else
+    @ObservationIgnored weak var controller: ChatTranscriptController?
+    #endif
     @ObservationIgnored private weak var hub: DaemonWorkspace?
     @ObservationIgnored private var actionEpoch = UUID()
 
@@ -190,7 +193,7 @@ final class PaneChatState {
 
     @discardableResult
     func showTerminal(commandMark: UInt64?, terminal: Pane) -> Bool {
-        guard terminal.view.markedTextRange == nil, show(.terminal, terminal: terminal) else { return false }
+        guard !terminal.isComposingText, show(.terminal, terminal: terminal) else { return false }
         if let commandMark, PaneCommandMarks.of(terminal)?.reveal(command: commandMark) != true {
             terminalNotice = .unavailableCommand(commandMark)
         }
@@ -210,4 +213,3 @@ final class PaneChatState {
         return true
     }
 }
-#endif

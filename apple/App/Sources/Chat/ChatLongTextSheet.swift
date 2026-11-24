@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import HostKit
 import SwiftUI
@@ -24,7 +23,7 @@ struct ChatLongTextSheet: View {
             ))
             .padding(.top, DS.Space.l)
             .background(DS.Palette.base).foregroundStyle(DS.Palette.text)
-            .navigationTitle(ChatLongText.title(longText.role)).navigationBarTitleDisplayMode(.inline)
+            .navigationTitle(ChatLongText.title(longText.role)).toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Terminal", systemImage: "terminal", action: openTerminal)
@@ -39,4 +38,3 @@ struct ChatLongTextSheet: View {
         .onDisappear { reader.cancel() }
     }
 }
-#endif

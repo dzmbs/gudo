@@ -1,4 +1,3 @@
-#if os(iOS)
 import SwiftUI
 
 /// A table's cells, row by row, with a rule (`chatTableRule()`) between rows: each column as
@@ -89,4 +88,3 @@ extension View {
     /// Marks a view in a `ChatTableGrid` as the rule between two rows.
     func chatTableRule() -> some View { layoutValue(key: ChatTableRule.self, value: true) }
 }
-#endif

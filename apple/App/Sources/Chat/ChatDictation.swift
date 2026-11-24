@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import Observation
 import VoiceKit
@@ -126,4 +125,3 @@ private final class ChatDictationTarget: DictationTarget {
 
     func dictationFailed(_ error: VoiceError) { failed(error) }
 }
-#endif

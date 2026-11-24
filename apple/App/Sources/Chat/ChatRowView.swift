@@ -1,8 +1,6 @@
-#if os(iOS)
 import DesignSystem
 import HostKit
 import SwiftUI
-import UIKit
 
 struct ChatRowActions {
     var supportsDiffs = true
@@ -18,6 +16,13 @@ struct ChatRowActions {
     var loadImage: ChatImageLoader?
     /// The agent's folder: paths inside it read relative to it.
     var workingDirectory: String?
+
+    /// Whether rows would draw the same with these actions: closures are not compared.
+    func isEquivalent(to other: ChatRowActions) -> Bool {
+        supportsDiffs == other.supportsDiffs && readsToolDetails == other.readsToolDetails
+            && (resend == nil) == (other.resend == nil) && loadImage === other.loadImage
+            && workingDirectory == other.workingDirectory
+    }
 }
 
 struct ChatRowView: View {
@@ -45,16 +50,16 @@ struct ChatRowView: View {
             .foregroundStyle(DS.Palette.text)
             .buttonStyle(ChatRowButtonStyle())
             .contextMenu {
-                Button(copyTitle, systemImage: "doc.on.doc") { UIPasteboard.general.string = plainText }
+                Button(copyTitle, systemImage: "doc.on.doc") { Pasteboard.copy(plainText) }
                 Button(selectionTitle, systemImage: "text.cursor") { actions.selectText(plainText) }
                 if case .item(let item) = row.content, case .tool(let tool) = item.body {
                     if !tool.input.isEmpty, let output = tool.output, !output.preview.isEmpty {
-                        Button("Copy input") { UIPasteboard.general.string = tool.input }
-                        Button("Copy output preview") { UIPasteboard.general.string = output.preview }
+                        Button("Copy input") { Pasteboard.copy(tool.input) }
+                        Button("Copy output preview") { Pasteboard.copy(output.preview) }
                     }
                 }
                 if case .markdown(let block) = row.content, !usesRawMarkdownSelection {
-                    Button("Copy as Markdown") { UIPasteboard.general.string = block.source }
+                    Button("Copy as Markdown") { Pasteboard.copy(block.source) }
                 }
                 Button("Show in Terminal", systemImage: "terminal") {
                     if case .item(let item) = row.content, case .tool(let tool) = item.body {
@@ -76,9 +81,9 @@ struct ChatRowView: View {
         case .omitted:
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 Text(verbatim: ChatRenderLimits.omittedMessage)
-                    .font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+                    .font(ChatFont.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
                 Button("Open Terminal") { actions.showTerminal(nil) }
-                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                    .font(ChatFont.caption).frame(minHeight: DS.Size.touchTarget)
             }
         }
     }
@@ -86,18 +91,18 @@ struct ChatRowView: View {
     @ViewBuilder private func markdown(_ block: ChatMarkdownBlock) -> some View {
         switch block.kind {
         case .paragraph:
-            inlineCode(block.text).font(DS.Font.prose).lineSpacing(DS.Space.badgeV)
+            inlineCode(block.text).font(ChatFont.prose).lineSpacing(DS.Space.badgeV)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
             Text(block.text)
-                .font(level == 1 ? DS.Font.proseTitle : level == 2 ? DS.Font.title : DS.Font.proseHeading)
+                .font(level == 1 ? ChatFont.proseTitle : level == 2 ? ChatFont.title : ChatFont.proseHeading)
                 .padding(.top, DS.Space.s)
                 .fixedSize(horizontal: false, vertical: true)
         case .quote:
             HStack(alignment: .top, spacing: DS.Space.m) {
                 RoundedRectangle.rounded(DS.Radius.chip).fill(DS.Palette.border)
                     .frame(width: DS.Size.proseQuoteRule)
-                inlineCode(block.text).font(DS.Font.prose).foregroundStyle(DS.Palette.textSecondary)
+                inlineCode(block.text).font(ChatFont.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .list:
             VStack(alignment: .leading, spacing: DS.Space.s) {
@@ -109,7 +114,7 @@ struct ChatRowView: View {
                     }
                     .padding(.leading, CGFloat(min(line.depth, Self.maximumIndentationDepth)) * DS.Space.l)
                 }
-            }.font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
+            }.font(ChatFont.prose).fixedSize(horizontal: false, vertical: true)
         case .code(let language):
             if let code = block.code {
                 ChatCodeBlock(code: code, language: language) { actions.selectText(code.text) }
@@ -120,13 +125,13 @@ struct ChatRowView: View {
                           available: rowWidth > 0 ? ChatReadingColumn.textWidth(in: rowWidth) : .infinity)
                 if block.hasOmittedContent {
                     Button("Open full table") { actions.selectText(block.source) }
-                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                        .font(ChatFont.caption).frame(minHeight: DS.Size.touchTarget)
                 }
             }
         case .separator:
             Hairline(style: DS.Palette.separator).padding(.vertical, DS.Space.s)
         case .plain:
-            Text(block.text).font(DS.Font.literal).fixedSize(horizontal: false, vertical: true)
+            Text(block.text).font(ChatFont.literal).fixedSize(horizontal: false, vertical: true)
         case .image(let path):
             ChatInlineImage(path: path, height: ChatImageBox.height, loader: actions.loadImage)
         }
@@ -136,7 +141,7 @@ struct ChatRowView: View {
         switch item.body {
         case .user(let user): userContent(item, user: user)
         case .assistant(let assistant):
-            Text(verbatim: assistant.text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: assistant.text).font(ChatFont.prose).fixedSize(horizontal: false, vertical: true)
         case .tool(let tool): toolContent(item, tool: tool)
         case .thinking(let thinking): thinkingContent(thinking)
         case .plan(let plan): planContent(plan)
@@ -149,7 +154,7 @@ struct ChatRowView: View {
     private func userContent(_ item: TimelineItem, user: TimelineUser) -> some View {
         VStack(alignment: .trailing, spacing: DS.Space.s) {
             if user.queued {
-                Label("Queued", systemImage: "clock").font(DS.Font.caption)
+                Label("Queued", systemImage: "clock").font(ChatFont.caption)
                     .foregroundStyle(DS.Palette.textSecondary)
             }
             let images = ChatImages.paths(attachments: user.attachments).prefix(4)
@@ -166,17 +171,17 @@ struct ChatRowView: View {
                 promptFooter(item, text: user.text, canResend: !user.queued && row.preview == nil)
             }
             if row.preview != nil {
-                Button("Read full prompt") { actions.selectText(user.text) }.font(DS.Font.caption)
+                Button("Read full prompt") { actions.selectText(user.text) }.font(ChatFont.caption)
             }
             ForEach(Array(user.attachments.filter { !images.contains($0.path) }.prefix(12).enumerated()), id: \.offset) { _, attachment in
                 Label((attachment.path as NSString).lastPathComponent, systemImage: "paperclip")
-                    .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                    .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1).truncationMode(.middle)
             }
             if user.attachments.count > 12 {
                 Button("View all \(user.attachments.count) attachments") {
                     actions.selectText(user.attachments.map(\.path).joined(separator: "\n"))
-                }.font(DS.Font.caption)
+                }.font(ChatFont.caption)
             }
         }.frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, DS.Space.xxxl)
@@ -185,7 +190,7 @@ struct ChatRowView: View {
     /// A prompt on a light bubble: the ink at the sidebar strength on dark chrome, a step deeper
     /// on light chrome, where 5 % barely shows on paper.
     private func bubble(_ text: String) -> some View {
-        Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
+        Text(verbatim: text).font(ChatFont.prose).fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, DS.Space.l).padding(.vertical, DS.Space.m)
             .background(chrome.scheme == .light ? DS.Palette.raised : DS.Palette.sidebar,
                         in: .rect(cornerRadius: DS.Radius.card, style: .continuous))
@@ -204,13 +209,13 @@ struct ChatRowView: View {
                 }
             }
             .foregroundStyle(DS.Palette.textSecondary)
-            footerButton("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = text }
+            footerButton("Copy", systemImage: "doc.on.doc") { Pasteboard.copy(text) }
             if canResend, let resend = actions.resend {
                 footerButton("Send again", systemImage: "arrow.clockwise") { resend(text) }
                     .accessibilityIdentifier("chat-resend")
             }
         }
-        .font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+        .font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
         .frame(height: DS.Size.touchTarget)
         .padding(.top, -DS.Space.m).padding(.bottom, -DS.Space.s)
         .buttonStyle(.plain)
@@ -225,16 +230,16 @@ struct ChatRowView: View {
     }
 
     private var fromTerminal: some View {
-        Text("From Terminal").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+        Text("From Terminal").font(ChatFont.captionDetail).foregroundStyle(DS.Palette.textTertiary)
     }
 
     private func thinkingContent(_ thinking: TimelineThinking) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {
             thinkingHeader(ChatItemPresentation.thinkingTitle(thinking), hasText: ChatItemPresentation.hasThinkingText(thinking))
             if isExpanded, ChatItemPresentation.hasThinkingText(thinking), let text = thinking.text {
-                Text(verbatim: row.preview ?? text).font(DS.Font.proseSecondary)
+                Text(verbatim: row.preview ?? text).font(ChatFont.proseSecondary)
                     .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
-                if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(DS.Font.caption) }
+                if row.preview != nil { Button("Read all") { actions.selectText(text) }.font(ChatFont.caption) }
             }
         }
     }
@@ -244,11 +249,11 @@ struct ChatRowView: View {
             HStack(spacing: DS.Space.xs) {
                 Text(title)
                 if hasText {
-                    Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                    Image(systemName: "chevron.right").font(ChatFont.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 }
                 Spacer(minLength: DS.Space.s)
-            }.font(DS.Font.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
+            }.font(ChatFont.proseSecondary).foregroundStyle(DS.Palette.textSecondary)
                 .frame(minHeight: DS.Size.touchTarget)
         }.buttonStyle(ChatRowButtonStyle()).disabled(!hasText)
             .accessibilityValue(hasText ? (isExpanded ? "Expanded" : "Collapsed") : "")
@@ -267,12 +272,12 @@ struct ChatRowView: View {
             VStack(alignment: .leading, spacing: DS.Space.gap10) {
                 thinkingHeader("Thinking", hasText: !text.isEmpty)
                 if isExpanded, !text.isEmpty {
-                    Text(verbatim: text).font(DS.Font.proseSecondary)
+                    Text(verbatim: text).font(ChatFont.proseSecondary)
                         .foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         case .known(.assistant), .unknown:
-            Text(verbatim: text).font(DS.Font.prose).fixedSize(horizontal: false, vertical: true)
+            Text(verbatim: text).font(ChatFont.prose).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -287,26 +292,26 @@ struct ChatRowView: View {
                 Text(verbatim: ChatLongText.previewNote(longText.content))
             }
         }
-        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+        .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
         .frame(maxWidth: .infinity, alignment: alignment)
     }
 
     private func planContent(_ plan: TimelinePlan) -> some View {
         let entries = row.planPreview?.entries ?? plan.entries
         return VStack(alignment: .leading, spacing: DS.Space.m) {
-            Label("Plan", systemImage: "checklist").font(DS.Font.proseSecondaryEmphasis)
+            Label("Plan", systemImage: "checklist").font(ChatFont.proseSecondaryEmphasis)
             ForEach(Array(entries.prefix(20).enumerated()), id: \.offset) { _, entry in
                 HStack(alignment: .firstTextBaseline, spacing: DS.Space.gap10) {
                     Image(systemName: entry.status == .known(.completed) ? "checkmark.circle.fill"
                         : entry.status == .known(.inProgress) ? "circle.dotted" : "circle")
                         .foregroundStyle(entry.status == .known(.completed) ? DS.Palette.done : DS.Palette.textSecondary)
                     Text(verbatim: entry.text).strikethrough(entry.status == .known(.completed))
-                }.font(DS.Font.proseSecondary)
+                }.font(ChatFont.proseSecondary)
             }
             if row.planPreview != nil || plan.entries.count > 20 {
                 Button("Read full plan") {
                     actions.selectText(plan.entries.map(\.text).joined(separator: "\n"))
-                }.font(DS.Font.caption)
+                }.font(ChatFont.caption)
             }
         }.padding(DS.Space.l).background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.pane, style: .continuous))
     }
@@ -319,8 +324,8 @@ struct ChatRowView: View {
             } icon: {
                 Image(systemName: notice.kind == .known(.error) ? "exclamationmark.circle" : "info.circle")
                     .foregroundStyle(notice.kind == .known(.error) ? DS.Palette.error : DS.Palette.info)
-            }.font(DS.Font.proseSecondary)
-            if row.preview != nil { Button("Read all") { actions.selectText(notice.text) }.font(DS.Font.caption) }
+            }.font(ChatFont.proseSecondary)
+            if row.preview != nil { Button("Read all") { actions.selectText(notice.text) }.font(ChatFont.caption) }
         }
     }
 
@@ -331,7 +336,7 @@ struct ChatRowView: View {
             if actions.supportsDiffs {
                 Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(item.turn)) }
             }
-        }.font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
+        }.font(ChatFont.meta).foregroundStyle(DS.Palette.textSecondary)
     }
 
     private func toolGroupContent(_ group: ChatToolGroup) -> some View {
@@ -357,12 +362,12 @@ struct ChatRowView: View {
                         Text(verbatim: "+\(group.additions)").foregroundStyle(DS.Palette.done)
                         Text(verbatim: "−\(group.deletions)").foregroundStyle(DS.Palette.error)
                     }
-                    .font(DS.Font.meta).fixedSize()
+                    .font(ChatFont.meta).fixedSize()
                 }
-                Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                Image(systemName: "chevron.right").font(ChatFont.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 Spacer(minLength: 0)
-            }.font(DS.Font.proseSecondary).frame(minHeight: DS.Size.touchTarget)
+            }.font(ChatFont.proseSecondary).frame(minHeight: DS.Size.touchTarget)
         }
         .buttonStyle(ChatRowButtonStyle())
         .accessibilityLabel(group.summary)
@@ -380,7 +385,7 @@ struct ChatRowView: View {
                     .lineLimit(1).truncationMode(.middle)
             }
         }
-        .font(DS.Font.proseSecondary)
+        .font(ChatFont.proseSecondary)
     }
 
     private func turnSummaryContent(_ summary: ChatTurnSummary) -> some View {
@@ -398,10 +403,10 @@ struct ChatRowView: View {
                     Text(verbatim: "(" + outcome + ")").foregroundStyle(DS.Palette.error)
                         .lineLimit(1).fixedSize()
                 }
-                Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                Image(systemName: "chevron.right").font(ChatFont.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                     .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 Spacer(minLength: 0)
-            }.font(DS.Font.proseSecondary).frame(minHeight: DS.Size.touchTarget)
+            }.font(ChatFont.proseSecondary).frame(minHeight: DS.Size.touchTarget)
         }
         .buttonStyle(ChatRowButtonStyle())
         .accessibilityLabel(summary.label)
@@ -424,7 +429,7 @@ struct ChatRowView: View {
                 Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(footer.turn)) }
             }
         }
-        .font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
+        .font(ChatFont.meta).foregroundStyle(DS.Palette.textSecondary)
         .padding(.leading, -DS.Space.m)
     }
 
@@ -448,10 +453,10 @@ struct ChatRowView: View {
                     }
                     .fixedSize()
                     Image(systemName: "chevron.right")
-                        .font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                        .font(ChatFont.captionDetail).foregroundStyle(DS.Palette.textTertiary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     Spacer(minLength: 0)
-                }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
+                }.font(ChatFont.meta).frame(minHeight: DS.Size.touchTarget)
             }.buttonStyle(ChatRowButtonStyle())
                 .accessibilityLabel(line.text)
                 .accessibilityValue([ChatItemPresentation.toolStatus(tool), tool.durationMs.map(duration),
@@ -461,13 +466,13 @@ struct ChatRowView: View {
             }
             if isExpanded {
                 if let input = ChatItemPresentation.toolInputSummary(tool) {
-                    Text(verbatim: input).font(DS.Font.literalSmall)
+                    Text(verbatim: input).font(ChatFont.literalSmall)
                         .foregroundStyle(DS.Palette.textSecondary).lineLimit(8)
                 }
                 if let output = tool.output, !output.preview.isEmpty {
                     ScrollView(.horizontal) {
                         Text(verbatim: output.preview.split(separator: "\n", omittingEmptySubsequences: false).suffix(12).joined(separator: "\n"))
-                            .font(DS.Font.literalSmall).foregroundStyle(terminalTheme.foreground)
+                            .font(ChatFont.literalSmall).foregroundStyle(terminalTheme.foreground)
                             .fixedSize(horizontal: true, vertical: true).padding(DS.Space.m)
                     }
                     .scrollIndicators(.hidden)
@@ -477,7 +482,7 @@ struct ChatRowView: View {
                 if let preview = row.inlineDiff { inlineDiff(preview) }
                 if tool.kind == .known(.task) {
                     Text("Nested subagent transcripts are not available in this Chat. Use Terminal.")
-                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                        .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                 }
                 HStack {
                     if actions.readsToolDetails {
@@ -490,7 +495,7 @@ struct ChatRowView: View {
                     }
                     Spacer()
                     Button("Show in Terminal", systemImage: "terminal") { actions.showTerminal(tool.commandMark) }
-                }.font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                }.font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
             }
         }
         .accessibilityElement(children: .contain)
@@ -498,7 +503,7 @@ struct ChatRowView: View {
 
     private func inlineDiff(_ preview: ChatInlineDiff) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("Recorded diff preview").font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+            Text("Recorded diff preview").font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
             ScrollView(.horizontal) {
                 VStack(spacing: 0) {
                     ForEach(preview.file.hunks.first?.lines ?? []) { line in
@@ -591,7 +596,7 @@ private struct ChatToolGlyph: View {
 
     var body: some View {
         Image(systemName: symbol)
-            .font(DS.Font.caption)
+            .font(ChatFont.caption)
             .frame(width: DS.Space.l)
             .foregroundStyle(isFailed ? DS.Palette.error : DS.Palette.textTertiary)
             .accessibilityHidden(true)
@@ -606,7 +611,7 @@ struct ChatCopyButton: View {
 
     var body: some View {
         Button {
-            UIPasteboard.general.string = text
+            Pasteboard.copy(text)
             copied = true
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
@@ -632,7 +637,7 @@ private struct ChatRowButtonStyle: ButtonStyle {
             .background(RoundedRectangle.rounded(DS.Radius.control)
                 .fill(DS.Palette.selection.opacity(configuration.isPressed ? 1 : 0)))
             .animation(reduceMotion ? nil : DS.Motion.micro, value: configuration.isPressed)
-            .hoverEffect(.highlight)
+            .chatHoverHighlight()
     }
 }
 
@@ -682,7 +687,7 @@ private struct ChatTable: View {
                 }
             }
         }
-        .font(DS.Font.proseSecondary)
+        .font(ChatFont.proseSecondary)
     }
 }
 
@@ -729,15 +734,13 @@ private struct ChatCodeBlock: View {
     @State private var edges = ChatScrollEdges()
 
     private var lineHeight: CGFloat {
-        let font = TerminalFont.regular.flatMap { UIFont(name: $0, size: fontSize) }
-            ?? .monospacedSystemFont(ofSize: fontSize, weight: .regular)
-        return ceil((font.lineHeight + DS.Space.xxs) * scale)
+        ceil((ChatCodeMetrics.lineHeight(size: fontSize) + DS.Space.xxs) * scale)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(verbatim: language?.isEmpty == false ? language ?? "" : "code")
-                .font(DS.Font.literalSmall).foregroundStyle(DS.Palette.textSecondary)
+                .font(ChatFont.literalSmall).foregroundStyle(DS.Palette.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .trailing) { copyButton }
                 .padding(.leading, DS.Space.m).padding(.top, DS.Space.m)
@@ -757,7 +760,7 @@ private struct ChatCodeBlock: View {
             if code.isTruncated {
                 Hairline(style: DS.Palette.hairline)
                 Button(code.lineCount == 1 ? "Show full code" : "Show all \(code.lineCount) lines", action: showAll)
-                    .font(DS.Font.caption).padding(.horizontal, DS.Space.m)
+                    .font(ChatFont.caption).padding(.horizontal, DS.Space.m)
                     .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
                     .foregroundStyle(DS.Palette.textSecondary).background(DS.Palette.sidebar)
             }
@@ -769,9 +772,9 @@ private struct ChatCodeBlock: View {
     /// A 44 pt target centred on the label's line, reaching over the code's first line so the
     /// label can sit close above the code.
     private var copyButton: some View {
-        Button { UIPasteboard.general.string = code.text } label: {
+        Button { Pasteboard.copy(code.text) } label: {
             Label("Copy", systemImage: "doc.on.doc").labelStyle(.iconOnly)
-                .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                 .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
                 .contentShape(.rect)
         }
@@ -779,4 +782,3 @@ private struct ChatCodeBlock: View {
         .accessibilityIdentifier("chat-code-copy")
     }
 }
-#endif

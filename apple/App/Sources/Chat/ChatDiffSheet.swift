@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import SwiftUI
 
@@ -12,6 +11,11 @@ struct ChatDiffSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.terminalTheme) private var theme
+    #if os(iOS)
+    private static let layoutPlacement = ToolbarItemPlacement.topBarTrailing
+    #else
+    private static let layoutPlacement = ToolbarItemPlacement.primaryAction
+    #endif
     @Environment(\.chrome) private var chrome
     @Environment(\.dynamicTypeSize) private var dynamicType
     @Environment(\.colorScheme) private var colorScheme
@@ -40,13 +44,13 @@ struct ChatDiffSheet: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if $0 > 0 { width = $0 } }
             .background(theme.background)
             .safeAreaInset(edge: .bottom, spacing: 0) { recordedControls }
-            .navigationTitle("Chat Changes").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Chat Changes").toolbarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Terminal", systemImage: "terminal", action: openTerminal)
                         .frame(minHeight: DS.Size.touchTarget)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: Self.layoutPlacement) {
                     Menu("Layout", systemImage: "rectangle.split.2x1") {
                         Picker("Layout", selection: $layout) {
                             Text("Automatic").tag(DiffLayout.automatic)
@@ -163,4 +167,3 @@ struct ChatDiffSheet: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(DS.Space.l)
     }
 }
-#endif

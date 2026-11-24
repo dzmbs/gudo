@@ -33,13 +33,13 @@ struct ChatContextMeter: View {
 
     private var details: some View {
         VStack(alignment: .leading, spacing: DS.Space.xs) {
-            Text("Context \(usage.percent)% full").font(DS.Font.rowTitleEmphasis)
-            Text(verbatim: usage.amount + " tokens").font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
+            Text("Context \(usage.percent)% full").font(ChatFont.proseEmphasis)
+            Text(verbatim: usage.amount + " tokens").font(ChatFont.subtitle).foregroundStyle(DS.Palette.textSecondary)
             if let output = usage.lastOutput {
                 Text(verbatim: "Last turn wrote " + ChatContextUsage.compact(output) + " tokens")
-                    .font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
+                    .font(ChatFont.subtitle).foregroundStyle(DS.Palette.textSecondary)
             }
-            Text("As of the last finished turn.").font(DS.Font.caption).foregroundStyle(DS.Palette.textTertiary)
+            Text("As of the last finished turn.").font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
         }
         .foregroundStyle(DS.Palette.text)
         .padding(DS.Space.l)

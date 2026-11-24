@@ -1,8 +1,11 @@
-#if os(iOS)
 import CoreText
 import DesignSystem
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 struct ChatSelectedText: Identifiable {
     let id = UUID()
@@ -19,7 +22,7 @@ struct ChatSelectedTextSheet: View {
         NavigationStack {
             ChatTextSelection(selection: selection)
                 .background(DS.Palette.base)
-                .navigationTitle(selection.title).navigationBarTitleDisplayMode(.inline)
+                .navigationTitle(selection.title).toolbarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Terminal", systemImage: "terminal", action: openTerminal)
@@ -34,6 +37,7 @@ struct ChatSelectedTextSheet: View {
 }
 
 /// One native range selector per presented sheet, never a text view in every transcript cell.
+#if canImport(UIKit)
 struct ChatTextSelection: UIViewRepresentable {
     let selection: ChatSelectedText
 
@@ -67,6 +71,43 @@ struct ChatTextSelection: UIViewRepresentable {
         let accent = UIColor(context.environment.chrome.accentColor)
         if view.textColor != ink { view.textColor = ink }
         if view.tintColor != accent { view.tintColor = accent }
+    }
+}
+#else
+struct ChatTextSelection: NSViewRepresentable {
+    let selection: ChatSelectedText
+
+    final class Coordinator { var selection: UUID? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        guard let view = scroll.documentView as? NSTextView else { return scroll }
+        view.isEditable = false
+        view.isSelectable = true
+        view.isRichText = false
+        view.drawsBackground = false
+        view.textContainerInset = NSSize(width: DS.Space.l, height: DS.Space.l)
+        view.textContainer?.lineFragmentPadding = 0
+        view.setAccessibilityIdentifier("chat-selected-text")
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard let view = scroll.documentView as? NSTextView else { return }
+        // The snapshot is immutable: replacing its string would reset the reader's selection.
+        if context.coordinator.selection != selection.id {
+            view.string = selection.text
+            context.coordinator.selection = selection.id
+        }
+        let resolved = DS.Font.literal.resolve(in: context.environment.fontResolutionContext)
+        let font = NSFont.monospacedSystemFont(ofSize: CTFontGetSize(resolved.ctFont), weight: .regular)
+        if view.font != font { view.font = font }
+        let ink = NSColor(context.environment.chrome.text)
+        if view.textColor != ink { view.textColor = ink }
+        view.insertionPointColor = NSColor(context.environment.chrome.accentColor)
     }
 }
 #endif

@@ -155,11 +155,7 @@ struct MultiplayerPaneOverlay: View {
     let isFocused: Bool
 
     private var showsOverlayApproval: Bool {
-        #if os(iOS)
         workspace.pane(pane)?.chat?.presentation != .chat
-        #else
-        true
-        #endif
     }
 
     var body: some View {

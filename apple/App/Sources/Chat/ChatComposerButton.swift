@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import SwiftUI
 
@@ -22,7 +21,7 @@ struct ChatComposerButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(DS.Font.rowTitleEmphasis)
+            .font(ChatFont.proseEmphasis)
             .imageScale(weight == .glyph ? .medium : .small)
             .foregroundStyle(glyph)
             .frame(width: DS.Size.proseSendDisc, height: DS.Size.proseSendDisc)
@@ -33,7 +32,7 @@ struct ChatComposerButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? DS.Opacity.inactiveHover : 1)
             .animation(DS.Motion.micro, value: configuration.isPressed)
             .animation(DS.Motion.micro, value: isEnabled)
-            .hoverEffect(.highlight)
+            .chatHoverHighlight()
     }
 
     private var disc: ChromeStyle? {
@@ -53,4 +52,3 @@ struct ChatComposerButtonStyle: ButtonStyle {
         }
     }
 }
-#endif

@@ -31,6 +31,11 @@ nonisolated enum ChatRowSpacing {
         }
     }
 
+    /// Every row's top spacing, in order.
+    static func tops(of rows: [ChatRow]) -> [CGFloat] {
+        rows.indices.map { index in top(of: rows[index], below: index > 0 ? rows[index - 1] : nil) }
+    }
+
     static func top(of row: ChatRow, below previous: ChatRow?) -> CGFloat {
         guard let previous else { return 0 }
         let above = role(of: previous), below = role(of: row)

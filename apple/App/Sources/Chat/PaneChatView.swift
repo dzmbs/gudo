@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import HostKit
 import GudoCore
@@ -29,7 +28,12 @@ struct PaneChatView<Terminal: View>: View {
     @State private var confirmationPresented = false
     @State private var draftSelection: TextSelection?
     @FocusState private var draftFocused: Bool
+    #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    private var isCompact: Bool { horizontalSizeClass == .compact }
+    #else
+    private let isCompact = false
+    #endif
     @AppStorage(ChatPreferences.Key.sendWhileWorking) private var sendWhileWorkingSetting = ChatPreferences.SendWhileWorking.queue.rawValue
     @AppStorage(ChatPreferences.Key.collapsesTurns) private var collapsesTurns = true
     @State private var selectedPhoto: PhotosPickerItem?
@@ -42,11 +46,7 @@ struct PaneChatView<Terminal: View>: View {
                 .allowsHitTesting(state.presentation == .terminal)
                 .accessibilityHidden(state.presentation != .terminal)
             if let model = state.model {
-                NativeChatView(model: model, frame: model.frame, expanded: model.expanded, actions: actions,
-                               isActive: state.presentation == .chat, isWorking: working,
-                               onControllerReady: { state.controller = $0 }) {
-                    composer
-                }
+                transcript(model)
                 .opacity(state.presentation == .chat ? 1 : 0)
                 .allowsHitTesting(state.presentation == .chat)
                 .accessibilityHidden(state.presentation != .chat)
@@ -55,6 +55,14 @@ struct PaneChatView<Terminal: View>: View {
                 emptyState(ChatEmptyState(isLoading: state.model?.isLoading ?? true, session: state.model?.frame.session,
                                           agent: state.agent, terminalWait: terminalWait))
             }
+        }
+    }
+
+    private func transcript(_ model: TimelineModel) -> some View {
+        NativeChatView(model: model, frame: model.frame, expanded: model.expanded, actions: actions,
+                       isActive: state.presentation == .chat, isWorking: working,
+                       onControllerReady: { state.controller = $0 }) {
+            composer
         }
     }
 
@@ -71,7 +79,7 @@ struct PaneChatView<Terminal: View>: View {
                     }
                 }
             } else {
-                Text(empty.title).font(DS.Font.rowSubtitle).foregroundStyle(DS.Palette.textSecondary)
+                Text(empty.title).font(ChatFont.subtitle).foregroundStyle(DS.Palette.textSecondary)
                     .modifier(ChatDelayedAppearance())
             }
         }
@@ -100,7 +108,12 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.model?.frame.session?.title, initial: true) { _, title in
             if let title, !title.isEmpty { state.sessionTitle = title }
         }
-        .onChange(of: state.presentation) { _, presentation in if presentation == .chat { drainQueue() } }
+        .onChange(of: state.presentation) { _, presentation in
+            if presentation == .chat { drainQueue() }
+            #if os(macOS)
+            draftFocused = presentation == .chat && composerTakesText
+            #endif
+        }
         .onChange(of: state.actionContext) { _, _ in
             state.cancelPreparedActions()
             state.dictation.cancelIfStale()
@@ -131,7 +144,12 @@ struct PaneChatView<Terminal: View>: View {
         .onChange(of: state.model?.error) { _, error in
             if error != nil { state.show(.terminal, terminal: pane, persistence: .transient) }
         }
-        .sheet(item: $state.detail, content: detailSheet)
+        .sheet(item: $state.detail) { detail in
+            detailSheet(detail)
+                #if os(macOS)
+                .frame(minWidth: DS.Size.proseReadingWidth, minHeight: Self.detailSheetHeight)
+                #endif
+        }
         .photosPicker(isPresented: $photoPickerPresented, selection: $selectedPhoto, matching: .images,
                       preferredItemEncoding: .current)
         .onChange(of: selectedPhoto) { _, item in
@@ -222,7 +240,7 @@ struct PaneChatView<Terminal: View>: View {
             } else {
                 if state.capabilities.contains(.read) {
                     Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
-                        .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                        .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                         .accessibilityIdentifier("chat-read-only")
                 }
                 if let action = primaryAction, action == .stop {
@@ -268,7 +286,8 @@ struct PaneChatView<Terminal: View>: View {
 
     private var draftField: some View {
         TextField("Message", text: $state.draft, selection: $draftSelection, prompt: Text(composerPrompt), axis: .vertical)
-            .font(DS.Font.prose).lineLimit(1...8)
+            .font(ChatFont.prose).lineLimit(1...8)
+            .textFieldStyle(.plain)
             .focused($draftFocused)
             .disabled(state.dictation.isActive || !composerTakesText)
             .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.gap10).padding(.bottom, DS.Space.xs)
@@ -280,13 +299,15 @@ struct PaneChatView<Terminal: View>: View {
     private var bottomRow: some View {
         HStack(spacing: 0) {
             leadingControl
-            if draftFocused, horizontalSizeClass == .compact {
+            #if os(iOS)
+            if draftFocused, isCompact {
                 Button { draftFocused = false } label: {
                     Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
                 }
                 .buttonStyle(ChatComposerButtonStyle(.glyph))
                 .accessibilityIdentifier("chat-hide-keyboard")
             }
+            #endif
             agentControls
             Spacer(minLength: 0)
             if let usage = ChatContextUsage(rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
@@ -298,11 +319,13 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     /// The agent's model, mode and effort. `ChatAgentControls` takes this place once it exists;
-    /// until then the session's chips show here.
-    private var agentControls: some View {
+    /// until then the session's chips show here on touch.
+    @ViewBuilder private var agentControls: some View {
+        #if os(iOS)
         ChatSessionChips(session: state.model?.frame.session,
                          canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
                          chooseModel: chooseModel)
+        #endif
     }
 
     /// Whether a message typed now could go: this device may prompt, and the agent is not stopped
@@ -312,7 +335,7 @@ struct PaneChatView<Terminal: View>: View {
     private var composerPrompt: String {
         if terminalWait != nil { return "Answer in Terminal first" }
         guard permitsSending else { return "You can watch, not send" }
-        return horizontalSizeClass == .compact ? "Message, @files, /commands"
+        return isCompact ? "Message, @files, /commands"
             : "Message the agent, tag @files, or use /commands and /skills"
     }
 
@@ -340,7 +363,7 @@ struct PaneChatView<Terminal: View>: View {
                 Button("Photo Library", systemImage: "photo.on.rectangle", action: choosePhoto)
                 Button("Choose File", systemImage: "folder", action: chooseFile)
                 Button("Paste Image", systemImage: "doc.on.clipboard", action: pasteImage)
-                    .disabled(!UIPasteboard.general.hasImages)
+                    .disabled(!Pasteboard.hasImage)
                 Divider()
                 Button("Commands", systemImage: "slash.circle", action: openCommands)
                     .keyboardShortcut("/", modifiers: .command)
@@ -371,12 +394,12 @@ struct PaneChatView<Terminal: View>: View {
     @ViewBuilder private var composerStatusLine: some View {
         if let message = composerStatus {
             HStack(spacing: DS.Space.xs) {
-                Text(message).font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                Text(message).font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                     .lineLimit(1).truncationMode(.tail)
                     .accessibilityIdentifier("chat-send-status")
                 if state.photos.isBusy {
                     Button("Cancel") { state.photos.cancel(); photoPickerPresented = false }
-                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
+                        .font(ChatFont.caption).frame(minHeight: DS.Size.touchTarget)
                 }
             }
             .motionTransition(.fade)
@@ -623,7 +646,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     func pasteImage() {
-        guard let data = UIPasteboard.general.image?.pngData(), beginAttaching() else { return }
+        guard let data = Pasteboard.imagePNG(), beginAttaching() else { return }
         let context = state.actionContext
         state.photos.load(in: state, keepsImages: keepsImages, photo: {
             try await Task.detached(priority: .userInitiated) { try ChatPhotoFile.prepare(data: data) }.value
@@ -658,6 +681,10 @@ struct PaneChatView<Terminal: View>: View {
             }.value
         }, source: { file in try await uploadPhoto(file, context: context) })
     }
+
+    #if os(macOS)
+    private static var detailSheetHeight: CGFloat { DS.Size.proseReadingWidth * 0.75 }
+    #endif
 
     static var attachmentsFolder: String {
         "Downloads/" + Brand.name.replacingOccurrences(of: " ", with: "-") + "-Attachments/"
@@ -821,7 +848,7 @@ struct PaneChatView<Terminal: View>: View {
 
     private func canEditDraft(_ context: PaneChatState.ActionContext) -> Bool {
         state.actionContext == context && state.presentation == .chat && permitsSending && !state.dictation.isActive
-            && approval?.hasBlockedRequest != true && pane.view.markedTextRange == nil && state.controller?.hasMarkedText != true
+            && approval?.hasBlockedRequest != true && !pane.isComposingText && state.controller?.hasMarkedText != true
     }
 
     private var actions: ChatRowActions {
@@ -908,4 +935,3 @@ struct PaneChatButton: View {
         .accessibilityIdentifier("pane-presentation")
     }
 }
-#endif

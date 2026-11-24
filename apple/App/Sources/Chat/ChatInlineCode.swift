@@ -1,4 +1,3 @@
-#if os(iOS)
 import DesignSystem
 import SwiftUI
 
@@ -73,7 +72,7 @@ nonisolated enum ChatInlineCode {
             }
             if !prose.characters.isEmpty { pieces.append(Piece(text: prose)); prose = AttributedString() }
             var attributes = run.attributes
-            attributes.font = DS.Font.literal
+            attributes.font = ChatFont.literal
             let characters = Array(text[run.range].characters)
             let keepsWhole = characters.count <= unbrokenLength
             for word in words(of: characters, keepsWhole: keepsWhole) {
@@ -140,4 +139,3 @@ struct ChatCodeFill: ViewModifier {
         if let fill { content.textRenderer(ChatCodeBackground(fill: fill)) } else { content }
     }
 }
-#endif
