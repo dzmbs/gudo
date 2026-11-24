@@ -616,7 +616,16 @@ gives up observation; official frames keep flowing either way. Messages over 8Mi
 from the server they leave a Terminal notice in Chat, and a turn they start or end is still read
 from a bounded outline (arrays emptied, strings over 1KiB blanked, at most 64KiB), so status and
 Send follow it. A skipped TUI message or binding reply closes observation. At most 256 timeline
-operations / 1MiB are queued. The projection handles user/assistant items, assistant deltas, command summaries and completed reasoning. It keeps at most
+operations / 1MiB are queued. The projection handles user messages (images the user attached
+as attachments), replies and their deltas, reasoning, commands, file changes, MCP and other tool
+calls, other agents Codex started or messaged, web searches, images the agent viewed, proposed
+plans, plan updates (`turn/plan/updated`, one Plan row per turn), compaction and review mode.
+A file change is an Edit row (Write when it only adds files) with each file's inline diff preview;
+its output pages every file's diff. A turn ends with a TurnEnd row: its duration and the tokens it
+used, from `thread/tokenUsage/updated` totals less those before it began (unknown for the first
+turn of a resumed thread). The latest request's context use and the model's window are kept for
+the agent's settings. A retried error shows Codex's message as a Retry notice; a failed turn shows
+the reason Codex gave. It keeps at most
 500 items and 768KiB of serialized bodies, forgetting the oldest. These limits bound what is
 pushed, never what is reachable: the rollout keeps the whole conversation (see Codex rollout
 below). Text over 64 KiB becomes `LongText`, and a command's output is an output reference
@@ -632,8 +641,9 @@ session cursor so a concurrently arriving delta cannot appear in both a snapshot
 append stream. Paging and late watches read captured or hydrated history; source/epoch
 changes invalidate stale reads. Since-join access is explicitly unavailable until original event
 time can be established safely: projection time cannot authorize buffered pre-join content. This
-source-specific scope check also precedes common watch and history delivery. Recorded file
-changes are not read yet: `TimelineToolDiff` answers that Chat does not show Codex file changes.
+source-specific scope check also precedes common watch and history delivery. `TimelineToolDiff`
+reads a file change's complete recorded diff from the rollout, within the common diff allowances.
+Stop also interrupts a turn that waits on an approval.
 Legacy terminal-only Codex launch and control behavior is unchanged when this
 opt-in producer is absent. Switching the TUI to resume/fork retires the old source until the exact
 correlated reply establishes a new projection epoch. Old rows remain frozen during this transition;
@@ -655,8 +665,9 @@ rollout record of its oldest saved item, so pages continue exactly below it with
 live item. Items not saved yet are newer and stay live only. Pages read the bounded 8 MiB window
 before the cursor, more windows when needed up to 64 MiB, and return up to 100 items within 1 MiB,
 back to the session record. Rollout items are shaped by the same code as live items and carry the
-same turn-scoped ids: user messages (injected context dropped), replies, reasoning and commands,
-one notice per turn for items Chat does not show, and interrupted or failed turn notices. A
+same turn-scoped ids: every item kind the live stream shows, one notice per turn for items Chat
+does not show, interrupted or failed turn notices with Codex's reason, and TurnEnd rows with the
+recorded duration (without token counts). Plans come from the recorded `update_plan` calls. A
 recorded rollback ends history there. A record over 8 MiB is passed over.
 
 Output references and `LongText` handles name the timeline item and, for items read from the
@@ -665,9 +676,8 @@ last 64 MiB; until Codex saves it, the read answers that it is not saved yet. A 
 exactly the item's full text: the reply, the user's text with attachment markers, the summary and
 content joined by line breaks, or the command's recorded output (Codex keeps 64 KiB of it).
 
-Rollouts also record MCP tool calls, file changes, image views and web searches. Chat shows them
-as tool rows (Mcp, Edit, Read, WebSearch) whose output is the call's text result or the recorded
-edits; the live stream still shows them as one notice per turn.
+Recorded items are converted to the app-server's shapes and shaped by the live code, so a row
+looks the same whether it streamed or was read back.
 
 ### Codex without the native path
 
@@ -812,13 +822,38 @@ interruptions. Older pages read the windows before a record boundary and look pa
 of calls they hold. Output and long-text handles name the record and item, so a read parses only
 that record. A native watch on the session folder wakes the reader.
 
-Send pastes into a pi the daemon launched, through the common prepare/admit path; a pi started by
-hand is read only. pi has no hooks, so its session file stands in for them: a send is **Confirmed**
-once pi records the same prompt within five seconds (else **Sent, not confirmed**), and anything pi
-records clears the draft as a Codex turn does (nothing typed since, or the last key Enter). A launch
-starts clean, keyed by its launch id until pi names its session, so the first send needs no
-confirmation either; text typed in Terminal since still does. There is no Stop, approval or
-since-join Chat. Images a user pasted into pi show as a note, since the session keeps no file for them.
+### pi's bridge
+
+A pi the daemon launches also loads a bridge extension the daemon writes to its state directory
+(`--extension <state>/pi-bridge.js`). Its terminal UI stays the user's; the extension runs inside
+that process and opens a JSON-lines connection on the hook socket, named by the pane id and the
+pane's token like a hook, checked with the peer's user. It reconnects with backoff, reading the
+endpoint file first, so the channel comes back after a restart or hand-off; a new connection
+replaces the pane's previous one. Lines are bounded to 8 MiB, queued requests to 64.
+
+pi reports its session (id, file, model, thinking level and the levels the model offers), its
+models, its slash commands (extensions, prompt templates and skills), context use, when a run
+starts and settles, and each assistant message's text and thinking deltas. The tail shows a
+streamed message as `live:<timestamp>:<block>` rows, appending deltas, until the session file
+records a message with the same timestamp; then those rows are removed and the recorded ones stay.
+An ended message pi never records is dropped after 30 seconds. The session names pi's model and
+its commands as `/name`.
+
+While the bridge is connected, Send goes to pi through it (`sendUserMessage`, steering a running
+turn, expanding `/command` templates) instead of pasting, and is **Confirmed** when pi accepts it;
+nothing reaches the terminal, so its draft stays as typed. Stop calls pi's abort for the run the
+bridge reported (a run start counts as the turn Stop may interrupt). Model and thinking-level
+changes go through `pi::config::PiConfig`, an `AgentConfigDriver`. Capabilities add STOP,
+STREAMING_DELTAS and THINKING while it is connected.
+
+Without the bridge (a pi started by hand, or an extension that failed to load), Send pastes into a
+pi the daemon launched, through the common prepare/admit path; a pi started by hand is read only.
+Its session file then stands in for hooks: a send is **Confirmed** once pi records the same prompt
+within five seconds (else **Sent, not confirmed**), and anything pi records clears the draft as a
+Codex turn does (nothing typed since, or the last key Enter). A launch starts clean, keyed by its
+launch id until pi names its session, so the first send needs no confirmation either; text typed in
+Terminal since still does. There is no Stop, approval or since-join Chat on this path. Images a user
+pasted into pi show as a note, since the session keeps no file for them.
 
 ## Native composer safety prerequisites
 
@@ -881,6 +916,15 @@ after that window; mismatch, concurrent typing and exit remain **Not confirmed, 
 Native request waits end after ten seconds on transport loss, without resend.
 The phone preserves an unconfirmed draft and blocks accidental reuse of that unchanged text; confirmed
 text clears only if the user has not edited the composer while awaiting the receipt.
+
+### Images
+
+`ChatSendImages` (request 75, `MoreDaemonFeatures::CHAT_IMAGES`, bit 5) is `ChatSend` with up to
+four PNG or JPEG images, inline up to 1 MiB each or uploaded blobs. The daemon writes them under
+`<state>/chat-images/<hash>.<ext>` before taking the input gate, then admits the send as usual. A
+native Codex gets them as `localImage` inputs of `turn/start` or `turn/steer`; a pi with its bridge
+gets them as image content. Other agents answer that images go through Terminal. Client-core
+`chat_send_images` uploads images over 1 MiB first.
 
 ## Scope and bounds
 
