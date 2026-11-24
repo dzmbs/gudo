@@ -674,6 +674,10 @@ pub enum ServerCtl {
     /// Every command restored panes offer to run again, to connections that sent
     /// [`ClientCtl::WatchRunAgain`]: the whole list each time it changes.
     RunAgainOffers(Vec<RunAgainOffer>),
+    /// A watched pane's agent controls changed, to connections that sent
+    /// [`WorkspaceRequest::AgentControlsWatch`](crate::WorkspaceRequest::AgentControlsWatch)
+    /// for it.
+    AgentControls(crate::AgentControls),
 }
 
 /// A command that was running in a pane when the daemon stopped (a reboot, a crash). The

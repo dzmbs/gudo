@@ -412,6 +412,22 @@ pub enum WorkspaceRequest {
         confirmed_revision: Option<u64>,
         images: Vec<crate::PngSource>,
     },
+    /// The pane agent's controls → [`WorkspaceResponse::AgentControls`], then
+    /// [`ServerCtl::AgentControls`](crate::ServerCtl::AgentControls) on every change. Needs
+    /// `MoreDaemonFeatures::AGENT_CONTROLS`.
+    AgentControlsWatch {
+        pane_id: PaneId,
+    },
+    /// Stops those pushes → [`WorkspaceResponse::Done`].
+    AgentControlsUnwatch {
+        pane_id: PaneId,
+    },
+    /// Changes the running agent's model, mode or effort (the fields given) →
+    /// [`WorkspaceResponse::AgentControls`]. Owner only.
+    SetAgentConfig {
+        pane_id: PaneId,
+        change: crate::AgentConfigValues,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].
@@ -494,6 +510,7 @@ pub enum WorkspaceResponse {
     ResolvedPaths(Vec<ResolvedPath>),
     /// `None`: the path is in no repository.
     RepoRoot(Option<String>),
+    AgentControls(crate::AgentControls),
 }
 
 /// A snapshot and the features of the adapter that produced it.

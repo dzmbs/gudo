@@ -69,6 +69,9 @@
 //!   [`Caps::DRIVE_ASKS`]; see [`drive`].
 //! - Agent accounts (several Claude Code / Codex sign-ins per host) are pushed as
 //!   [`ServerCtl::Accounts`] to owner clients with [`Caps::ACCOUNTS`]; see [`account`].
+//! - Chat's agent controls (model, permission mode, effort, questions and plans):
+//!   [`WorkspaceRequest::AgentControlsWatch`] → [`WorkspaceResponse::AgentControls`], then
+//!   pushes [`ServerCtl::AgentControls`]; see [`agent_control`].
 //! - Pushed without a request: [`ServerCtl::CommandMark`] (shell-integration command start and
 //!   end, for the attached session) and [`ServerCtl::CommandFinishedUnseen`] (any session).
 //! - Input: [`InputPayload::KeyFull`], [`InputPayload::Mouse`] and [`InputPayload::Paste`] are
@@ -89,6 +92,7 @@
 //! checked against a [`GrantId`], and input and decisions carry the acting principal.
 
 pub mod account;
+pub mod agent_control;
 pub mod approve;
 pub mod artifact;
 pub mod askpass;
@@ -115,6 +119,7 @@ pub mod workflow;
 pub mod workspace;
 
 pub use account::*;
+pub use agent_control::*;
 pub use approve::*;
 pub use artifact::*;
 pub use askpass::*;

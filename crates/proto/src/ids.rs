@@ -469,5 +469,9 @@ bitset! {
         PI_AGENT = 4;
         /// Answers `WorkspaceRequest::ChatSendImages`.
         CHAT_IMAGES = 5;
+        /// Answers `WorkspaceRequest::AgentControlsWatch`, `AgentControlsUnwatch` and
+        /// `SetAgentConfig`, pushes `ServerCtl::AgentControls`, and accepts
+        /// `ApprovalRequest::AnswerQuestion` and `Refuse` (see `proto::agent_control`).
+        AGENT_CONTROLS = 6;
     }
 }

@@ -110,6 +110,18 @@ pub enum ApprovalRequest {
     RevokeRule {
         rule_id: RuleId,
     },
+    /// Answers an agent's questions ([`crate::AgentQuestions`]). `decide` is signed like any
+    /// decision and names the questions' answer option.
+    AnswerQuestion {
+        decide: Decide,
+        answers: Vec<crate::QuestionAnswer>,
+    },
+    /// Refuses with a message for the agent, such as feedback on a plan
+    /// ([`crate::AgentPlan::keep_planning`]). `decide` names a refusing option.
+    Refuse {
+        decide: Decide,
+        message: String,
+    },
 }
 
 /// A successful [`ApprovalRequest`].
