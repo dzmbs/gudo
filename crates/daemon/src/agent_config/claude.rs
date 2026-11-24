@@ -308,7 +308,7 @@ pub(super) fn config(core: &Core, entry: &PaneEntry) -> AgentConfig {
             Some(Restarts::ByHand) => AgentConfigTiming::RestartInPane,
             _ => AgentConfigTiming::Restart,
         },
-        context: None,
+        context: core.agent_controls.context(entry.pane.id),
     }
 }
 

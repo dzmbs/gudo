@@ -58,6 +58,7 @@ hook SessionStart '{{"session_id":"'"$session"'","hook_event_name":"SessionStart
 while IFS= read -r line; do
   case "$line" in
     prompt) hook UserPromptSubmit '{{"session_id":"'"$session"'","hook_event_name":"UserPromptSubmit","prompt":"go"}}'; echo TURN-START ;;
+    status) hook StatusLine '{{"session_id":"'"$session"'","model":{{"id":"claude-sonnet-4-6"}},"context_window":{{"context_window_size":200000,"used_percentage":5,"current_usage":{{"input_tokens":1000,"output_tokens":300,"cache_creation_input_tokens":500,"cache_read_input_tokens":8500}}}}}}' >/dev/null; echo STATUS-SENT ;;
     stop) hook Stop '{{"session_id":"'"$session"'","hook_event_name":"Stop"}}'; echo TURN-END ;;
     ask) out=$(hook HeldPreToolUse '{{"session_id":"'"$session"'","hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{{"questions":[{{"question":"Which framework?","header":"Framework","multiSelect":false,"options":[{{"label":"React","description":"Components"}}]}}]}}}}'); echo "HOOK-OUT:[$out]" ;;
     plan) out=$(hook HeldPreToolUse '{{"session_id":"'"$session"'","hook_event_name":"PreToolUse","tool_name":"ExitPlanMode","tool_input":{{"plan":"Step one"}}}}'); echo "HOOK-OUT:[$out]" ;;
@@ -513,4 +514,20 @@ async fn a_claude_started_by_hand_restarts_in_its_shell() {
         owner.text(pane)
     );
     daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claudes_status_line_reports_the_context_in_use() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut fixture = launch(dir.path()).await;
+    let controls = fixture.watch().await;
+    assert_eq!(controls.config.context, None);
+    fixture.owner.type_line(fixture.pane, "status");
+    let reported = fixture
+        .controls(|controls| controls.config.context.is_some())
+        .await;
+    let context = reported.config.context.unwrap();
+    assert_eq!((context.used, context.window), (10_000, 200_000));
+    assert_eq!(reported.config.current.model.as_deref(), Some("sonnet"));
+    fixture.daemon.shutdown().await;
 }

@@ -14,7 +14,7 @@ use std::sync::Mutex;
 
 use proto::{
     AgentChoice, AgentConfig, AgentConfigSupport, AgentConfigTiming, AgentConfigValues,
-    AgentControls, AgentKind, PaneId, QuestionAnswer, WsError,
+    AgentContextUsage, AgentControls, AgentKind, PaneId, QuestionAnswer, WsError,
 };
 use serde_json::Value;
 
@@ -39,6 +39,8 @@ pub(crate) struct AgentControlsHub {
     watchers: Mutex<HashMap<PaneId, Vec<Watcher>>>,
     /// Claude Code's own report of its model, mode and effort (hooks and status line).
     reported: Mutex<HashMap<PaneId, AgentConfigValues>>,
+    /// The context in use Claude Code's status line reports.
+    contexts: Mutex<HashMap<PaneId, AgentContextUsage>>,
     claude_cli: claude::CliOptions,
 }
 
@@ -83,11 +85,21 @@ impl AgentControlsHub {
 
     pub fn forget_pane(&self, pane: PaneId) {
         lock(&self.watchers).remove(&pane);
-        lock(&self.reported).remove(&pane);
+        self.forget_reports(pane);
     }
 
     fn forget_reports(&self, pane: PaneId) {
         lock(&self.reported).remove(&pane);
+        lock(&self.contexts).remove(&pane);
+    }
+
+    fn context(&self, pane: PaneId) -> Option<AgentContextUsage> {
+        lock(&self.contexts).get(&pane).copied()
+    }
+
+    /// Records the context in use; returns whether that changed it.
+    fn report_context(&self, pane: PaneId, context: AgentContextUsage) -> bool {
+        lock(&self.contexts).insert(pane, context) != Some(context)
     }
 
     fn reported(&self, pane: PaneId) -> AgentConfigValues {
@@ -364,9 +376,41 @@ pub(crate) fn note_status_line(core: &Core, pane: PaneId, payload: &Value) {
             values.mode = mode;
         }
     });
-    if changed_values {
+    let changed_context = status_line_context(payload)
+        .is_some_and(|context| core.agent_controls.report_context(pane, context));
+    if changed_values || changed_context {
         changed(core, pane);
     }
+}
+
+/// The context in use a status line reports: the input of the latest request (its cached
+/// part included), else its share of the window.
+fn status_line_context(payload: &Value) -> Option<AgentContextUsage> {
+    let context = payload.get("context_window")?;
+    let window = context
+        .get("context_window_size")
+        .and_then(Value::as_u64)
+        .filter(|window| *window > 0)?;
+    let tokens = |name: &str| {
+        context
+            .pointer(&format!("/current_usage/{name}"))
+            .and_then(Value::as_u64)
+    };
+    let used = match (
+        tokens("input_tokens"),
+        tokens("cache_creation_input_tokens"),
+        tokens("cache_read_input_tokens"),
+    ) {
+        (None, None, None) => {
+            let share = context.get("used_percentage").and_then(Value::as_f64)?;
+            (share.clamp(0.0, 100.0) / 100.0 * window as f64).round() as u64
+        }
+        (input, created, read) => [input, created, read]
+            .into_iter()
+            .flatten()
+            .fold(0u64, u64::saturating_add),
+    };
+    Some(AgentContextUsage { used, window })
 }
 
 /// Checks a question's answers before they reach the agent.
