@@ -622,6 +622,17 @@ impl Client {
             WorkspaceResponse::AgentControls(controls) => controls)
     }
 
+    /// Files under an agent pane's working directory for a Chat `@` mention, best first.
+    pub async fn chat_file_search(
+        &self,
+        pane_id: PaneId,
+        query: String,
+        limit: u16,
+    ) -> Result<proto::FileMatches, WsError> {
+        expect!(self.workspace(WorkspaceRequest::ChatFileSearch { pane_id, query, limit }).await?,
+            WorkspaceResponse::ChatFiles(files) => files)
+    }
+
     /// The repository root holding `path` (`None` outside one), without running git.
     pub async fn repo_root(&self, path: String) -> Result<Option<String>, WsError> {
         expect!(self.workspace(WorkspaceRequest::RepoRoot { path }).await?,

@@ -473,5 +473,7 @@ bitset! {
         /// `SetAgentConfig`, pushes `ServerCtl::AgentControls`, and accepts
         /// `ApprovalRequest::AnswerQuestion` and `Refuse` (see `proto::agent_control`).
         AGENT_CONTROLS = 6;
+        /// Answers `WorkspaceRequest::ChatFileSearch`.
+        CHAT_FILE_SEARCH = 7;
     }
 }

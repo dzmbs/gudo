@@ -182,6 +182,10 @@ targets.
   read keys or rewrite the grant store through the Files API. That holds for any spelling of
   it (case on macOS), through symlinks, and for moving or deleting a directory that holds it,
   which would otherwise carry it to an unrefused name or into the trash.
+- **Chat `@` file search.** `ChatFileSearch` lists files under an agent pane's working
+  directory for the owner only, whatever roles a guest's grant names. The folder goes through
+  the path policy, the home folder itself is never walked, every match is checked again (so
+  the state directory inside a project is never offered), and queries and results are capped.
 - **File modes.** Writes never get setuid, setgid or sticky bits from a client.
 - **Daemon-run git.** Every call disables the following (the Zed CVE-2026-44465 class):
   - `core.fsmonitor`

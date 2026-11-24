@@ -5,6 +5,7 @@
 //! tables) runs on `spawn_blocking`; every path goes through [`paths::Policy`] first.
 
 mod attention;
+mod chat_files;
 pub(crate) mod editor;
 mod editor_ports;
 mod editor_proxy;
@@ -412,6 +413,13 @@ pub(crate) async fn handle(
             .await
             .map(Response::ResolvedPaths)
         }
+        Request::ChatFileSearch {
+            pane_id,
+            query,
+            limit,
+        } => chat_files::search(core, conn, pane_id, query, limit)
+            .await
+            .map(Response::ChatFiles),
         Request::FsRead { path, offset, len } => {
             blocking(move || files::read(&policy, &path, offset, len))
                 .await

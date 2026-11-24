@@ -11,6 +11,7 @@ mod artifacts;
 mod askpass;
 mod assist;
 mod browser;
+mod chat_files;
 mod codex;
 mod cold_restart;
 mod devices;

@@ -19,15 +19,15 @@ pub(crate) mod marks;
 pub(crate) mod submit;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use proto::{
     Actor, AnswerBlocked, AssistError, AssistPush, AssistRequest, AssistResponse, BlockedChoice,
-    BlockedOption, BlockedPrompt, BlockedSource, CommandMark, Foreground, InputPayload, Keymap,
-    OptionId, PaneAssist, PaneId, ProgramProfile, PromptInput, PromptPhase, PromptState, Seq,
-    ShellKind, SubmitLine,
+    BlockedOption, BlockedPrompt, BlockedSource, CommandMark, FileMatches, Foreground,
+    InputPayload, Keymap, OptionId, PaneAssist, PaneId, ProgramProfile, PromptInput, PromptPhase,
+    PromptState, Seq, ShellKind, SubmitLine,
 };
 
 use crate::config::Config;
@@ -77,6 +77,11 @@ impl Assist {
             completion: complete::Caches::default(),
             files: files::FileIndex::default(),
         }
+    }
+
+    /// Fuzzy file search under `root`, which the caller has checked against the path policy.
+    pub(crate) fn search_files(&self, root: &Path, query: &str, limit: usize) -> FileMatches {
+        self.files.search(root, query, limit)
     }
 
     /// Whether `conn` watches `pane`'s prompt.

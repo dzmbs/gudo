@@ -428,7 +428,22 @@ pub enum WorkspaceRequest {
         pane_id: PaneId,
         change: crate::AgentConfigValues,
     },
+    /// Files under the agent pane's working directory for a Chat `@` mention →
+    /// [`WorkspaceResponse::ChatFiles`]. Owner only; needs
+    /// [`MoreDaemonFeatures::CHAT_FILE_SEARCH`](crate::MoreDaemonFeatures::CHAT_FILE_SEARCH).
+    ChatFileSearch {
+        pane_id: PaneId,
+        /// Fuzzy query, at most [`CHAT_FILE_QUERY_MAX_BYTES`].
+        query: String,
+        /// Most matches wanted; the daemon returns at most [`CHAT_FILE_MATCHES_MAX`].
+        limit: u16,
+    },
 }
+
+/// Longest query a [`WorkspaceRequest::ChatFileSearch`] may carry.
+pub const CHAT_FILE_QUERY_MAX_BYTES: usize = 256;
+/// Most matches a [`WorkspaceRequest::ChatFileSearch`] returns.
+pub const CHAT_FILE_MATCHES_MAX: u16 = 50;
 
 /// The answer to a [`WorkspaceRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,6 +526,7 @@ pub enum WorkspaceResponse {
     /// `None`: the path is in no repository.
     RepoRoot(Option<String>),
     AgentControls(crate::AgentControls),
+    ChatFiles(crate::FileMatches),
 }
 
 /// A snapshot and the features of the adapter that produced it.

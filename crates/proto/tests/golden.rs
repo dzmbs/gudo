@@ -536,6 +536,7 @@ fn every_message_matches_its_frozen_bytes() {
     terminal_colors_messages(&mut checker);
     resolve_paths_messages(&mut checker);
     repo_root_messages(&mut checker);
+    chat_file_search_messages(&mut checker);
 
     assert!(
         checker.failures.is_empty(),
@@ -3466,5 +3467,39 @@ fn repo_root_messages(checker: &mut Checker) {
             result: Ok(WorkspaceResponse::RepoRoot(Some("/src".into()))),
         },
         "0b000000011809002901042f737263",
+    );
+}
+
+/// `WorkspaceRequest::ChatFileSearch` (appended after `SetAgentConfig`) and
+/// `WorkspaceResponse::ChatFiles` (appended after `AgentControls`).
+fn chat_file_search_messages(checker: &mut Checker) {
+    checker.check(
+        "ClientCtl::Workspace(ChatFileSearch)",
+        ClientCtl::Workspace {
+            req_id: 9,
+            req: WorkspaceRequest::ChatFileSearch {
+                pane_id: PaneId(4),
+                query: "app".into(),
+                limit: 20,
+            },
+        },
+        "0a0000000115094f040361707014",
+    );
+    checker.check(
+        "ServerCtl::WorkspaceResult(ChatFiles)",
+        ServerCtl::WorkspaceResult {
+            req_id: 9,
+            result: Ok(WorkspaceResponse::ChatFiles(FileMatches {
+                root: "/w".into(),
+                matches: vec![FileMatch {
+                    path: "src/app.ts".into(),
+                    kind: FileKind::File,
+                    positions: vec![4, 5, 6],
+                }],
+                scanned: 12,
+                truncated: false,
+            })),
+        },
+        "1b000000011809002b022f77010a7372632f6170702e747300030405060c00",
     );
 }

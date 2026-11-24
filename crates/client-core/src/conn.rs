@@ -1063,6 +1063,10 @@ fn control_supported(
             ..
         } => more_features.contains(proto::MoreDaemonFeatures::AGENT_CONTROLS),
         ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::ChatFileSearch { .. },
+            ..
+        } => more_features.contains(proto::MoreDaemonFeatures::CHAT_FILE_SEARCH),
+        ClientCtl::Workspace {
             req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
             ..
         } => features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES),
@@ -1989,6 +1993,30 @@ mod tests {
             &tool_diff,
             proto::DaemonFeatures::TIMELINE_TOOL_DIFF,
             proto::MoreDaemonFeatures::EMPTY
+        ));
+    }
+
+    #[test]
+    fn old_daemons_are_not_sent_queued_chat_file_searches() {
+        let search = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::ChatFileSearch {
+                pane_id: PaneId(7),
+                query: "app".into(),
+                limit: 20,
+            },
+        };
+        assert!(!control_supported(
+            &search,
+            proto::DaemonFeatures::AGENT_TIMELINE | proto::DaemonFeatures::CHAT_SEND,
+            proto::MoreDaemonFeatures::RESOLVE_PATHS
+                | proto::MoreDaemonFeatures::REPO_ROOT
+                | proto::MoreDaemonFeatures::AGENT_CONTROLS
+        ));
+        assert!(control_supported(
+            &search,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::CHAT_FILE_SEARCH
         ));
     }
 

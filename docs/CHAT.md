@@ -242,6 +242,13 @@ timeline as soon as it records the session. "Opening Chat…" shows only after t
 delay. A reason Chat cannot go on (the timeline failed, a page of history did not load) is a
 failure banner at the top with Terminal as its one action.
 
+Typing `@` in the composer offers files under the agent's folder, best first, through
+`ChatFileSearch` (workspace request 79, response 43, `MoreDaemonFeatures::CHAT_FILE_SEARCH`, bit
+7). Only the owner may ask; the folder must pass the path policy and not be the home folder
+itself, each match is checked again so the daemon's state is never offered, a query holds at
+most 256 bytes and an answer at most 50 files. The daemon reuses its `.gitignore`-aware listing,
+capped at 200,000 paths and cached for ten seconds.
+
 The composer Add menu offers Claude's bounded session command list (built-ins plus user/project
 command directories). Selecting a command only edits an unchanged, current-scope draft; it never
 submits. Offers are replaced rather than reused across navigation or session changes.

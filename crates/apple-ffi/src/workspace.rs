@@ -276,6 +276,33 @@ impl DaemonClient {
             .await
     }
 
+    /// Files under an agent pane's working directory for a Chat `@` mention, best first.
+    /// Only when [`offers_chat_file_search`](Self::offers_chat_file_search).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`]: `Denied` for a guest, `Unavailable` when the pane's
+    /// folder is unknown or is the home folder.
+    pub async fn chat_file_search(
+        &self,
+        pane_id: u64,
+        query: String,
+        limit: u16,
+    ) -> Result<crate::assist::FileMatches, WorkspaceError> {
+        self.ws_call(|client| async move {
+            client
+                .chat_file_search(proto::PaneId(pane_id), query, limit)
+                .await
+        })
+        .await
+    }
+
+    /// Whether the daemon answers [`chat_file_search`](Self::chat_file_search).
+    pub fn offers_chat_file_search(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::CHAT_FILE_SEARCH)
+    }
+
     /// Whether the daemon answers [`repo_root`](Self::repo_root).
     pub fn offers_repo_root(&self) -> bool {
         self.inner

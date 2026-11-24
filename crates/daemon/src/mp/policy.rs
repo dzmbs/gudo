@@ -226,7 +226,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::ChatPrepare { pane_id }
         | R::ChatSend { pane_id, .. }
         | R::ChatSendImages { pane_id, .. }
-        | R::ChatInterruptPrepare { pane_id } | R::ChatInterrupt { pane_id, .. } => {
+        | R::ChatInterruptPrepare { pane_id } | R::ChatInterrupt { pane_id, .. }
+        | R::ChatFileSearch { pane_id, .. } => {
             (Need::Prompt, Target::Pane(*pane_id))
         }
         R::SendReview(review) => (Need::Prompt, Target::Pane(review.pane_id)),

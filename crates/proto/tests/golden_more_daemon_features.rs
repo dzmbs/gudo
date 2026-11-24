@@ -19,3 +19,11 @@ fn repo_root_keeps_its_bit() {
         vec![1]
     );
 }
+
+#[test]
+fn chat_file_search_keeps_its_bit() {
+    assert_eq!(
+        postcard::to_allocvec(&MoreDaemonFeatures::CHAT_FILE_SEARCH).unwrap(),
+        vec![128, 1]
+    );
+}
