@@ -762,10 +762,16 @@ async fn an_upload_that_stops_sending_fails_and_leaves_nothing() {
     endpoint.close().await;
 }
 
-/// A PNG header followed by `size` bytes of padding: what the daemon checks of an image.
+/// A PNG of `size` bytes whose one `IDAT` chunk is padding: what the daemon checks of an
+/// image is its chunk structure, which it walks to strip metadata.
 fn padded_png(size: usize) -> Vec<u8> {
-    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10".to_vec();
-    png.resize(size, 0);
+    let mut png =
+        b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0\0\0\0\0".to_vec();
+    let padding = size - png.len() - 2 * 12;
+    png.extend_from_slice(&u32::try_from(padding).unwrap().to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.resize(png.len() + padding + 4, 0);
+    png.extend_from_slice(b"\0\0\0\0IEND\xae\x42\x60\x82");
     png
 }
 
@@ -794,8 +800,9 @@ async fn a_blob_download_nobody_reads_gives_up_its_turn() {
         BlobReply::Ready
     );
     put.write_all(&image).await.unwrap();
-    let BlobReply::Stored(stored) = recv_frame(&mut replies).await else {
-        panic!("not stored")
+    let stored = match recv_frame(&mut replies).await {
+        BlobReply::Stored(stored) => stored,
+        other => panic!("not stored: {other:?}"),
     };
     assert_eq!(stored.size, image.len() as u64);
 
