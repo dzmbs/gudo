@@ -14,6 +14,8 @@ nonisolated public protocol DaemonTimelineAPI: AnyObject, Sendable {
     func offersAgentTimeline() -> Bool
     func chatFileSearch(paneId: UInt64, query: String, limit: UInt16) async throws -> FileMatches
     func offersChatFileSearch() -> Bool
+    func chatSendImages(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?, images: [Data]) async throws -> String
+    func sendsChatImages() -> Bool
 }
 
 extension DaemonTimelineAPI {
@@ -40,6 +42,13 @@ extension DaemonTimelineAPI {
     }
 
     nonisolated public func offersChatFileSearch() -> Bool { false }
+
+    nonisolated public func sendsChatImages() -> Bool { false }
+
+    public func chatSendImages(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?,
+                               images: [Data]) async throws -> String {
+        throw WorkspaceError.Unavailable(message: "Update the helper to send images from Chat.")
+    }
 
     public func chatFileSearch(paneId: UInt64, query: String, limit: UInt16) async throws -> FileMatches {
         throw WorkspaceError.Unavailable(message: "Update the helper to tag files")

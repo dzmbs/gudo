@@ -7,10 +7,12 @@ import Observation
 nonisolated struct ChatAttachment: Identifiable, Equatable, Sendable {
     let id: UUID
     let name: String
-    /// The `@path` mention the message carries.
-    let reference: String
+    /// The `@path` mention the message carries, for a file uploaded to the host.
+    let reference: String?
     /// A small JPEG of an image, for its pill.
     let thumbnail: Data?
+    /// An image the agent receives with the message itself, not as a file on the host.
+    let image: Data?
 }
 
 /// Attaching files to a message: each is prepared on the device, uploaded to the host's
@@ -22,6 +24,8 @@ final class ChatPhotos {
     enum Phase: Equatable { case idle, picking, loading, uploading }
     typealias Source = @MainActor (ChatPhotoFile) async throws -> String
     static let attachmentLimit = 8
+    /// Images an agent takes with one message (`ChatSendImages`).
+    static let imageLimit = 4
 
     private(set) var phase: Phase = .idle
     private(set) var message: String?
@@ -45,7 +49,10 @@ final class ChatPhotos {
     }
 
     /// The mentions Send adds after the text, one per pill.
-    var references: String { attachments.map(\.reference).joined(separator: " ") }
+    var references: String { attachments.compactMap(\.reference).joined(separator: " ") }
+
+    /// Images that go with the message itself, in the order they were added.
+    var images: [Data] { attachments.compactMap(\.image) }
 
     isolated deinit { task?.cancel() }
 
@@ -56,7 +63,10 @@ final class ChatPhotos {
         phase = .picking
     }
 
-    func load(in state: PaneChatState, photo: @escaping @MainActor () async throws -> ChatPhotoFile, source: @escaping Source) {
+    /// Prepares a file, then uploads it to the host for a mention, or, with `keepsImages` (an
+    /// agent that takes images with a message), keeps an image on the device to send with it.
+    func load(in state: PaneChatState, keepsImages: Bool = false, photo: @escaping @MainActor () async throws -> ChatPhotoFile,
+              source: @escaping Source) {
         guard phase == .picking, context == state.actionContext, !isFull else { return }
         let generation = generation
         phase = .loading
@@ -66,15 +76,22 @@ final class ChatPhotos {
                 let file = try await photo()
                 try Task.checkCancellation()
                 guard let self, let state, self.generation == generation, self.context == state.actionContext else { return }
+                if session != state.actionContext.session { attachments.removeAll() }
+                session = state.actionContext.session
+                if keepsImages, file.thumbnail != nil, images.count < Self.imageLimit {
+                    let image = try Data(contentsOf: file.url)
+                    attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: nil, thumbnail: file.thumbnail, image: image))
+                    phase = .idle
+                    context = nil
+                    return
+                }
                 pendingName = file.name
                 phase = .uploading
                 let path = try await source(file)
                 try Task.checkCancellation()
                 guard self.generation == generation, self.context == state.actionContext else { return }
                 let reference = try Self.reference(path)
-                if session != state.actionContext.session { attachments.removeAll() }
-                session = state.actionContext.session
-                attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: reference, thumbnail: file.thumbnail))
+                attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: reference, thumbnail: file.thumbnail, image: nil))
                 pendingName = nil
                 phase = .idle
                 context = nil
@@ -91,9 +108,13 @@ final class ChatPhotos {
         attachments.removeAll { $0.id == id }
     }
 
-    /// The message Send would send: the text, then the attachments' mentions on their own line.
+    /// The images Send would send, when they are this session's.
+    func images(for session: String?) -> [Data] { self.session == session ? images : [] }
+
+    /// The message Send would send: the text, then the uploaded files' mentions on their own line.
     func message(with draft: String, session: String?) -> String {
-        guard !attachments.isEmpty, self.session == session else { return draft }
+        let references = references
+        guard !references.isEmpty, self.session == session else { return draft }
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? references : text + "\n" + references
     }

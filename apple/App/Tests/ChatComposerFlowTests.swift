@@ -130,16 +130,41 @@ final class ChatComposerFlowTests: XCTestCase {
         try capture(fixture.window, name: "autocomplete-commands")
     }
 
+    func testCodexTakesImagesWithTheMessageAndClaudeGetsUploadedMentions() async throws {
+        let fixture = try makeFixture(working: false, isCodex: true)
+        fixture.client.takesImages = true
+        defer { fixture.tearDown() }
+        try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.isEmpty == false }
+        let file = try ChatPhotoFile.prepare(data: Self.png(), name: "shot.png")
+        fixture.state.photos.begin(in: fixture.state)
+        fixture.state.photos.load(in: fixture.state, keepsImages: true, photo: { file }, source: { _ in
+            XCTFail("an image Codex takes is never uploaded")
+            return "/never"
+        })
+        try await wait { fixture.state.photos.attachments.count == 1 }
+        XCTAssertNil(fixture.state.photos.attachments.first?.reference)
+        fixture.state.draft = "What is wrong here?"
+        fixture.view().send()
+        try await wait { fixture.client.calls.contains("send images 7 What is wrong here? 1") }
+        try await wait { fixture.state.photos.attachments.isEmpty && fixture.state.draft.isEmpty }
+    }
+
+    private static func png() -> Data {
+        UIGraphicsImageRenderer(size: CGSize(width: 40, height: 30)).pngData { context in
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 40, height: 30))
+        }
+    }
+
     // MARK: Fixture
 
-    private func makeFixture(working: Bool, commands: [[String: Any]] = []) throws -> Fixture {
+    private func makeFixture(working: Bool, commands: [[String: Any]] = [], isCodex: Bool = false) throws -> Fixture {
         let suite = "chat-composer-flow-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
         let state = PaneChatState(member: HostPane(hostId: "fixture", pane: pane.id), defaultPresentation: .chat,
-                                  agent: .claude, inputPresentation: pane.inputPresentation,
+                                  agent: isCodex ? .codex : .claude, inputPresentation: pane.inputPresentation,
                                   preferences: preferences, pool: ChatModelPool(capacity: 1), dictation: .init())
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
         let snapshot = try TimelineFixtureJSON.json([

@@ -388,6 +388,14 @@ struct PaneChatView<Terminal: View>: View {
     /// What the message would be: the text, then the attachments' mentions.
     var outgoingMessage: String { state.photos.message(with: state.draft, session: state.actionContext.session) }
 
+    /// Images that go with the message itself, for an agent that takes them.
+    private var outgoingImages: [Data] { state.photos.images(for: state.actionContext.session) }
+
+    /// Codex and pi take images with the message; Claude reads files uploaded to the host.
+    private var keepsImages: Bool {
+        state.agent != .claude && ((try? hub.timelineClient())?.sendsChatImages() ?? false)
+    }
+
     private var hasMessage: Bool {
         !outgoingMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -502,13 +510,13 @@ struct PaneChatView<Terminal: View>: View {
     /// `alternate` does the other.
     func submit(alternate: Bool) {
         let queues = working && (sendWhileWorking == .queue) != alternate
-        if queues { queueDraft() } else { deliver(outgoingMessage, queued: nil) }
+        if queues { queueDraft() } else { deliver(outgoingMessage, queued: nil, images: outgoingImages) }
     }
 
     func queueDraft() {
         let message = outgoingMessage
         guard state.capabilities.contains(.send), working, canEditDraft(state.actionContext),
-              state.queue.enqueue(message) else { return }
+              state.queue.enqueue(message, images: outgoingImages) else { return }
         state.draft = ""
         state.photos.discardAttachments()
         state.autocomplete.close()
@@ -524,7 +532,7 @@ struct PaneChatView<Terminal: View>: View {
 
     private func sendQueuedNow(_ message: ChatQueuedMessage) {
         guard !state.composer.isBusy, let taken = state.queue.take(message.id) else { return }
-        deliver(taken.text, queued: taken)
+        deliver(taken.text, queued: taken, images: taken.images)
     }
 
     /// When the turn ends, the oldest queued message goes, through the same once-only send.
@@ -532,7 +540,7 @@ struct PaneChatView<Terminal: View>: View {
         guard !working, let next = state.queue.messages.first, state.capabilities.contains(.send),
               !state.composer.isBusy, !state.interrupt.isBusy, prepareAction(state.actionContext),
               state.composer.canSend(next.text), let taken = state.queue.take(next.id) else { return }
-        deliver(taken.text, queued: taken)
+        deliver(taken.text, queued: taken, images: taken.images)
     }
 
     /// A queued message that was cancelled before it went, or did not go through, returns to
@@ -617,7 +625,7 @@ struct PaneChatView<Terminal: View>: View {
     func pasteImage() {
         guard let data = UIPasteboard.general.image?.pngData(), beginAttaching() else { return }
         let context = state.actionContext
-        state.photos.load(in: state, photo: {
+        state.photos.load(in: state, keepsImages: keepsImages, photo: {
             try await Task.detached(priority: .userInitiated) { try ChatPhotoFile.prepare(data: data) }.value
         }, source: { file in try await uploadPhoto(file, context: context) })
     }
@@ -633,7 +641,7 @@ struct PaneChatView<Terminal: View>: View {
     private func receivePhoto(_ item: PhotosPickerItem) {
         let context = state.actionContext
         guard canEditDraft(context) else { state.photos.cancel(); return }
-        state.photos.load(in: state, photo: {
+        state.photos.load(in: state, keepsImages: keepsImages, photo: {
             guard let file = try await item.loadTransferable(type: ChatPhotoFile.self) else { throw ChatPhotoError.invalidImage }
             return file
         }, source: { file in try await uploadPhoto(file, context: context) })
@@ -642,7 +650,7 @@ struct PaneChatView<Terminal: View>: View {
     private func receiveFile(_ result: Result<URL, Error>) {
         let context = state.actionContext
         guard case .success(let url) = result, canEditDraft(context) else { state.photos.cancel(); return }
-        state.photos.load(in: state, photo: {
+        state.photos.load(in: state, keepsImages: keepsImages, photo: {
             try await Task.detached(priority: .userInitiated) {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -731,7 +739,7 @@ struct PaneChatView<Terminal: View>: View {
 
     /// Sends `text` through the once-only prepare and send; a queued message whose send did not
     /// go through goes back to the front of the queue.
-    private func deliver(_ text: String, queued: ChatQueuedMessage?) {
+    private func deliver(_ text: String, queued: ChatQueuedMessage?, images: [Data]) {
         let context = state.actionContext
         guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(text) else {
             if let queued { state.queue.restore(queued) }
@@ -755,9 +763,12 @@ struct PaneChatView<Terminal: View>: View {
                 let json: String
                 switch command {
                 case .prepare: json = try await client.chatPrepare(paneId: pane.id.rawValue)
-                case .send(let ticket, let text, let revision):
+                case .send(let ticket, let text, let revision) where images.isEmpty:
                     json = try await client.chatSend(paneId: pane.id.rawValue, ticket: ticket,
                                                      text: text, confirmedRevision: revision)
+                case .send(let ticket, let text, let revision):
+                    json = try await client.chatSendImages(paneId: pane.id.rawValue, ticket: ticket, text: text,
+                                                           confirmedRevision: revision, images: images)
                 }
                 return try ChatSendStatus.decode(json)
             }

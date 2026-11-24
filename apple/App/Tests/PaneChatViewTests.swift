@@ -864,6 +864,12 @@ nonisolated final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimeli
         state.withLock { $0.uploads.append(target) }
         return Self.stat(target.path, size: UInt64(bytes.count))
     }
+    nonisolated(unsafe) var takesImages = false
+    func sendsChatImages() -> Bool { takesImages }
+    func chatSendImages(paneId: UInt64, ticket: UInt64, text: String, confirmedRevision: UInt64?, images: [Data]) async throws -> String {
+        record("send images \(paneId) \(text) \(images.count)")
+        return #""Confirmed""#
+    }
     /// Paths `chatFileSearch` offers; empty is a helper without the search.
     nonisolated(unsafe) var searchablePaths: [String] = []
     func offersChatFileSearch() -> Bool { !searchablePaths.isEmpty }

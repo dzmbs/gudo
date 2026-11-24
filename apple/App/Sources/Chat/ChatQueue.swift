@@ -4,10 +4,13 @@ import Observation
 nonisolated struct ChatQueuedMessage: Identifiable, Equatable, Sendable {
     let id: UUID
     let text: String
+    /// Images that go with it, for an agent that takes them with a message.
+    let images: [Data]
 
-    init(id: UUID = UUID(), text: String) {
+    init(id: UUID = UUID(), text: String, images: [Data] = []) {
         self.id = id
         self.text = text
+        self.images = images
     }
 }
 
@@ -23,10 +26,10 @@ final class ChatQueue {
     var isFull: Bool { messages.count >= Self.limit }
 
     @discardableResult
-    func enqueue(_ text: String) -> Bool {
+    func enqueue(_ text: String, images: [Data] = []) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isFull, text.utf8.count <= ChatComposer.maximumDraftBytes else { return false }
-        messages.append(ChatQueuedMessage(text: text))
+        guard !trimmed.isEmpty || !images.isEmpty, !isFull, text.utf8.count <= ChatComposer.maximumDraftBytes else { return false }
+        messages.append(ChatQueuedMessage(text: text, images: images))
         return true
     }
 
