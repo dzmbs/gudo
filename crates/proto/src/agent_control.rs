@@ -70,6 +70,9 @@ pub enum AgentConfigTiming {
     NextTurn,
     /// The agent takes it at once (pi through its bridge).
     Now,
+    /// The agent was started by hand: once it is idle it stops and starts again on the same
+    /// conversation in its shell, replacing the command the user typed. Clients confirm first.
+    RestartInPane,
 }
 
 /// A model, mode and effort; `None` leaves (or reports) that one unknown or unchanged.

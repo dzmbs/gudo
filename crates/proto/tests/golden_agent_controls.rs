@@ -122,6 +122,7 @@ fn modes_and_timing_keep_their_order() {
     check(&AgentConfigTiming::Restart, "00");
     check(&AgentConfigTiming::NextTurn, "01");
     check(&AgentConfigTiming::Now, "02");
+    check(&AgentConfigTiming::RestartInPane, "03");
     check(&AgentConfigSupport::Unsupported("no".into()), "01026e6f");
 }
 
