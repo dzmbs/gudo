@@ -34,7 +34,11 @@ mod skill;
 
 pub use adapter::{AgentAdapter, HookCoverage, HookError};
 pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
-pub use claude::ClaudeCode;
+pub use claude::{
+    ClaudeCliOptions, ClaudeCode, ClaudeConfig, HELD_TOOL_EVENT as CLAUDE_HELD_TOOL_EVENT,
+    PLAN_TOOL as CLAUDE_PLAN_TOOL, PlanAnswer as ClaudePlanAnswer,
+    QUESTION_TOOL as CLAUDE_QUESTION_TOOL,
+};
 pub use claude_live::{
     CLAUDE_DISPLAY_BATCH_LIMIT, ClaudeDisplayBatch, ClaudeDisplayChange, ClaudeDisplayError,
     ClaudeDisplayMessage, ClaudeDisplayStream, claude_supports_message_display,

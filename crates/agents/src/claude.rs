@@ -1,6 +1,11 @@
 //! Claude Code.
 
+mod config;
 mod display_launch;
+mod prompt;
+
+pub use config::{ClaudeCliOptions, ClaudeConfig};
+pub use prompt::{HELD_TOOL_EVENT, PLAN_TOOL, PlanAnswer, QUESTION_TOOL};
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -25,7 +30,7 @@ const BUNDLED_MANIFEST: &str = include_str!("../manifests/claude.toml");
 
 /// Version of the hook settings file we generate. Bump when its contents change so a running
 /// session keeps the file it was launched with.
-const SETTINGS_VERSION: u32 = 4;
+const SETTINGS_VERSION: u32 = 5;
 
 /// Seconds a `PermissionRequest` hook may wait for a phone decision. Claude's own limit is 600.
 const PERMISSION_TIMEOUT_SECS: u32 = 590;
@@ -213,7 +218,12 @@ impl ClaudeCode {
             "hooks": {
                 "SessionStart": entry("SessionStart", Some("startup|resume|clear|compact|fork"), short),
                 "UserPromptSubmit": entry("UserPromptSubmit", None, short),
-                "PreToolUse": entry("PreToolUse", Some("AskUserQuestion"), short),
+                // Held like a permission request, so Chat can answer questions and plans.
+                "PreToolUse": entry(
+                    HELD_TOOL_EVENT,
+                    Some("AskUserQuestion|ExitPlanMode"),
+                    Some(PERMISSION_TIMEOUT_SECS),
+                ),
                 "PermissionRequest": entry("PermissionRequest", None, Some(PERMISSION_TIMEOUT_SECS)),
                 "Notification": entry(
                     "Notification",
@@ -339,14 +349,31 @@ fn permission_options(allow_session: bool) -> Vec<ApprovalOption> {
 
 fn question_blocker(tool_input: &Value) -> Blocker {
     let mut blocker = Blocker::new(BlockedReason::Question);
-    blocker.tool = Some("AskUserQuestion".into());
+    blocker.tool = Some(QUESTION_TOOL.into());
     blocker.summary = tool_input
         .pointer("/questions/0/question")
         .and_then(Value::as_str)
         .map(hook::summary);
     blocker.detail = Some(hook::bounded_detail(tool_input));
-    // Free-text and option answers need screen parsing; v1 offers "open terminal".
-    blocker.answer_paths = vec![AnswerPath::Keystrokes];
+    // The answers ride on the "Answer" option; only Chat's question card can give them.
+    blocker.options = vec![
+        ApprovalOption::new(ApprovalChoice::AllowOnce, "Answer"),
+        ApprovalOption::new(ApprovalChoice::Deny, "Skip"),
+    ];
+    blocker.answer_paths = vec![AnswerPath::HookDecision, AnswerPath::Keystrokes];
+    blocker
+}
+
+fn plan_blocker(tool_input: &Value) -> Blocker {
+    let mut blocker = Blocker::new(BlockedReason::Permission);
+    blocker.tool = Some(PLAN_TOOL.into());
+    blocker.summary = Some("Approve the plan".into());
+    blocker.detail = Some(hook::bounded_detail(tool_input));
+    blocker.options = vec![
+        ApprovalOption::new(ApprovalChoice::AllowOnce, "Approve"),
+        ApprovalOption::new(ApprovalChoice::Deny, "Keep planning"),
+    ];
+    blocker.answer_paths = vec![AnswerPath::HookDecision, AnswerPath::Keystrokes];
     blocker
 }
 
@@ -375,13 +402,15 @@ fn parse(payload: &[u8], seq: Seq) -> Result<Option<Signal>, HookError> {
         Event::PreToolUse {
             tool_name,
             tool_input,
-        } => {
-            if tool_name == "AskUserQuestion" {
+        } => match tool_name.as_str() {
+            QUESTION_TOOL => {
                 signal(EventKind::Blocked).with_claim(Claim::Blocked(question_blocker(&tool_input)))
-            } else {
-                signal(EventKind::ToolStarted).with_claim(Claim::Working)
             }
-        }
+            PLAN_TOOL => {
+                signal(EventKind::Blocked).with_claim(Claim::Blocked(plan_blocker(&tool_input)))
+            }
+            _ => signal(EventKind::ToolStarted).with_claim(Claim::Working),
+        },
         Event::PermissionRequest {
             tool_name,
             tool_input,
@@ -628,7 +657,28 @@ mod tests {
         };
         assert_eq!(blocker.reason, BlockedReason::Question);
         assert_eq!(blocker.summary.as_deref(), Some("Which framework?"));
-        assert!(blocker.options.is_empty());
+        let ids: Vec<_> = blocker.options.iter().map(|option| option.id).collect();
+        assert_eq!(ids, [ApprovalChoice::AllowOnce, ApprovalChoice::Deny]);
+        assert_eq!(
+            blocker.answer_paths,
+            [AnswerPath::HookDecision, AnswerPath::Keystrokes]
+        );
+    }
+
+    #[test]
+    fn exit_plan_mode_asks_to_approve_the_plan() {
+        let payload = br#"{"session_id":"abc123","hook_event_name":"PreToolUse",
+            "tool_name":"ExitPlanMode","tool_use_id":"t2","tool_input":{"plan":"Plan"}}"#;
+        let Some(Claim::Blocked(blocker)) = parse_fixture(payload).claim else {
+            panic!()
+        };
+        assert_eq!(blocker.tool.as_deref(), Some("ExitPlanMode"));
+        let labels: Vec<_> = blocker
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Approve", "Keep planning"]);
     }
 
     #[test]
@@ -754,7 +804,7 @@ mod tests {
                 "--mcp-config",
                 "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v4.json"
+                "/state/claude/settings.v5.json"
             ]
         );
         assert_eq!(spec.cwd, ctx.cwd);
@@ -773,7 +823,15 @@ mod tests {
         );
         assert_eq!(
             settings["hooks"]["PreToolUse"][0]["matcher"],
-            "AskUserQuestion"
+            "AskUserQuestion|ExitPlanMode"
+        );
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "/opt/gudo/bin/gudo-hook claude HeldPreToolUse"
+        );
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"],
+            PERMISSION_TIMEOUT_SECS
         );
         let allowed = settings["permissions"]["allow"].as_array().unwrap();
         let tool = |name: &str| json!(format!("mcp__{}__{name}", crate::EXPECTED_MCP_SERVER_NAME));
@@ -877,7 +935,7 @@ mod tests {
                 "--mcp-config",
                 "/state/claude/mcp/p_9f2.json",
                 "--settings",
-                "/state/claude/settings.v4.json"
+                "/state/claude/settings.v5.json"
             ]
         );
     }
