@@ -47,6 +47,10 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
 
     static let followDistance: CGFloat = 40
     static let historyDistance: CGFloat = 600
+    /// Measuring can grow rows into view that need measuring in turn; past this many passes the
+    /// rest waits for the next frame.
+    static let measurePassLimit = 8
+    private static let proseLineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: ChatFont.proseSize))
     private static let rowIdentifier = NSUserInterfaceItemIdentifier("chat-row")
 
     let model: TimelineModel
@@ -54,6 +58,10 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     let collection = NSCollectionView()
     private let layout = NativeCollectionLayout(document: NativeListLayout())
     private var document = NativeListLayout()
+    private var documentRowIDs: [ChatRowID] = []
+    /// The rows the collection holds: it moves to the frame's count with the collection's update.
+    private var itemCount = 0
+    private var clock: CADisplayLink?
     private var current = TimelineFrame()
     private var pending: TimelineFrame?
     private var rows: [ChatRowID: ChatRow] = [:]
@@ -75,6 +83,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     private let topFade = ChatEdgeFade(edge: .top, height: DS.Space.l)
     private let bottomFade = ChatEdgeFade(edge: .bottom, height: DS.Space.xxl)
     private var isActive = true
+    private var hasChrome = false
     private var isWorking = false
     private var isApplying = false
     private var isMeasuring = false
@@ -215,16 +224,22 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         needsRestyle = needsRestyle || self.environment.chrome != environment.chrome
             || self.environment.colorScheme != environment.colorScheme
             || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
+        let restylesChrome = !hasChrome || self.environment.chrome != environment.chrome
+            || self.environment.colorScheme != environment.colorScheme
+            || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
         self.environment = environment
         self.actions = actions
         self.expanded = expanded
         footer.rootView = composer
-        latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
-            Label("New", systemImage: "arrow.down").font(ChatFont.button).padding(.horizontal, DS.Space.l)
-                .frame(minHeight: DS.Size.touchTarget)
-        }.buttonStyle(.plain).floatingCapsule(interactive: true).environment(\.self, environment))
+        if restylesChrome {
+            hasChrome = true
+            latest.rootView = AnyView(Button { [weak self] in self?.jumpToLatest() } label: {
+                Label("New", systemImage: "arrow.down").font(ChatFont.button).padding(.horizontal, DS.Space.l)
+                    .frame(minHeight: DS.Size.touchTarget)
+            }.buttonStyle(.plain).floatingCapsule(interactive: true).environment(\.self, environment))
+            working.rootView = AnyView(ChatWorkingIndicator().environment(\.self, environment))
+        }
         latest.isHidden = !(model.hasNewItems || frame.hasNewerGap)
-        working.rootView = AnyView(ChatWorkingIndicator().environment(\.self, environment))
         guard isViewLoaded else { pending = frame; return }
         let background = NSColor(environment.chrome.background.color)
         view.layer?.backgroundColor = background.cgColor
@@ -266,7 +281,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
 
     // MARK: Data source
 
-    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { current.rows.count }
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { itemCount }
 
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: Self.rowIdentifier, for: indexPath)
@@ -286,7 +301,18 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
 
     // MARK: Applying frames
 
+    /// Frames that arrive between two screen refreshes are applied once, on the next refresh.
     private func scheduleApply() {
+        // An occluded window gets no display refreshes; its frames apply as they come.
+        if let window = view.window, window.screen != nil, window.occlusionState.contains(.visible) {
+            if clock == nil {
+                let clock = view.displayLink(target: ChatTranscriptClock(owner: self), selector: #selector(ChatTranscriptClock.step))
+                clock.add(to: .main, forMode: .common)
+                self.clock = clock
+            }
+            clock?.isPaused = false
+            return
+        }
         guard !applyScheduled else { return }
         applyScheduled = true
         Task { @MainActor [weak self] in
@@ -294,6 +320,17 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             applyScheduled = false
             applyPending()
         }
+    }
+
+    fileprivate func tick() {
+        clock?.isPaused = true
+        applyPending()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        clock?.invalidate()
+        clock = nil
     }
 
     private func applyPending() {
@@ -324,15 +361,26 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             measured.removeAll(keepingCapacity: false)
             document = NativeListLayout()
         }
-        let changed = updateRows(in: frame, resetting: resets)
+        let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
+        let changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
+        let previousCount = current.rows.count
         current = frame
         let restyles = needsRestyle
-        if changesOrder || restyles || !changed.isEmpty { rebuildDocument() }
+        let kept = changesOrder || restyles || !changed.isEmpty
+            ? rebuildDocument(keeping: restyles ? nil : changesOrder ? keptOrder ?? 0 : frame.rows.count, changed: changed)
+            : frame.rows.count
+        assert(document.rows.count == current.rows.count && documentRowIDs.count == current.rows.count,
+               "the document and the frame disagree on the rows")
         needsRestyle = false
         previousExpanded = expanded
         fitViewport(anchor: anchor, following: following)
         install()
-        if changesOrder || restyles { collection.reloadData() } else { reconfigure(changed) }
+        if resets || restyles || itemCount == 0 || itemCount != previousCount {
+            itemCount = current.rows.count
+            collection.reloadData()
+        }
+        else if changesOrder { replaceItems(from: min(kept, keptOrder ?? 0), previousCount: previousCount, changed: changed) }
+        else { reconfigure(changed) }
         if following { scrollToBottom() }
         else if let anchor, let y = document.position(of: anchor) { scroll(toY: y - scroll.contentInsets.top) }
         if changesOrder, rows.count > current.rowIDs.count {
@@ -346,38 +394,90 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         model.readingItem = visibleRows.first?.item
     }
 
-    private func updateRows(in frame: TimelineFrame, resetting: Bool) -> Set<ChatRowID> {
+    /// `keptOrder`: how many leading rows kept their order, or nil when the order did not change.
+    private func updateRows(in frame: TimelineFrame, resetting: Bool, keptOrder: Int?) -> Set<ChatRowID> {
         let usesDelta = !resetting && frame.parentRevision == current.revision && frame.changedRows != nil
+        let candidates = usesDelta ? frame.changedRows ?? [] : frame.rows
         var changed = previousExpanded.symmetricDifference(expanded)
         measured.subtract(changed)
-        for row in usesDelta ? frame.changedRows ?? [] : frame.rows {
+        for row in candidates {
             if resetting || rows[row.id]?.revision != row.revision || rows[row.id]?.awaitsHighlights == true {
                 measured.remove(row.id)
                 changed.insert(row.id)
             }
             rows[row.id] = row
         }
-        for (row, spacing) in zip(frame.rows, ChatRowSpacing.tops(of: frame.rows)) where topSpacings[row.id] != spacing {
-            topSpacings[row.id] = spacing
-            measured.remove(row.id)
-            changed.insert(row.id)
+        // A row's spacing follows the row above it: only rows from the first change on can move.
+        let firstChanged = keptOrder.map { max(0, $0 - 1) }
+            ?? candidates.lazy.compactMap { self.document.indices[$0.id.storageKey] }.min()
+            ?? frame.rows.count
+        let start = min(firstChanged, frame.rows.count)
+        var previous: ChatRow? = start > 0 ? frame.rows[start - 1] : nil
+        for row in frame.rows[start...] {
+            let spacing = ChatRowSpacing.top(of: row, below: previous)
+            if topSpacings[row.id] != spacing {
+                topSpacings[row.id] = spacing
+                measured.remove(row.id)
+                changed.insert(row.id)
+            }
+            previous = row
         }
         if needsRestyle { changed.formUnion(frame.rowIDs) }
         return changed.intersection(frame.rowIDs)
     }
 
-    /// Every row at its measured height, the height it had, or an estimate until it is measured.
-    private func rebuildDocument() {
+    /// Rows before `keptOrder` that did not change keep their geometry; the rest is rebuilt at its
+    /// measured height, the height it had, or an estimate until it is measured. Returns how many
+    /// leading rows were kept.
+    @discardableResult
+    private func rebuildDocument(keeping keptOrder: Int?, changed: Set<ChatRowID>) -> Int {
         let previous = document
         let width = lastWidth
-        let scale = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: ChatFont.proseSize)) / 20
-        document = NativeListLayout(rows: current.rows.map { row in
+        let kept = keptOrder.map { keptRowCount(keptOrder: $0, width: width, changed: changed) } ?? 0
+        let scale = Self.proseLineHeight / 20
+        let tail = current.rows[kept...].map { row -> NativeListRow in
             let height: CGFloat
             if let cached = heights.peek(key(row)) { height = cached }
             else if previous.contentWidth == width, let index = previous.indices[row.id.storageKey] { height = previous.rows[index].height }
             else { height = ChatRowEstimate.height(for: row, rowWidth: ChatReadingColumn.rowWidth(in: width), scale: scale) }
             return NativeListRow(id: row.id.storageKey, height: max(1, height))
-        }, contentWidth: width)
+        }
+        if kept > 0 { document.replaceRows(from: kept, with: tail) }
+        else { document = NativeListLayout(rows: tail, contentWidth: width) }
+        documentRowIDs.removeSubrange(min(kept, documentRowIDs.count)...)
+        documentRowIDs.append(contentsOf: current.rows[kept...].lazy.map(\.id))
+        return kept
+    }
+
+    /// The worker counts the rows that kept their place since the frame it built before; a frame
+    /// that skipped some is compared here.
+    private func keptOrder(of frame: TimelineFrame) -> Int {
+        if frame.parentRevision == current.revision, let kept = frame.keptOrder { return kept }
+        return zip(frame.rows, documentRowIDs).prefix { $0.id == $1 }.count
+    }
+
+    private func keptRowCount(keptOrder: Int, width: CGFloat, changed: Set<ChatRowID>) -> Int {
+        guard document.contentWidth == width, documentRowIDs.count == document.rows.count else { return 0 }
+        let firstChanged = changed.lazy.compactMap { self.document.indices[$0.storageKey] }.min()
+        return min(keptOrder, firstChanged ?? keptOrder, document.rows.count)
+    }
+
+    /// The items from `start` on are replaced and the ones before it that changed redrawn, so a
+    /// streamed row never reloads the rows above it.
+    private func replaceItems(from start: Int, previousCount: Int, changed: Set<ChatRowID>) {
+        let start = min(start, previousCount, current.rows.count)
+        let removed = Set((start..<previousCount).map { IndexPath(item: $0, section: 0) })
+        let inserted = Set((start..<current.rows.count).map { IndexPath(item: $0, section: 0) })
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            collection.performBatchUpdates {
+                itemCount = current.rows.count
+                if !removed.isEmpty { collection.deleteItems(at: removed) }
+                if !inserted.isEmpty { collection.insertItems(at: inserted) }
+            }
+        }
+        reconfigure(changed)
     }
 
     private func install() {
@@ -399,10 +499,10 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     /// Measures the rows the viewport will show where it is going, until none changes height.
     private func fitViewport(anchor: NativeListLayout.Anchor?, following: Bool) {
         guard readingRect.height > 0 else { return }
-        while true {
+        for _ in 0..<Self.measurePassLimit {
             let top = following ? bottomOffset + scroll.contentInsets.top
                 : anchor.flatMap { document.position(of: $0) } ?? readingRect.minY
-            guard measure(in: CGRect(x: 0, y: top, width: lastWidth, height: readingRect.height)) else { break }
+            guard measure(in: CGRect(x: 0, y: top, width: lastWidth, height: readingRect.height)) else { return }
         }
     }
 
@@ -491,6 +591,12 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         model.readingItem = visibleRows.first?.item
         if !follows, readingRect.minY < Self.historyDistance { model.requestOlder() }
     }
+}
+
+private final class ChatTranscriptClock: NSObject {
+    weak var owner: ChatTranscriptController?
+    init(owner: ChatTranscriptController) { self.owner = owner }
+    @MainActor @objc func step() { owner?.tick() }
 }
 
 /// Reports the reader's own scrolling with the wheel and the trackpad, apart from Chat's moves.

@@ -48,6 +48,9 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     private static let topClearance: CGFloat = 52
+    /// Measuring can grow rows into view that need measuring in turn; past this many passes the
+    /// rest waits for the next frame.
+    static let measurePassLimit = 8
 
     let model: TimelineModel
     let collection: UICollectionView
@@ -589,7 +592,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private func fitViewport(anchor: NativeListLayout.Anchor?, following: Bool, includingCurrent: Bool) -> Bool {
         guard collection.bounds.height > 0 else { return false }
         var updated = false
-        while true {
+        for _ in 0..<Self.measurePassLimit {
             let viewport = CGRect(origin: targetOffset(anchor: anchor, following: following), size: collection.bounds.size)
             var candidates = Set(document.visibleRows(in: viewport))
             if includingCurrent { candidates.formUnion(document.visibleRows(in: collection.bounds)) }
