@@ -177,6 +177,9 @@ public final class DaemonWorkspace {
     public internal(set) var workflowsRev: UInt64 = 0
     @ObservationIgnored var workflowObservers: [UUID: (UInt64) -> Void] = [:]
     @ObservationIgnored var timelineChannels: [UInt64: TimelineChannel] = [:]
+    /// Each watched pane's agent controls (`AgentControls.swift`), as last pushed.
+    public internal(set) var agentControls: [UInt64: AgentControls] = [:]
+    @ObservationIgnored var agentControlsViewers: [UInt64: Int] = [:]
 
     @ObservationIgnored private let resolve: () -> (any DaemonWorkspaceAPI)?
     @ObservationIgnored private var installedOn: ObjectIdentifier?
@@ -321,6 +324,8 @@ public final class DaemonWorkspace {
             loadWorktreePortsIfNeeded()
         case .timeline(let pane, let json):
             timelineChannels[pane]?.receive(json)
+        case .agentControls(let pane, let json):
+            receiveAgentControls(pane: pane, json: json)
         case .workflowsChanged(let rev):
             workflowsRev = rev
             for observer in workflowObservers.values { observer(rev) }
@@ -449,6 +454,7 @@ public final class DaemonWorkspace {
             install()
             generation += 1
             for channel in timelineChannels.values { channel.reconnect() }
+            for pane in agentControlsViewers.keys { requestAgentControls(pane: pane) }
             Task { await refresh() }
             rewatch()
             if usageViewers > 0 { watchUsage() }
@@ -460,6 +466,7 @@ public final class DaemonWorkspace {
         case .paneClosed(let pane):
             runningCommands[pane] = nil
             timelineChannels.removeValue(forKey: pane)?.close()
+            agentControls[pane] = nil
         case .disconnected:
             for channel in timelineChannels.values { channel.disconnected() }
             // Requests in flight get no answer on this connection.

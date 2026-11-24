@@ -3,23 +3,33 @@ import DesignSystem
 import HostKit
 import SwiftUI
 
-/// The model and permission mode under the composer, each a small menu. Choosing a model puts
-/// Claude Code's own `/model` command in the message for Send to apply; pi only shows its model.
-/// The mode only changes in Terminal: Claude Code cycles it with Shift-Tab, and a key that steps
-/// through modes could land on one the user did not choose, so the menu shows every mode and
-/// checks the current one.
+/// The model and permission mode under the composer, each a small menu. With a helper that
+/// offers agent controls they change the running agent (`ChatAgentControls`). Otherwise choosing
+/// a model puts Claude Code's own `/model` command in the message for Send to apply; Codex and pi
+/// only show their model. The mode then only changes in Terminal: Claude Code cycles it with
+/// Shift-Tab, and a key that steps through modes could land on one the user did not choose, so
+/// the menu shows every mode and checks the current one.
 struct ChatSessionChips: View {
     let session: TimelineSession?
     let canChooseModel: Bool
     let chooseModel: (String) -> Void
+    @Environment(\.chatAgentControls) private var agentControls
 
     var body: some View {
+        if let agentControls, agentControls.hub.offersAgentControls {
+            ChatAgentControls(context: agentControls, session: session)
+        } else {
+            readOnlyChips
+        }
+    }
+
+    @ViewBuilder private var readOnlyChips: some View {
         let model = session?.model.map(ChatSessionControls.modelName)
         let mode = session?.permissionMode
         if model != nil || mode != nil {
             HStack(spacing: DS.Space.xxs) {
                 Spacer(minLength: 0)
-                if let model, session?.agent == .known(.pi) {
+                if let model, !ChatSessionControls.offersModelAliases(session?.agent) {
                     Text(verbatim: model).lineLimit(1)
                         .padding(.horizontal, DS.Space.s)
                         .frame(minHeight: DS.Size.touchTarget)
@@ -89,7 +99,7 @@ struct ChatSessionChips: View {
 }
 
 /// A chip's label with the shared press fill, inside a 44 pt target.
-private struct ChatChipButtonStyle: ButtonStyle {
+struct ChatChipButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {

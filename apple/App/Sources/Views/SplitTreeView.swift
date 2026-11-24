@@ -727,15 +727,21 @@ struct PaneSlot: View {
     @ViewBuilder private func paneContent(_ pane: Pane) -> some View {
         #if os(iOS)
         if let state = pane.chat, state.agent != nil, let daemon = workspace.host as? DaemonConnection {
+            let working = daemon.meta[pane.id]?.agent?.state == .running
+            // A question or plan Chat can answer is not a wait in Terminal.
+            let answersInChat = daemon.workspace.agentControls[pane.id.rawValue]?.prompt != nil
             PaneChatView(pane: pane, state: state, hub: daemon.workspace,
                          approval: SharedApproval(workspace: workspace, session: daemon.multiplayer,
                                                   pane: pane.id.rawValue, placement: .chatComposer),
                          permitsSending: daemon.multiplayer.isOwner,
                          readsToolDetails: daemon.multiplayer.canPrompt,
-                         working: daemon.meta[pane.id]?.agent?.state == .running,
-                         terminalWait: ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state)) { active in
+                         working: working,
+                         terminalWait: answersInChat ? nil : ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state)) { active in
                 terminalContent(pane, isActive: active)
             }
+            .environment(\.chatAgentControls, ChatAgentControlsContext(
+                hub: daemon.workspace, pane: pane.id.rawValue,
+                canChange: daemon.multiplayer.isOwner, isWorking: working))
         } else { terminalContent(pane) }
         #else
         terminalContent(pane)

@@ -31,6 +31,11 @@ nonisolated enum ChatSessionControls {
         ModeOption(mode: .bypassPermissions, title: "Bypass", detail: "Runs everything without asking"),
     ]
 
+    /// Only Claude Code takes these aliases; Codex and pi name their own models.
+    static func offersModelAliases(_ agent: TimelineAgent?) -> Bool {
+        agent == .known(.claude)
+    }
+
     /// The aliases with the session's own family first, so the menu opens on what is running.
     static func modelChoices(current identifier: String?) -> [ModelOption] {
         let family = identifier.map(modelName)?.split(separator: " ").first.map(String.init)

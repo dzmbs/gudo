@@ -229,8 +229,13 @@ struct SharedApproval: View {
             // Still "blocked" until the agent's next event: an answered request is done.
             if case .blocked(let request, let summary, let choices)? = agent?.state, Self.shows(summary: summary),
                !session.decisions.contains(where: { $0.requestId == request }) {
-                card(request: request, summary: summary, choices: choices, agent: workspace.agentName(PaneId(pane)) ?? "The agent")
-                    .task(id: request) { options[request] = choices }
+                let name = workspace.agentName(PaneId(pane)) ?? "The agent"
+                if let prompt = chatPrompt(for: request) {
+                    promptCard(prompt, agent: name)
+                } else {
+                    card(request: request, summary: summary, choices: choices, agent: name)
+                        .task(id: request) { options[request] = choices }
+                }
             } else if placement == .sharedOverlay {
                 // Chat's idle composer must not acquire the shared overlay's receipt timer.
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
@@ -248,6 +253,40 @@ struct SharedApproval: View {
 
     static func shows(hasOthers: Bool, joined: Bool, placement: Placement) -> Bool {
         joined && (placement == .chatComposer || hasOthers)
+    }
+
+    private var hub: DaemonWorkspace? { (workspace.host as? DaemonConnection)?.workspace }
+
+    /// The question or plan Chat answers for `request`, when Chat shows this pane.
+    private func chatPrompt(for request: UInt64) -> AgentPrompt? {
+        guard placement == .chatComposer, let prompt = hub?.agentControls[pane]?.prompt,
+              prompt.requestId == request else { return nil }
+        return prompt
+    }
+
+    private var mayAnswer: Bool {
+        session.me != nil && (session.isOwner || session.canApprove)
+    }
+
+    @ViewBuilder private func promptCard(_ prompt: AgentPrompt, agent: String) -> some View {
+        let canAnswer = mayAnswer
+            && session.approvalBlock(requestId: prompt.requestId, risk: session.approvalStatuses[prompt.requestId]?.risk ?? .any) == nil
+        switch prompt {
+        case .questions(let questions):
+            QuestionCard(questions: questions, agent: agent, canAnswer: canAnswer,
+                         answer: { [hub] answers in
+                             guard let hub else { throw HostError.notConnected }
+                             try await hub.answer(questions, with: answers)
+                         },
+                         skip: { [hub] in hub?.skip(questions) })
+        case .plan(let plan):
+            PlanCard(plan: plan, agent: agent, canAnswer: canAnswer,
+                     approve: { [hub] in hub?.approve(plan) },
+                     keepPlanning: { [hub] feedback in
+                         guard let hub else { throw HostError.notConnected }
+                         try await hub.keepPlanning(plan, feedback: feedback)
+                     })
+        }
     }
 
     /// The last answer on this pane, for a few seconds after it came.
