@@ -131,7 +131,33 @@ Things are aligned to edges, never left floating.
 - One spacing scale (`DesignSystem` tokens). If two things look almost aligned, make them exactly
   aligned.
 
-## 5. Tests
+## 5. Performance and safety
+
+Write the most efficient code that stays simple. Performance is designed in, not tuned later.
+
+- Sketch before you code: for a hot path, estimate the cost in the four resources, most expensive
+  first: network, disk, memory, CPU. Pick the design that does the least work per event.
+- A limit on everything: every queue, buffer, cache, retry, loop, page, message and file has an
+  explicit bound, chosen on purpose and named as a constant. At the bound, shed or refuse plainly;
+  never grow without end.
+- Batch and amortize: one network message per window instead of one per delta, one main-thread
+  commit per frame, one syscall for many bytes. Send the first event of a burst at once, then
+  coalesce the rest.
+- No allocation on hot paths: allocate up front, reuse buffers, avoid per-frame and per-delta
+  copies, prefer borrowed slices and in-place updates. Don't clone to dodge the borrow checker.
+- The main thread draws and handles input, nothing else. Parsing, diffing, layout and I/O run off
+  it, and their results land in one commit.
+- Cost must not grow with history: work per new event stays constant however long the session,
+  scrollback or timeline is. Cache what didn't change; re-do only the tail.
+- Assert invariants: preconditions, postconditions and "can't happen" states are checked
+  (`debug_assert!` / `assert` on hot paths, `assert!` / `precondition` where cheap). A broken
+  invariant stops loudly instead of limping on.
+- Explicit control flow: bounded loops, no recursion over untrusted depth, errors handled where
+  they happen, no silent fallbacks.
+- Measure it: a change to a hot path comes with a benchmark or a budget test against
+  `docs/PERFORMANCE.md`, and the numbers in the commit or PR.
+
+## 6. Tests
 
 - Reproduce a bug with a failing test before fixing it.
 - Test behaviour through public APIs; avoid testing private details.
