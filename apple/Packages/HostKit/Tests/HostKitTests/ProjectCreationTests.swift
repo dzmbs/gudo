@@ -97,7 +97,7 @@ import Testing
         let (groups, model) = try fixture()
         let tabs = groups.tabs
         groups.commit(.group(tabs[1], onto: tabs[0])) { _, _ in "mac" }
-        groups.commit(.group(tabs[4], onto: tabs[3])) { _, _ in "mixed" }
+        groups.commit(.group(tabs[2], onto: tabs[3])) { _, _ in "mixed" }
         var saved = groups.projectsState
         // The same run (another window, a scene restored): kept.
         let (same, _) = try fixture(model)
@@ -114,7 +114,7 @@ import Testing
     @Test func aReconnectedSSHHostStartsLoose() throws {
         let (groups, model) = try fixture()
         let tabs = groups.tabs
-        groups.commit(.group(tabs[4], onto: tabs[0])) { _, _ in nil }
+        groups.commit(.group(tabs[2], onto: tabs[0])) { _, _ in nil }
         groups.close("box")
         model.connections["box"] = FakeConnection(tabs: 1)
         try groups.open("box")

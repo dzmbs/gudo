@@ -7,6 +7,38 @@ nonisolated public enum SidebarContainer: Hashable, Sendable {
     case window
     /// A host's loose tabs.
     case host(String)
+    /// A project's tabs on one host, in a sidebar grouped by host.
+    case hostProject(host: String, project: String)
+
+    /// The project and host whose rows these are, for a project's container.
+    public var projectPlace: ProjectPlace? {
+        switch self {
+        case .project(let project): ProjectPlace(project)
+        case .hostProject(let host, let project): ProjectPlace(project, on: host)
+        case .window, .host: nil
+        }
+    }
+}
+
+/// Where the sidebar draws a project: on one host, in a sidebar grouped by host, else across
+/// the window. A project with tabs on two hosts is drawn in two places, each folding on its own.
+nonisolated public struct ProjectPlace: Hashable, Sendable {
+    public var project: String
+    public var host: String?
+
+    public init(_ project: String, on host: String? = nil) {
+        self.project = project
+        self.host = host
+    }
+
+    public var container: SidebarContainer {
+        host.map { .hostProject(host: $0, project: project) } ?? .project(project)
+    }
+
+    /// What its fold is remembered by in `HostGroups.collapsedProjects`.
+    public var foldKey: String {
+        host.map { "\($0)/\(project)" } ?? project
+    }
 }
 
 /// A container and its rows, top to bottom.
@@ -41,6 +73,7 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
         case .project: true
         case .window: ref.hostId == HostGroups.mixedId
         case .host(let id): ref.hostId == id
+        case .hostProject(let host, _): ref.hostId == host || ref.hostId == HostGroups.mixedId
         }
     }
 
@@ -49,7 +82,7 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
     /// before or after the row. Nil when the drop would change nothing.
     public static func plan(dragging ref: TabRef, over target: TabRef, at fraction: Double, in section: SidebarSection) -> SidebarDrop? {
         guard ref != target, let index = section.rows.firstIndex(of: target) else { return nil }
-        let sameProject = section.rows.contains(ref) && { if case .project = section.container { true } else { false } }()
+        let sameProject = section.rows.contains(ref) && section.container.projectPlace != nil
         let canInsert = accepts(section.container, ref)
         let middle = fraction > 0.3 && fraction < 0.7
         if (middle && !sameProject) || !canInsert {
@@ -86,8 +119,10 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
     }
 
     /// This drop with the rest of a selection carried along, in sidebar order: each lands right
-    /// after the one before (an insert) or onto the same target (a group). Rows the container
-    /// cannot take (another host's tabs in a host section) stay where they are.
+    /// after the one before (an insert) or onto the same target (a group). Another host's tabs
+    /// carried into a host's part of a project join the project on their own host, at its end;
+    /// other rows the container cannot take (another host's tabs in a host section) stay where
+    /// they are.
     public func carrying(_ others: [TabRef], in sections: [SidebarSection]) -> [SidebarDrop] {
         var drops = [self]
         switch self {
@@ -96,7 +131,15 @@ nonisolated public enum SidebarDrop: Hashable, Sendable {
         case .insert(let ref, let container, _):
             var current = applied(to: sections)
             var previous = ref
-            for other in others where other != ref && Self.accepts(container, other) {
+            for other in others where other != ref {
+                guard Self.accepts(container, other) else {
+                    if case .hostProject(_, let project) = container {
+                        let drop = SidebarDrop.insert(other, into: .hostProject(host: other.hostId, project: project), at: .max)
+                        drops.append(drop)
+                        current = drop.applied(to: current)
+                    }
+                    continue
+                }
                 let rows = current.first { $0.container == container }?.rows.filter { $0 != other } ?? []
                 guard let after = rows.firstIndex(of: previous) else { continue }
                 let drop = SidebarDrop.insert(other, into: container, at: after + 1)

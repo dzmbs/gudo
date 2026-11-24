@@ -256,17 +256,20 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
         return groups
     }
 
-    @Test func droppingATabOnAnotherMakesAProjectThatLeadsTheOrder() throws {
+    @Test func droppingATabOnAnotherMakesAProjectThatLeadsItsHost() throws {
         let groups = try fixture()
         let before = groups.tabs
-        let mac2 = before[1], cloud2 = before[3], box = before[4]
+        #expect(before.map(\.hostId) == ["local", "local", "box", "cloud", "cloud"])
+        let mac2 = before[1], box = before[2], cloud1 = before[3], cloud2 = before[4]
         groups.commit(.group(box, onto: cloud2)) { _, _ in "api" }
         #expect(groups.projects.map(\.name) == ["api"])
         #expect(groups.projects[0].tabs == [cloud2, box])
-        // Projects lead ⌘1…; the rest keep their host order.
-        #expect(groups.tabs == [cloud2, box, before[0], mac2, before[2]])
-        #expect(groups.tab(forShortcut: 1) == cloud2)
+        // Grouped by host: each host's part of the project follows that host's loose tabs.
+        #expect(groups.tabs == [before[0], mac2, box, cloud1, cloud2])
+        #expect(groups.tab(forShortcut: 5) == cloud2)
         #expect(groups.sections.first { $0.container == .host("box") }?.rows == [])
+        #expect(groups.sections.first { $0.container == .hostProject(host: "box", project: groups.projects[0].id) }?.rows == [box])
+        #expect(groups.places(of: groups.projects[0].id) == [ProjectPlace(groups.projects[0].id, on: "box"), ProjectPlace(groups.projects[0].id, on: "cloud")])
 
         // Onto a project's tab: joins after it.
         groups.commit(.group(mac2, onto: cloud2)) { _, _ in "unused" }
@@ -278,9 +281,14 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
         let local = try #require(groups.group("local"))
         #expect(local.tabs.map { local.ref($0.id) } == [mac2, before[0]])
 
-        // ⌃⌘↓ within the project.
+        // ⌃⌘↓ within the project's rows on its host: alone there, it stays.
         groups.moveTab(cloud2, by: 1)
-        #expect(groups.projects[0].tabs == [box, cloud2])
+        #expect(groups.projects[0].tabs == [cloud2, box])
+        groups.commit(.group(cloud1, onto: cloud2)) { _, _ in "" }
+        #expect(groups.projects[0].tabs == [cloud2, cloud1, box])
+        groups.moveTab(cloud2, by: 1)
+        #expect(groups.projects[0].tabs == [cloud1, cloud2, box])
+        groups.commit(.insert(cloud1, into: .host("cloud"), at: 0)) { _, _ in "" }
 
         // The last members leave: the project is gone, nothing is left behind.
         groups.commit(.insert(box, into: .host("box"), at: 0)) { _, _ in "" }
@@ -293,13 +301,14 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
     @Test func aPreviewIsWhatTheCommitLeaves() throws {
         let groups = try fixture()
         let tabs = groups.tabs
-        groups.commit(.group(tabs[3], onto: tabs[2])) { _, _ in "api" }
+        groups.commit(.group(tabs[4], onto: tabs[3])) { _, _ in "api" }
         let project = try #require(groups.projects.first)
         let drops: [SidebarDrop] = [
-            .insert(tabs[4], into: .project(project.id), at: 1),
-            .insert(tabs[3], into: .project(project.id), at: 0),
+            .insert(tabs[4], into: .hostProject(host: "cloud", project: project.id), at: 0),
+            .insert(tabs[3], into: .hostProject(host: "cloud", project: project.id), at: 0),
+            .insert(tabs[3], into: .hostProject(host: "cloud", project: project.id), at: 1),
             .insert(tabs[1], into: .host("local"), at: 0),
-            .insert(tabs[2], into: .host("cloud"), at: 0),
+            .insert(tabs[3], into: .host("cloud"), at: 0),
         ]
         for drop in drops {
             let preview = drop.applied(to: groups.sections)
@@ -323,5 +332,49 @@ private func tabsLayout(revision: UInt64, _ ids: [UInt64], session: UInt64 = 7) 
         #expect(groups.project(two)?.color == 5)
         groups.apply(groups.planner().ungroup(two))
         #expect(groups.projects.map(\.name) == ["one"])
+    }
+
+    /// Grouped by host, a project with tabs on two hosts is drawn under each, and each folds on
+    /// its own; folding a host hides its project rows with its loose ones.
+    @Test func aProjectOnTwoHostsFoldsInEachPlaceOnItsOwn() throws {
+        let groups = try fixture()
+        let tabs = groups.tabs
+        let id = try #require(groups.commit(.group(tabs[3], onto: tabs[0])) { _, _ in "app" })
+        let onMac = ProjectPlace(id, on: "local"), onCloud = ProjectPlace(id, on: "cloud")
+        #expect(groups.places(of: id) == [onMac, onCloud])
+        #expect(groups.rows(of: onMac) == [tabs[0]])
+        #expect(groups.rows(of: onCloud) == [tabs[3]])
+        #expect(onMac.foldKey != onCloud.foldKey)
+
+        groups.toggleCollapsed(onCloud)
+        #expect(!groups.isRowShown(tabs[3]))
+        #expect(groups.isRowShown(tabs[0]))
+        groups.showRow(tabs[3])
+        #expect(groups.isRowShown(tabs[3]))
+
+        groups.toggleCollapsed("cloud")
+        #expect(!groups.isRowShown(tabs[3]))
+        #expect(!groups.isRowShown(tabs[4]))
+        #expect(groups.isRowShown(tabs[0]))
+        groups.showRow(tabs[4])
+        #expect(groups.collapsed.isEmpty)
+
+        groups.toggleCollapsed(onMac)
+        groups.toggleCollapsed(onCloud)
+        groups.expand(project: id)
+        #expect(groups.collapsedProjects.isEmpty)
+    }
+
+    /// A drop among one host's rows of a project lands between those rows in the project,
+    /// wherever the other hosts' rows sit.
+    @Test func aDropAmongOneHostsRowsLandsBetweenThemInTheProject() {
+        let a1 = TabRef(hostId: "a", tab: TabId(1)), a2 = TabRef(hostId: "a", tab: TabId(2)), a3 = TabRef(hostId: "a", tab: TabId(3))
+        let b1 = TabRef(hostId: "b", tab: TabId(1)), b2 = TabRef(hostId: "b", tab: TabId(2))
+        let all = [a1, b1, a2, b2, a3]
+        #expect(HostGroups.projectIndex(placing: a3, at: 0, among: [a1, a2, a3], in: all) == 0)
+        #expect(HostGroups.projectIndex(placing: a3, at: 1, among: [a1, a2, a3], in: all) == 2)
+        #expect(HostGroups.projectIndex(placing: a1, at: 2, among: [a1, a2, a3], in: all) == 4)
+        #expect(HostGroups.projectIndex(placing: a1, at: 9, among: [a1, a2, a3], in: all) == 4)
+        #expect(HostGroups.projectIndex(placing: a1, at: 0, among: [a1], in: all) == 4)
     }
 }

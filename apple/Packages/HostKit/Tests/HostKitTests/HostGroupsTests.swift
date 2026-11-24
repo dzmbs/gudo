@@ -57,15 +57,17 @@ final class FakeConnection: HostConnection {
         return (groups, fakes, local)
     }
 
-    @Test func groupsListThisDeviceThenHostsInOpenOrder() throws {
+    @Test func groupsListThisDeviceThenPinnedHostsThenTheRestByName() throws {
         let (groups, _, _) = try fixture()
-        #expect(groups.groups.map(\.id) == ["local", "cloud", "box", "studio"])
-        #expect(groups.groups.map(\.kind) == [.local, .daemon, .ssh, .daemon])
-        #expect(groups.groups.map(\.name) == ["This Mac", "cloud", "box", "studio"])
-        #expect(groups.groups.map(\.tabs.count) == [2, 2, 1, 1])
+        #expect(groups.groups.map(\.id) == ["local", "box", "cloud", "studio"])
+        #expect(groups.groups.map(\.kind) == [.local, .ssh, .daemon, .daemon])
+        #expect(groups.groups.map(\.name) == ["This Mac", "box", "cloud", "studio"])
+        #expect(groups.groups.map(\.tabs.count) == [2, 1, 2, 1])
         // Opening an open host again neither reorders nor duplicates it.
         try groups.open("cloud")
         #expect(groups.openHosts == ["cloud", "box", "studio"])
+        groups.hosts.setPinned("studio", true)
+        #expect(groups.groups.map(\.id) == ["local", "studio", "box", "cloud"])
     }
 
     /// A tab in a repository is a tab like any other: its host's rows and ⌘-numbers keep host
@@ -90,10 +92,10 @@ final class FakeConnection: HostConnection {
         let (groups, _, local) = try fixture()
         let all = groups.tabs
         #expect(all.count == 6)
-        #expect(all.map(\.hostId) == ["local", "local", "cloud", "cloud", "box", "studio"])
+        #expect(all.map(\.hostId) == ["local", "local", "box", "cloud", "cloud", "studio"])
         #expect(groups.tab(forShortcut: 1) == all[0])
-        #expect(groups.tab(forShortcut: 3)?.hostId == "cloud")
-        #expect(groups.tab(forShortcut: 5)?.hostId == "box")
+        #expect(groups.tab(forShortcut: 3)?.hostId == "box")
+        #expect(groups.tab(forShortcut: 5)?.hostId == "cloud")
         #expect(groups.tab(forShortcut: 6)?.hostId == "studio")
         #expect(groups.tab(forShortcut: 7) == nil)
         #expect(groups.tab(forShortcut: 9) == all.last)
@@ -214,7 +216,7 @@ final class FakeConnection: HostConnection {
 
         // A host connected from elsewhere in the app shows too, after the open ones.
         let other = HostGroups(hosts: groups.hosts, local: nil)
-        #expect(other.groups.map(\.id) == ["studio", "cloud"], "saved-host order")
+        #expect(other.groups.map(\.id) == ["cloud", "studio"], "by name")
         #expect(!other.groups.contains { $0.isLocal })
 
         // Restore: forgotten hosts are dropped; one that cannot open (no password saved) stays

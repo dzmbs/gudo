@@ -156,13 +156,18 @@ public final class HostGroups {
         return group
     }
 
-    /// This device's helper first, then the open hosts, then hosts connected elsewhere in the
-    /// app, in saved-host order.
+    /// This device's helper first, then the hosts the user pinned, then the rest, each by name:
+    /// the open hosts and those connected elsewhere in the app.
     private var hostOrder: [String] {
         let others = hosts.records.map(\.id).filter { !openHosts.contains($0) && hosts.connections[$0] != nil }
-        let order = openHosts + others
-        let thisDevice = order.filter { hosts.record($0)?.isThisDevice == true }
-        return thisDevice + order.filter { !thisDevice.contains($0) }
+        let shown = (openHosts + others).compactMap(hosts.record)
+        return shown.sorted { lhs, rhs in
+            if lhs.isThisDevice != rhs.isThisDevice { return lhs.isThisDevice }
+            if lhs.pinned != rhs.pinned { return lhs.pinned }
+            let byName = lhs.name.localizedStandardCompare(rhs.name)
+            return byName == .orderedSame ? lhs.id < rhs.id : byName == .orderedAscending
+        }
+        .map(\.id)
     }
 
     /// One group, built alone: what depends on it does not depend on every other host.
@@ -173,16 +178,62 @@ public final class HostGroups {
         return hostGroup(id, carriers: carriers)
     }
 
-    /// Every tab in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk. Projects first (in
-    /// their order, tabs by rank), then the window's loose tabs, then each host's loose tabs
-    /// in host order, as the sidebar draws them.
+    /// Every tab in sidebar order: the unified list ⌘1…⌘9 and ⇧⌘[ ] walk, the rows of
+    /// `sections` top to bottom.
     public var tabs: [TabRef] {
+        sections.flatMap(\.rows)
+    }
+
+    /// Whether the sidebar groups everything by host: the window shows more than one.
+    public var groupsByHost: Bool { groups.count > 1 }
+
+    /// The host a tab's row sits under: its own, or for a mixed tab the host of the tab it was
+    /// made from; nil for the window's own tabs.
+    public func home(of ref: TabRef) -> String? {
+        home(of: ref, in: groups)
+    }
+
+    private func home(of ref: TabRef, in groups: [HostGroup]) -> String? {
+        guard ref.hostId == Self.mixedId else { return ref.hostId }
+        return groups.first { $0.listed.contains(ref) }?.id
+    }
+
+    /// The rows the sidebar draws for a project in `place`: all its tabs in a sidebar not
+    /// grouped by host, else those under that host (those on no host for a place without one).
+    public func rows(of place: ProjectPlace) -> [TabRef] {
         let groups = groups
-        let projects = projects(in: groups)
-        let grouped = Set(projects.flatMap(\.tabs))
-        return projects.flatMap(\.tabs)
-            + windowTabs(in: groups).filter { !grouped.contains($0) }
-            + groups.flatMap { looseTabs(of: $0, grouped: grouped) }
+        guard let project = projects(in: groups).first(where: { $0.id == place.project }) else { return [] }
+        return rows(of: project, on: place.host, in: groups)
+    }
+
+    private func rows(of project: Project, on host: String?, in groups: [HostGroup]) -> [TabRef] {
+        guard groups.count > 1 else { return project.tabs }
+        return project.tabs.filter { home(of: $0, in: groups) == host }
+    }
+
+    /// Where the sidebar draws a project, top to bottom: across the window when it is not
+    /// grouped by host; else apart from any host while it holds tabs on none (an empty project,
+    /// window tabs), then under each host holding its tabs.
+    public func places(of id: String) -> [ProjectPlace] {
+        let groups = groups
+        guard let project = projects(in: groups).first(where: { $0.id == id }) else { return [] }
+        guard groups.count > 1 else { return [ProjectPlace(id)] }
+        let homes = project.tabs.map { home(of: $0, in: groups) }
+        let apart = project.tabs.isEmpty || homes.contains(nil) ? [ProjectPlace(id)] : []
+        return apart + groups.filter { homes.contains($0.id) }.map { ProjectPlace(id, on: $0.id) }
+    }
+
+    public func isCollapsed(_ place: ProjectPlace) -> Bool {
+        collapsedProjects.contains(place.foldKey)
+    }
+
+    public func toggleCollapsed(_ place: ProjectPlace) {
+        toggleCollapsed(project: place.foldKey)
+    }
+
+    /// Unfolds a project in every place the sidebar draws it.
+    public func expand(project id: String) {
+        collapsedProjects = collapsedProjects.filter { $0 != id && !$0.hasSuffix("/" + id) }
     }
 
     /// A group's rows that are in no project, in sidebar order (a mixed tab made from one of its
@@ -484,14 +535,31 @@ public final class HostGroups {
     }
 
     /// The sidebar's draggable runs of rows, top to bottom: projects, the window's loose tabs,
-    /// then each host's loose tabs.
+    /// then each host's loose tabs. Grouped by host, each host's loose tabs come before its own
+    /// projects, and only projects holding tabs on no host stay apart from the hosts.
     public var sections: [SidebarSection] {
         let groups = groups
         let projects = projects(in: groups)
         let grouped = Set(projects.flatMap(\.tabs))
-        return projects.map { SidebarSection(.project($0.id), rows: $0.tabs) }
-            + [SidebarSection(.window, rows: windowTabs(in: groups).filter { !grouped.contains($0) })]
-            + groups.map { SidebarSection(.host($0.id), rows: looseTabs(of: $0, grouped: grouped)) }
+        let window = SidebarSection(.window, rows: windowTabs(in: groups).filter { !grouped.contains($0) })
+        guard groups.count > 1 else {
+            return projects.map { SidebarSection(.project($0.id), rows: $0.tabs) }
+                + [window]
+                + groups.map { SidebarSection(.host($0.id), rows: looseTabs(of: $0, grouped: grouped)) }
+        }
+        let apart = projects.compactMap { project -> SidebarSection? in
+            let rows = rows(of: project, on: nil, in: groups)
+            guard project.tabs.isEmpty || !rows.isEmpty else { return nil }
+            return SidebarSection(.project(project.id), rows: rows)
+        }
+        let hosted = groups.flatMap { group in
+            [SidebarSection(.host(group.id), rows: looseTabs(of: group, grouped: grouped))]
+                + projects.compactMap { project -> SidebarSection? in
+                    let rows = rows(of: project, on: group.id, in: groups)
+                    return rows.isEmpty ? nil : SidebarSection(.hostProject(host: group.id, project: project.id), rows: rows)
+                }
+        }
+        return apart + [window] + hosted
     }
 
     /// What dropping `ref` onto `target` groups them into: the target's project, else the
@@ -532,6 +600,10 @@ public final class HostGroups {
             }
         case .insert(let ref, .project(let id), let index):
             apply(planner.move(ref, into: id, at: index))
+        case .insert(let ref, .hostProject(let host, let id), let index):
+            guard let project = planner.project(id) else { return nil }
+            let shown = rows(of: ProjectPlace(id, on: host))
+            apply(planner.move(ref, into: id, at: Self.projectIndex(placing: ref, at: index, among: shown, in: project.tabs)))
         case .insert(let ref, .window, _):
             apply(planner.remove(ref))
         case .insert(let ref, .host(let host), let index):
@@ -546,6 +618,16 @@ public final class HostGroups {
             }
         }
         return nil
+    }
+
+    /// Where `ref` goes among all of a project's tabs to land at `index` among the rows one
+    /// place shows: just before the row it lands on, else just after the place's last row.
+    nonisolated static func projectIndex(placing ref: TabRef, at index: Int, among shown: [TabRef], in tabs: [TabRef]) -> Int {
+        let shown = shown.filter { $0 != ref }
+        let all = tabs.filter { $0 != ref }
+        if shown.indices.contains(index), let before = all.firstIndex(of: shown[index]) { return before }
+        if let last = shown.last, let after = all.firstIndex(of: last) { return after + 1 }
+        return all.count
     }
 
     /// Moves a tab one row up (-1) or down (+1) within its section (⌃⌘↑ / ⌃⌘↓).
@@ -700,24 +782,40 @@ public final class HostGroups {
     }
 
     /// Whether the sidebar lists `ref`'s row: its project is expanded, or, outside any project,
-    /// its host's group is.
+    /// its host's group is. Grouped by host, its host's group is expanded as well.
     public func isRowShown(_ ref: TabRef) -> Bool {
-        isRowShown(ref, projects: projects, groups: groups)
+        let groups = groups
+        return isRowShown(ref, projects: projects(in: groups), groups: groups)
     }
 
     private func isRowShown(_ ref: TabRef, projects: [Project], groups: [HostGroup]) -> Bool {
-        if let project = projects.first(where: { $0.tabs.contains(ref) }) { return !collapsedProjects.contains(project.id) }
-        guard let group = groups.first(where: { $0.listed.contains(ref) }) else { return true }
-        return !collapsed.contains(group.id)
+        let project = projects.first { $0.tabs.contains(ref) }
+        guard groups.count > 1 else {
+            if let project { return !collapsedProjects.contains(project.id) }
+            guard let group = groups.first(where: { $0.listed.contains(ref) }) else { return true }
+            return !collapsed.contains(group.id)
+        }
+        let home = home(of: ref, in: groups)
+        if let home, collapsed.contains(home) { return false }
+        guard let project else { return true }
+        return !isCollapsed(ProjectPlace(project.id, on: home))
     }
 
     /// Expands the project or group that hides `ref`'s row.
     public func showRow(_ ref: TabRef) {
-        if let project = project(of: ref) {
-            collapsedProjects.remove(project.id)
-        } else if let group = groups.first(where: { $0.listed.contains(ref) }) {
-            collapsed.remove(group.id)
+        let groups = groups
+        let project = projects(in: groups).first { $0.tabs.contains(ref) }
+        guard groups.count > 1 else {
+            if let project {
+                collapsedProjects.remove(project.id)
+            } else if let group = groups.first(where: { $0.listed.contains(ref) }) {
+                collapsed.remove(group.id)
+            }
+            return
         }
+        let home = home(of: ref, in: groups)
+        if let home { collapsed.remove(home) }
+        if let project { collapsedProjects.remove(ProjectPlace(project.id, on: home).foldKey) }
     }
 
     /// The tab to select once `closing` close while `current` is selected: the nearest one in
