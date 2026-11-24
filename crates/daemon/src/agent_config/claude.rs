@@ -602,6 +602,10 @@ fn loop_relaunch(
 
 /// `claude --resume <session>` with the settings, as the user would type it.
 fn typed_by_hand(mode: &LaunchMode, config: &ClaudeConfig) -> String {
+    debug_assert!(
+        matches!(mode, LaunchMode::Resume { .. }),
+        "a Claude Code started by hand restarts on its conversation"
+    );
     let session = match mode {
         LaunchMode::Resume { session_id } => session_id.as_str(),
         LaunchMode::Fresh { session_id } => session_id
