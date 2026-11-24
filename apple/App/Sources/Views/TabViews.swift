@@ -759,7 +759,8 @@ struct PaneTreeRow: View {
         let workspace = model.workspace(ofGroup: group.id)
         let title = switch program.kind {
         case .agent:
-            AgentTabTitle(terminalTitle: workspace?.panes[pane]?.agentTitle, kind: AgentKind(program.id), name: program.displayName).resolved
+            AgentTabTitle(sessionTitle: workspace?.panes[pane]?.agentSessionTitle, terminalTitle: workspace?.panes[pane]?.agentTitle,
+                          kind: AgentKind(program.id), name: program.displayName).resolved
         case _ where program.isShell:
             workspace?.directory(ofPane: pane) ?? workspace?.panes[pane]?.title.nonEmpty ?? program.displayName
         default: program.displayName

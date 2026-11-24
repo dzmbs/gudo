@@ -33,6 +33,14 @@ final class Pane {
     private(set) var foregroundArguments: [String] = []
     /// Live, or showing stale content (dimmed, never blank) while its host reconnects.
     private(set) var connection = PaneConnection.live
+    /// The agent session's own title, as its Chat timeline last named it.
+    var agentSessionTitle: String? {
+        #if os(iOS)
+        chat?.sessionTitle
+        #else
+        nil
+        #endif
+    }
     #if os(iOS)
     var chat: PaneChatState?
     /// The terminal had the keyboard as its container left the window: the container that takes

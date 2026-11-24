@@ -398,7 +398,8 @@ final class Workspace {
     func title(of tab: Tab, agentName: String?) -> String {
         let generated = tab.title.map(FriendlyName.isGenerated) ?? true
         if let daemon = host as? DaemonConnection, let agent = daemon.meta[tab.focused]?.agent, generated {
-            return AgentTabTitle(terminalTitle: pane(tab.focused)?.agentTitle, kind: AgentKind(agent.kind)).resolved
+            return AgentTabTitle(sessionTitle: pane(tab.focused)?.agentSessionTitle, terminalTitle: pane(tab.focused)?.agentTitle,
+                                 kind: AgentKind(agent.kind)).resolved
         }
         if let agentName, generated {
             return AgentTabTitle(terminalTitle: pane(tab.focused)?.agentTitle, kind: .other, name: agentName).resolved
