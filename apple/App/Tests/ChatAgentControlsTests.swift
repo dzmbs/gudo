@@ -14,7 +14,8 @@ final class ChatAgentControlsTests: XCTestCase {
      "modes":[{"choice":{"id":"default","label":"Ask","detail":""},"risk":"Asks"},
               {"choice":{"id":"bypassPermissions","label":"Bypass permissions","detail":""},"risk":"Bypass"},
               {"choice":{"id":"later","label":"Later","detail":""},"risk":"Future"}],
-     "efforts":[{"id":"high","label":"High","detail":""}],"timing":"Restart"},
+     "efforts":[{"id":"high","label":"High","detail":""}],"timing":"Restart",
+     "context":{"used":50000,"window":200000}},
      "prompt":{"Questions":{"request_id":42,"answer":0,"skip":1,"questions":[
        {"header":"Framework","question":"Which framework?","multi_select":false,
         "options":[{"label":"React","description":"Components"},{"label":"Vue","description":""}]}]}}}
@@ -27,6 +28,7 @@ final class ChatAgentControlsTests: XCTestCase {
         XCTAssertEqual(controls.config.current.model, "opus")
         XCTAssertEqual(controls.config.modes.map(\.risk), [.asks, .bypass, .unknown])
         XCTAssertEqual(controls.config.timing, .restart)
+        XCTAssertEqual(controls.config.context?.fraction, 0.25)
         guard case .questions(let questions)? = controls.prompt else { return XCTFail("no questions") }
         XCTAssertEqual(questions.requestId, 42)
         XCTAssertEqual(questions.questions[0].options.map(\.label), ["React", "Vue"])

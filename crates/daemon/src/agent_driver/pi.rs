@@ -3,10 +3,6 @@
 //! directly. Without the bridge, Send pastes into the pi the daemon launched.
 
 pub(crate) mod bridge;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the agent-configuration requests call it")
-)]
 pub(crate) mod config;
 mod live;
 mod session;

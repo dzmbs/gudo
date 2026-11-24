@@ -121,7 +121,7 @@ pub(crate) fn controls(core: &Core, pane: PaneId) -> Result<AgentControls, WsErr
     let config = match kind {
         AgentKind::Claude => claude::config(core, &entry),
         AgentKind::Codex => codex_config(&entry),
-        AgentKind::Pi => unsupported("Chat cannot change pi's settings yet."),
+        AgentKind::Pi => pi_config(core, pane),
     };
     Ok(AgentControls {
         pane_id: pane,
@@ -156,7 +156,7 @@ pub(crate) async fn watch(
 
 /// Changes the pane agent's model, mode or effort. The caller checked that the connection is
 /// the owner's.
-pub(crate) fn set(
+pub(crate) async fn set(
     core: &Core,
     pane: PaneId,
     change: &AgentConfigValues,
@@ -177,6 +177,7 @@ pub(crate) fn set(
                 .ok_or_else(|| WsError::Unavailable("Codex control is unavailable.".into()))?;
             source.set_config(change);
         }
+        Some(AgentKind::Pi) => set_pi(core, pane, change).await?,
         _ => {
             return Err(WsError::Unavailable(
                 "Chat cannot change this agent.".into(),
@@ -229,7 +230,71 @@ fn unsupported(reason: &str) -> AgentConfig {
         modes: Vec::new(),
         efforts: Vec::new(),
         timing: AgentConfigTiming::NextTurn,
+        context: None,
     }
+}
+
+/// pi changes its model and thinking level at once, through its bridge.
+fn pi_config(core: &Core, pane: PaneId) -> AgentConfig {
+    use crate::agent_driver::pi::config::{AgentConfigDriver, PiConfig};
+    let config = match PiConfig.config(core, pane) {
+        Ok(config) => config,
+        Err(WsError::Unavailable(reason)) => return unsupported(&reason),
+        Err(_) => return unsupported("Change pi's settings in Terminal."),
+    };
+    let effort_label = |effort: &str| {
+        let mut characters = effort.chars();
+        characters.next().map_or_else(String::new, |first| {
+            first.to_uppercase().chain(characters).collect()
+        })
+    };
+    AgentConfig {
+        support: AgentConfigSupport::Supported,
+        current: AgentConfigValues {
+            model: config.model,
+            mode: None,
+            effort: config.effort,
+        },
+        pending: None,
+        models: config
+            .models
+            .into_iter()
+            .map(|model| AgentChoice {
+                id: model.id,
+                label: model.label,
+                detail: String::new(),
+            })
+            .collect(),
+        modes: Vec::new(),
+        efforts: config
+            .efforts
+            .into_iter()
+            .map(|effort| AgentChoice {
+                label: effort_label(&effort),
+                id: effort,
+                detail: String::new(),
+            })
+            .collect(),
+        timing: AgentConfigTiming::Now,
+        context: config
+            .context
+            .map(|(used, window)| proto::AgentContextUsage { used, window }),
+    }
+}
+
+/// Changes a connected pi's model or thinking level and waits for pi to take it.
+async fn set_pi(core: &Core, pane: PaneId, change: &AgentConfigValues) -> Result<(), WsError> {
+    use crate::agent_driver::pi::config::{AgentConfigDriver, PiConfig};
+    if change.mode.is_some() {
+        return Err(WsError::Invalid("pi has no permission modes".into()));
+    }
+    if let Some(model) = &change.model {
+        PiConfig.set_model(core, pane, model)?.await?;
+    }
+    if let Some(effort) = &change.effort {
+        PiConfig.set_effort(core, pane, effort)?.await?;
+    }
+    Ok(())
 }
 
 fn codex_config(entry: &PaneEntry) -> AgentConfig {

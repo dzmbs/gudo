@@ -66,10 +66,6 @@ impl Location {
 }
 
 /// How full the model's context window was at its latest request.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the agent-configuration state reads it")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ContextUsage {
     pub used: u64,
@@ -121,10 +117,6 @@ impl Projection {
         }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the agent-configuration state reads it")
-    )]
     pub fn context(&self) -> Option<ContextUsage> {
         let usage = self.usage?;
         Some(ContextUsage {

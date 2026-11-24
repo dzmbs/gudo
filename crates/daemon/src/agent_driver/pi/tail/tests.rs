@@ -699,3 +699,75 @@ async fn a_connected_pi_gets_chat_images_as_files_beside_the_prompt() {
     assert_eq!(sending.await.unwrap().unwrap(), ChatSendStatus::Confirmed);
     pi.daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_changes_a_connected_pis_model_and_shows_its_context() {
+    let mut fixture = Fixture::new();
+    fixture.reply("Ready.");
+    let pi = pi_pane(&mut fixture, true).await;
+    let pane = pi.entry.pane.id;
+    let unsupported = pi.client.agent_controls_watch(pane).await.unwrap();
+    assert!(matches!(
+        unsupported.config.support,
+        proto::AgentConfigSupport::Unsupported(_)
+    ));
+    let mut bridge = FakeBridge::connect(&pi).await;
+    bridge
+        .send(serde_json::json!({"type": "session", "session_id": SESSION,
+            "model": {"provider": "anthropic", "id": "claude-opus-4-5", "name": "Opus", "reasoning": true},
+            "thinking": "medium", "thinking_levels": ["low", "medium", "high"]}))
+        .await;
+    bridge
+        .send(serde_json::json!({"type": "models", "models": [
+            {"provider": "anthropic", "id": "claude-opus-4-5", "name": "Opus", "reasoning": true},
+            {"provider": "openai", "id": "gpt-5.5", "name": "GPT-5.5", "reasoning": true}]}))
+        .await;
+    bridge
+        .send(serde_json::json!({"type": "usage", "tokens": 1200, "context_window": 200000}))
+        .await;
+    let controls = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let controls = pi.client.agent_controls_watch(pane).await.unwrap();
+            if controls.config.models.len() == 2 && controls.config.context.is_some() {
+                return controls;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("pi reported its models");
+    assert_eq!(controls.config.timing, proto::AgentConfigTiming::Now);
+    assert_eq!(
+        controls.config.current.model.as_deref(),
+        Some("anthropic/claude-opus-4-5")
+    );
+    assert_eq!(controls.config.efforts[2].label, "High");
+    assert_eq!(
+        controls.config.context,
+        Some(proto::AgentContextUsage {
+            used: 1200,
+            window: 200_000
+        })
+    );
+
+    let client = Arc::clone(&pi.client);
+    let changing = tokio::spawn(async move {
+        client
+            .set_agent_config(
+                pane,
+                proto::AgentConfigValues {
+                    model: Some("openai/gpt-5.5".into()),
+                    mode: None,
+                    effort: None,
+                },
+            )
+            .await
+    });
+    let request = bridge.reply_to("set_model").await;
+    assert_eq!(
+        (request["provider"].as_str(), request["model"].as_str()),
+        (Some("openai"), Some("gpt-5.5"))
+    );
+    changing.await.unwrap().unwrap();
+    pi.daemon.shutdown().await;
+}

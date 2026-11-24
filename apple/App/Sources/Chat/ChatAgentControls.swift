@@ -58,7 +58,11 @@ struct ChatAgentControls: View {
     private func sectionTitle(_ config: AgentConfig) -> String {
         if case .unsupported(let reason) = config.support { return reason }
         if !context.canChange { return "Only the host's owner can change this" }
-        return config.timing == .restart ? "Claude Code restarts on this conversation" : "Codex uses it from the next message"
+        switch config.timing {
+        case .restart: return "Claude Code restarts on this conversation"
+        case .nextTurn: return "Codex uses it from the next message"
+        case .now: return "Changes at once"
+        }
     }
 
     private func modelMenu(_ config: AgentConfig) -> some View {
@@ -170,6 +174,7 @@ nonisolated enum ChatAgentControlsText {
         switch config.timing {
         case .restart: return isWorking ? "Applies after this turn" : "Restarting with the change"
         case .nextTurn: return "Applies next turn"
+        case .now: return "Changing"
         }
     }
 

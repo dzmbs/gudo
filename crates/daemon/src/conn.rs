@@ -3059,6 +3059,7 @@ impl Client {
                     ));
                 }
                 return crate::agent_config::set(&self.core, *pane_id, change)
+                    .await
                     .map(WorkspaceResponse::AgentControls);
             }
             _ => {}

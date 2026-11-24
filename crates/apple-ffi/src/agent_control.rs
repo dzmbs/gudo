@@ -138,6 +138,10 @@ mod tests {
                 }],
                 efforts: vec![],
                 timing: proto::AgentConfigTiming::Restart,
+                context: Some(proto::AgentContextUsage {
+                    used: 10,
+                    window: 100,
+                }),
             },
             prompt: Some(proto::AgentPrompt::Plan(proto::AgentPlan {
                 request_id: proto::RequestId(9),
@@ -152,6 +156,7 @@ mod tests {
         assert_eq!(value["config"]["current"]["model"], "sonnet");
         assert_eq!(value["config"]["modes"][0]["risk"], "Plans");
         assert_eq!(value["config"]["timing"], "Restart");
+        assert_eq!(value["config"]["context"]["window"], 100);
         assert_eq!(value["prompt"]["Plan"]["keep_planning"], 1);
     }
 }

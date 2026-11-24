@@ -62,10 +62,11 @@ nonisolated public struct AgentModeChoice: Codable, Equatable, Sendable, Identif
 }
 
 /// When a change reaches the agent: Claude Code restarts on the same conversation once its
-/// turn ends; Codex takes it with the next turn Chat starts.
+/// turn ends; Codex takes it with the next turn Chat starts; pi takes it at once.
 nonisolated public enum AgentConfigTiming: String, Codable, Equatable, Sendable {
     case restart = "Restart"
     case nextTurn = "NextTurn"
+    case now = "Now"
 
     public init(from decoder: any Decoder) throws {
         self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .nextTurn
@@ -106,6 +107,20 @@ nonisolated public enum AgentConfigSupport: Codable, Equatable, Sendable {
     }
 }
 
+/// How full the model's context window is, for the composer's meter.
+nonisolated public struct AgentContextUsage: Codable, Equatable, Sendable {
+    public var used: UInt64
+    public var window: UInt64
+
+    public init(used: UInt64, window: UInt64) {
+        self.used = used
+        self.window = window
+    }
+
+    /// The share in use, 0 to 1.
+    public var fraction: Double { window == 0 ? 0 : min(1, Double(used) / Double(window)) }
+}
+
 nonisolated public struct AgentConfig: Codable, Equatable, Sendable {
     public var support: AgentConfigSupport
     public var current: AgentConfigValues
@@ -114,9 +129,11 @@ nonisolated public struct AgentConfig: Codable, Equatable, Sendable {
     public var modes: [AgentModeChoice]
     public var efforts: [AgentChoice]
     public var timing: AgentConfigTiming
+    public var context: AgentContextUsage?
 
     public init(support: AgentConfigSupport, current: AgentConfigValues, pending: AgentConfigValues? = nil,
-                models: [AgentChoice], modes: [AgentModeChoice], efforts: [AgentChoice], timing: AgentConfigTiming) {
+                models: [AgentChoice], modes: [AgentModeChoice], efforts: [AgentChoice], timing: AgentConfigTiming,
+                context: AgentContextUsage? = nil) {
         self.support = support
         self.current = current
         self.pending = pending
@@ -124,6 +141,7 @@ nonisolated public struct AgentConfig: Codable, Equatable, Sendable {
         self.modes = modes
         self.efforts = efforts
         self.timing = timing
+        self.context = context
     }
 
     public var isSupported: Bool { support == .supported }

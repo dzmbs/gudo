@@ -187,6 +187,7 @@ pub(super) fn config(core: &Core, entry: &PaneEntry) -> AgentConfig {
         modes: options.mode_choices(),
         efforts: options.effort_choices(),
         timing: AgentConfigTiming::Restart,
+        context: None,
     }
 }
 

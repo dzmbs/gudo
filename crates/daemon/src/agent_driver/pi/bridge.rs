@@ -171,18 +171,10 @@ pub(crate) enum Request<'a> {
         images: &'a [std::path::PathBuf],
     },
     Abort,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the agent-configuration requests send it")
-    )]
     SetModel {
         provider: &'a str,
         model: &'a str,
     },
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the agent-configuration requests send it")
-    )]
     SetThinking {
         level: &'a str,
     },
@@ -505,7 +497,13 @@ where
     writer.write_all(b"{\"type\":\"ready\"}\n").await?;
     core.emit(crate::core::Event::PaneMeta(entry.pane.id));
     let weak = Arc::downgrade(&bridge);
-    let result = run(&weak, reader, &mut writer, &mut lines).await;
+    let (watched, pane) = (Arc::downgrade(core), entry.pane.id);
+    let config_changed = move || {
+        if let Some(core) = watched.upgrade() {
+            crate::agent_config::changed(&core, pane);
+        }
+    };
+    let result = run(&weak, reader, &mut writer, &mut lines, config_changed).await;
     let current = lock(&entry.pi)
         .as_ref()
         .is_some_and(|current| Arc::ptr_eq(current, &bridge));
@@ -523,6 +521,7 @@ async fn run<R, W>(
     mut reader: BufReader<R>,
     writer: &mut W,
     lines: &mut mpsc::Receiver<String>,
+    config_changed: impl Fn(),
 ) -> std::io::Result<()>
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -539,7 +538,14 @@ where
                     return Ok(());
                 };
                 if let Ok(incoming) = serde_json::from_slice::<Incoming>(&line) {
+                    let reconfigures = matches!(
+                        incoming,
+                        Incoming::Session(_) | Incoming::Models { .. } | Incoming::Usage { .. }
+                    );
                     bridge.apply(incoming);
+                    if reconfigures {
+                        config_changed();
+                    }
                 }
                 line.clear();
             }

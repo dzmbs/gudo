@@ -235,6 +235,13 @@ impl Live {
                 .map(|model| model.efforts.clone())
                 .unwrap_or_default(),
             timing: AgentConfigTiming::NextTurn,
+            context: lock(&self.state)
+                .projection
+                .context()
+                .map(|usage| proto::AgentContextUsage {
+                    used: usage.used,
+                    window: usage.window,
+                }),
         }
     }
 

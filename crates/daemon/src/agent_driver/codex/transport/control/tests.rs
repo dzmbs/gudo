@@ -466,6 +466,7 @@ async fn a_chat_turn_carries_chat_settings_which_apply_once_codex_accepts_it() {
         .send_prompt(
             None,
             "fixture",
+            &[],
             SendAcknowledgement {
                 revision,
                 actor: fixture.actor,

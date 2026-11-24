@@ -861,7 +861,7 @@ pasted into pi show as a note, since the session keeps no file for them.
 
 ## Agent controls
 
-`MoreDaemonFeatures::AGENT_CONTROLS` (bit 5) says the helper answers
+`MoreDaemonFeatures::AGENT_CONTROLS` (bit 6) says the helper answers
 `WorkspaceRequest::AgentControlsWatch`, `AgentControlsUnwatch` and `SetAgentConfig`, pushes
 `ServerCtl::AgentControls` to connections that watch a pane, and accepts
 `ApprovalRequest::AnswerQuestion` and `Refuse`. Every new wire item is appended and pinned in
@@ -888,7 +888,12 @@ answering needs Approver, a signature by the device, and the pane's approval pol
   the current model's; modes are Read only, Auto and Full access (approval policy plus sandbox).
   A change rides on the next `turn/start` Chat sends and counts as applied once Codex accepts
   that turn; the app says "Applies next turn". Only a native Codex pane offers this.
-- **pi** reports that Chat cannot change it yet; a pi channel slots in behind the same request.
+- **pi.** A pi connected through its bridge offers its own models and thinking levels
+  (`agent_driver::pi::config`); a change goes to pi at once and the reply waits for pi to take it.
+  A pi without the bridge says to change it in Terminal.
+
+`AgentConfig::context` carries the context in use and the model's window when the agent reports
+them (Codex's latest token usage, pi's usage report), for the composer's context meter.
 
 Questions (`AskUserQuestion`) and plans (`ExitPlanMode`) reach the daemon in a held `PreToolUse`
 hook (settings v5 run it as `HeldPreToolUse` with the permission timeout; older settings' short
