@@ -144,16 +144,36 @@ pub(crate) fn relaunch_loop(shim: &str, launch_id: &str) -> String {
 /// How a running Claude Code the daemon has no launch for would restart: at its shell's
 /// prompt, once its conversation is known.
 fn restarts_at_prompt(entry: &PaneEntry) -> Option<Restarts> {
-    lock(&entry.agent)
-        .as_ref()
-        .filter(|runtime| runtime.kind() == proto::AgentKind::Claude)?
-        .session()
-        .native_id
-        .as_ref()?;
+    running_session(entry)?;
     Some(if lock(&entry.pane.agent_input_gate).has_launch() {
         Restarts::TypedLoop
     } else {
         Restarts::ByHand
+    })
+}
+
+/// The conversation of the Claude Code running in `entry`: as its hooks name it, else as its
+/// record keeps it (a build that handed the pane over knew it, this one has heard no hook yet).
+fn running_session(entry: &PaneEntry) -> Option<String> {
+    let reported = {
+        let agent = lock(&entry.agent);
+        let runtime = agent
+            .as_ref()
+            .filter(|runtime| runtime.kind() == proto::AgentKind::Claude)?;
+        runtime
+            .session()
+            .native_id
+            .as_ref()
+            .map(|id| id.as_str().to_owned())
+    };
+    reported.or_else(|| {
+        lock(&entry.record)
+            .agent
+            .as_ref()
+            .filter(|agent| agent.kind == proto::AgentKind::Claude)?
+            .session_id
+            .clone()
+            .filter(|id| crate::claude_session::is_session_id(id))
     })
 }
 
@@ -165,12 +185,9 @@ fn launch_at_prompt(
     restarts: Restarts,
     current: &AgentConfigValues,
 ) -> Result<ClaudeLaunch, WsError> {
-    let session = lock(&entry.agent)
-        .as_ref()
-        .and_then(|runtime| runtime.session().native_id.clone())
-        .ok_or_else(|| {
-            WsError::Unavailable("Claude Code has not started its conversation yet.".into())
-        })?;
+    let session = running_session(entry).ok_or_else(|| {
+        WsError::Unavailable("Claude Code has not started its conversation yet.".into())
+    })?;
     let cwd = lock(&entry.meta)
         .cwd
         .clone()
@@ -188,7 +205,7 @@ fn launch_at_prompt(
     let mut launch = ClaudeLaunch::new(
         crate::agent::new_uuid(),
         context,
-        session.as_str().to_owned(),
+        session,
         true,
         restarts == Restarts::TypedLoop && core.cfg.claude_chat_streaming,
         ClaudeConfig {
@@ -475,10 +492,7 @@ fn restart(core: &Core, entry: &PaneEntry) -> Result<(), WsError> {
             .and_then(crate::agent::AgentRuntime::pid)
     })
     .ok_or_else(|| WsError::Unavailable("Claude Code is not running.".into()))?;
-    let session = lock(&entry.agent)
-        .as_ref()
-        .and_then(|runtime| runtime.session().native_id.clone())
-        .map(|id| id.as_str().to_owned())
+    let session = running_session(entry)
         .or_else(|| {
             lock(&entry.claude_launch)
                 .as_ref()
