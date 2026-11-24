@@ -37,7 +37,8 @@ pub use arbiter::{Arbiter, ArbiterConfig, DecisionError, Notify, Update};
 pub use claude::{
     ClaudeCliOptions, ClaudeCode, ClaudeConfig, HELD_TOOL_EVENT as CLAUDE_HELD_TOOL_EVENT,
     PLAN_TOOL as CLAUDE_PLAN_TOOL, PlanAnswer as ClaudePlanAnswer,
-    QUESTION_TOOL as CLAUDE_QUESTION_TOOL,
+    QUESTION_TOOL as CLAUDE_QUESTION_TOOL, mode_label as claude_mode_label,
+    model_label as claude_model_label,
 };
 pub use claude_live::{
     CLAUDE_DISPLAY_BATCH_LIMIT, ClaudeDisplayBatch, ClaudeDisplayChange, ClaudeDisplayError,

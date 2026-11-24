@@ -165,6 +165,37 @@ impl ClaudeCliOptions {
     }
 }
 
+/// What a model id reads as: `claude-sonnet-4-6` as `Sonnet 4.6`; an id of another shape as is.
+pub fn model_label(id: &str) -> String {
+    let base = id.split('[').next().unwrap_or(id);
+    let words: Vec<&str> = base.split('-').collect();
+    let Some(family) = words.iter().find(|word| {
+        !word.is_empty()
+            && *word != &"claude"
+            && word.chars().all(|character| character.is_ascii_lowercase())
+    }) else {
+        return id.to_owned();
+    };
+    let version: Vec<&str> = words
+        .iter()
+        .copied()
+        .filter(|word| {
+            (1..=2).contains(&word.len())
+                && word.chars().all(|character| character.is_ascii_digit())
+        })
+        .collect();
+    if version.is_empty() {
+        capitalized(family)
+    } else {
+        format!("{} {}", capitalized(family), version.join("."))
+    }
+}
+
+/// What a permission mode reads as in the picker.
+pub fn mode_label(mode: &str) -> String {
+    mode_choice(mode).choice.label
+}
+
 fn capitalized(word: &str) -> String {
     let mut characters = word.chars();
     characters.next().map_or_else(String::new, |first| {

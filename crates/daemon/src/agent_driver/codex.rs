@@ -326,6 +326,25 @@ impl State {
         }
     }
 
+    fn setting_notices(&mut self, notices: &[(proto::TimelineNoticeKind, String)]) {
+        if self.projection_lost || !self.history_ready {
+            return;
+        }
+        for (kind, text) in notices {
+            match self.projection.setting_notice(*kind, text) {
+                Ok(operations) => {
+                    for operation in operations {
+                        self.push(operation);
+                    }
+                }
+                Err(_) => {
+                    self.lose_projection();
+                    return;
+                }
+            }
+        }
+    }
+
     fn push(&mut self, operation: TimelineOp) {
         let bytes = serde_json::to_vec(&operation).map_or(usize::MAX, |bytes| bytes.len());
         if bytes > MAX_OPERATION_BYTES {

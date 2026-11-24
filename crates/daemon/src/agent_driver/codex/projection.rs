@@ -243,6 +243,20 @@ impl Projection {
         }
     }
 
+    /// A quiet notice that a setting changed, in the turn it applies to.
+    pub fn setting_notice(
+        &mut self,
+        kind: TimelineNoticeKind,
+        text: &str,
+    ) -> Result<Vec<TimelineOp>, WsError> {
+        let turn = self
+            .active
+            .as_ref()
+            .map_or_else(String::new, |turn| turn.id.clone());
+        let id = format!("setting:{}", self.next_item + 1);
+        self.upsert(id, turn, notice(kind, text))
+    }
+
     fn complete_turn(
         &mut self,
         turn: String,

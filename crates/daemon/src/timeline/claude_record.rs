@@ -30,6 +30,7 @@ pub(super) struct Record {
     pub message: Message,
     pub tool_use_result: ResultData,
     pub permission_decision: PermissionDecision,
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]

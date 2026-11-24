@@ -33,6 +33,15 @@ pub(super) struct ClaudeTimeline {
     seen_usage: VecDeque<String>,
     input_tokens: u64,
     output_tokens: u64,
+    settings: Settings,
+}
+
+/// The model, mode and effort the transcript last recorded, so a change shows where it applies.
+#[derive(Default)]
+struct Settings {
+    model: Option<String>,
+    mode: Option<proto::TimelinePermissionMode>,
+    effort: Option<String>,
 }
 
 impl ClaudeTimeline {
@@ -53,6 +62,7 @@ impl ClaudeTimeline {
             seen_usage: VecDeque::new(),
             input_tokens: 0,
             output_tokens: 0,
+            settings: Settings::default(),
         }
     }
 
@@ -75,7 +85,8 @@ impl ClaudeTimeline {
             return Vec::new();
         }
         self.session_metadata(record);
-        match record.kind {
+        let mut items = self.setting_notices(record, offset);
+        items.extend(match record.kind {
             RecordKind::User if record.is_compact_summary => vec![self.item(
                 record,
                 record_id(record, offset),
@@ -89,7 +100,78 @@ impl ClaudeTimeline {
             RecordKind::Assistant => self.assistant(record, offset),
             RecordKind::System => self.system(record, offset),
             _ => Vec::new(),
+        });
+        items
+    }
+
+    /// A quiet notice for each setting this record shows changed from the one before it.
+    fn setting_notices(&mut self, record: &Record, offset: u64) -> Vec<TimelineItem> {
+        let mode = match record.kind {
+            RecordKind::User if !record.is_meta => record.permission_mode,
+            RecordKind::PermissionMode => record.mode.or(record.permission_mode),
+            _ => None,
         }
+        .filter(|mode| *mode != proto::TimelinePermissionMode::Unknown);
+        let (model, effort) =
+            match record.kind {
+                RecordKind::Assistant => (
+                    record.message.model.as_deref().filter(|model| {
+                        *model != "<synthetic>" && model.len() <= METADATA_CHARS_LIMIT
+                    }),
+                    record.effort.as_deref().filter(|effort| {
+                        !effort.is_empty() && effort.len() <= METADATA_CHARS_LIMIT
+                    }),
+                ),
+                _ => (None, None),
+            };
+        let mut changes = Vec::new();
+        if let Some(mode) = mode
+            && self
+                .settings
+                .mode
+                .replace(mode)
+                .is_some_and(|before| before != mode)
+        {
+            let label = agents::claude_mode_label(&String::from(mode));
+            changes.push((
+                "mode",
+                TimelineNoticeKind::ModeChanged,
+                format!("Mode: {label}"),
+            ));
+        }
+        if let Some(model) = model
+            && changed(&mut self.settings.model, model)
+        {
+            let label = agents::claude_model_label(model);
+            changes.push((
+                "model",
+                TimelineNoticeKind::ModelChanged,
+                format!("Switched to {label}"),
+            ));
+        }
+        if let Some(effort) = effort
+            && changed(&mut self.settings.effort, effort)
+        {
+            changes.push((
+                "effort",
+                TimelineNoticeKind::ModelChanged,
+                format!("Effort: {effort}"),
+            ));
+        }
+        if changes.is_empty() {
+            return Vec::new();
+        }
+        let id = record_id(record, offset);
+        changes
+            .into_iter()
+            .map(|(setting, kind, text)| {
+                self.item(
+                    record,
+                    format!("{id}:{setting}"),
+                    TimelineBody::Notice { kind, text },
+                )
+            })
+            .collect()
     }
 
     fn session_metadata(&mut self, record: &Record) {
@@ -406,6 +488,14 @@ fn record_id(record: &Record, offset: u64) -> String {
         .uuid
         .clone()
         .unwrap_or_else(|| format!("record:{offset}"))
+}
+
+/// Records `value` as the setting; whether it differs from one recorded before.
+fn changed(setting: &mut Option<String>, value: &str) -> bool {
+    if setting.as_deref() == Some(value) {
+        return false;
+    }
+    setting.replace(value.to_owned()).is_some()
 }
 
 fn metadata_text(text: &str) -> String {

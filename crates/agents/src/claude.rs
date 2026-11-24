@@ -4,7 +4,7 @@ mod config;
 mod display_launch;
 mod prompt;
 
-pub use config::{ClaudeCliOptions, ClaudeConfig};
+pub use config::{ClaudeCliOptions, ClaudeConfig, mode_label, model_label};
 pub use prompt::{HELD_TOOL_EVENT, PLAN_TOOL, PlanAnswer, QUESTION_TOOL};
 
 use std::ffi::OsString;

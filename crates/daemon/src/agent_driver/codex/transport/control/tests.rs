@@ -489,6 +489,20 @@ async fn a_chat_turn_carries_chat_settings_which_apply_once_codex_accepts_it() {
     assert_eq!(config.pending, None);
     assert_eq!(config.current.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(config.current.mode.as_deref(), Some("read-only"));
+    let notices: Vec<String> = lock(&fixture.source.state)
+        .projection
+        .snapshot(64, None)
+        .items
+        .into_iter()
+        .filter_map(|item| match item.body {
+            proto::TimelineBody::Notice { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        notices,
+        ["Switched to gpt-5.4", "Mode: Read only", "Effort: high"]
+    );
     let plain: Value =
         serde_json::from_str(&serialize(&source, &fixture.prompt("again")).unwrap()).unwrap();
     assert!(

@@ -162,6 +162,7 @@ fn compaction_errors_interruptions_and_model_changes_are_notices() {
     fixture.user("one");
     fixture.append(&json!({"type": "compaction", "id": "c1", "parentId": "e0000000", "timestamp": "x", "summary": "s", "firstKeptEntryId": "e0000000", "tokensBefore": 260445}));
     fixture.append(&json!({"type": "model_change", "id": "m1", "parentId": "c1", "timestamp": "x", "provider": "openai", "modelId": "gpt-5"}));
+    fixture.append(&json!({"type": "thinking_level_change", "id": "t1", "parentId": "m1", "timestamp": "x", "thinkingLevel": "high"}));
     fixture.message(json!({"role": "assistant", "content": [], "stopReason": "error", "errorMessage": "overloaded", "timestamp": 5}));
     fixture.message(
         json!({"role": "assistant", "content": [], "stopReason": "aborted", "timestamp": 6}),
@@ -181,7 +182,8 @@ fn compaction_errors_interruptions_and_model_changes_are_notices() {
                 TimelineNoticeKind::Compacted,
                 "Context compacted from 260,445 tokens"
             ),
-            (TimelineNoticeKind::ModelChanged, "Model changed to gpt-5"),
+            (TimelineNoticeKind::ModelChanged, "Switched to gpt-5"),
+            (TimelineNoticeKind::ModelChanged, "Effort: high"),
             (TimelineNoticeKind::Error, "overloaded"),
             (TimelineNoticeKind::Interrupted, "Interrupted"),
         ]

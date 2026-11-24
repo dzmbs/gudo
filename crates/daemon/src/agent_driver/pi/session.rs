@@ -95,6 +95,11 @@ enum Entry {
         #[serde(rename = "modelId")]
         model: String,
     },
+    ThinkingLevelChange {
+        id: String,
+        #[serde(rename = "thinkingLevel")]
+        level: String,
+    },
     SessionInfo {
         name: Option<String>,
     },
@@ -471,8 +476,18 @@ impl Shaper<'_> {
             }
             Entry::ModelChange { id, model } => {
                 self.previous = Some(id.clone());
-                let text = format!("Model changed to {model}");
+                let text = format!("Switched to {model}");
                 self.shaped.model = Some(model);
+                self.push(
+                    offset,
+                    id,
+                    0,
+                    notice(TimelineNoticeKind::ModelChanged, &text),
+                );
+            }
+            Entry::ThinkingLevelChange { id, level } => {
+                self.previous = Some(id.clone());
+                let text = format!("Effort: {level}");
                 self.push(
                     offset,
                     id,

@@ -260,11 +260,17 @@ impl Live {
 
     /// A turn started with `values`: they are what Codex runs with now.
     pub(super) fn config_applied(&self, values: &AgentConfigValues) {
-        let mut config = lock(&self.config);
-        crate::agent_config::merge_values(&mut config.applied, values);
-        if config.pending.as_ref() == Some(values) {
-            config.pending = None;
-        }
+        let offered = self.config();
+        let notices = {
+            let mut config = lock(&self.config);
+            let before = config.applied.clone();
+            crate::agent_config::merge_values(&mut config.applied, values);
+            if config.pending.as_ref() == Some(values) {
+                config.pending = None;
+            }
+            crate::agent_config::change_notices(&offered, &before, &config.applied)
+        };
+        lock(&self.state).setting_notices(&notices);
     }
 
     /// Asks the app-server for its models once, on a connection of its own.

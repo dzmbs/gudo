@@ -351,3 +351,38 @@ fn completed_tool_cache_stays_bounded() {
     assert_eq!(parser.tools.len(), TOOL_CACHE_LIMIT);
     assert_eq!(parser.tool_order.len(), TOOL_CACHE_LIMIT);
 }
+
+#[test]
+fn a_changed_model_effort_or_mode_shows_a_quiet_notice_where_it_applies() {
+    let mut parser = parser();
+    let assistant = |uuid: &str, model: &str, effort: &str| {
+        json!({"type":"assistant","uuid":uuid,"effort":effort,
+            "message":{"model":model,"content":[{"type":"text","text":"Done"}]}})
+    };
+    let user = |uuid: &str, mode: &str| json!({"type":"user","uuid":uuid,"permissionMode":mode,"message":{"content":"go"}});
+    let notices = |items: Vec<TimelineItem>| -> Vec<String> {
+        items
+            .into_iter()
+            .filter_map(|item| match item.body {
+                TimelineBody::Notice { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect()
+    };
+    assert!(notices(parse(&mut parser, user("u1", "default"))).is_empty());
+    let first = assistant("a1", "claude-opus-4-7", "high");
+    assert!(notices(parse(&mut parser, first)).is_empty());
+    let synthetic = assistant("a2", "<synthetic>", "high");
+    assert!(notices(parse(&mut parser, synthetic)).is_empty());
+    assert_eq!(
+        notices(parse(&mut parser, user("u2", "plan"))),
+        ["Mode: Plan"]
+    );
+    let switched = assistant("a3", "claude-sonnet-4-6", "low");
+    assert_eq!(
+        notices(parse(&mut parser, switched)),
+        ["Switched to Sonnet 4.6", "Effort: low"]
+    );
+    let same = assistant("a4", "claude-sonnet-4-6", "low");
+    assert!(notices(parse(&mut parser, same)).is_empty());
+}

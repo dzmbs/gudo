@@ -213,6 +213,46 @@ pub(crate) fn merge_values(into: &mut AgentConfigValues, change: &AgentConfigVal
     }
 }
 
+/// The quiet timeline notices of a change that applied: each setting that differs from
+/// `before`, by the label its picker gives it.
+pub(crate) fn change_notices(
+    offered: &AgentConfig,
+    before: &AgentConfigValues,
+    after: &AgentConfigValues,
+) -> Vec<(proto::TimelineNoticeKind, String)> {
+    let changed = |before: &Option<String>, after: &Option<String>| {
+        after.clone().filter(|after| before.as_ref() != Some(after))
+    };
+    let mut notices = Vec::new();
+    if let Some(model) = changed(&before.model, &after.model) {
+        let label = choice_label(&model, offered.models.iter());
+        notices.push((
+            proto::TimelineNoticeKind::ModelChanged,
+            format!("Switched to {label}"),
+        ));
+    }
+    if let Some(mode) = changed(&before.mode, &after.mode) {
+        let label = choice_label(&mode, offered.modes.iter().map(|mode| &mode.choice));
+        notices.push((
+            proto::TimelineNoticeKind::ModeChanged,
+            format!("Mode: {label}"),
+        ));
+    }
+    if let Some(effort) = changed(&before.effort, &after.effort) {
+        notices.push((
+            proto::TimelineNoticeKind::ModelChanged,
+            format!("Effort: {effort}"),
+        ));
+    }
+    notices
+}
+
+fn choice_label<'a>(id: &str, mut choices: impl Iterator<Item = &'a AgentChoice>) -> String {
+    choices
+        .find(|choice| choice.id == id)
+        .map_or_else(|| id.to_owned(), |choice| choice.label.clone())
+}
+
 fn check_change(offered: &AgentConfig, change: &AgentConfigValues) -> Result<(), WsError> {
     fn offers(value: Option<&String>, choices: &[&AgentChoice]) -> bool {
         value.is_none_or(|value| choices.iter().any(|choice| &choice.id == value))
