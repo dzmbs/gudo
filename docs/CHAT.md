@@ -236,18 +236,11 @@ Typing `/` as the message's first word, or `@` at the start of a word, opens sug
 
 Finished turns fold (a setting turns it off): the prompt, one line naming what the agent did ("Ran 3 commands, read 2 files, 1 message"), the final reply, and under it a footer with Copy for the reply's Markdown, the turn's time and Changes. Opening the line shows every row again. A turn folds once its turn end arrives or a later prompt follows. The context ring reads the last finished turn's input tokens against the model's window, when both are known; tapping it says how full in words. Tool rows read as a verb and what it acted on, with a glyph for the kind ("Shell git status --short", "Read src/app.ts"), cut in the middle so a path keeps its file name.
 
-With a helper that offers `MoreDaemonFeatures::AGENT_CONTROLS`, the composer's row holds
-`ChatAgentControls` (see Agent controls below). With an older helper the row holds the session's
-model and permission mode, as the transcript records them
-(`ChatSessionChips`), each a small menu with a trailing up-down chevron and the shared press fill.
-Only Claude Code is offered its aliases; Codex and pi show their model without a menu.
-The model menu opens on the running model, checked, then the aliases with its own family first.
-Choosing one puts Claude Code's own `/model <alias>` in an empty draft for Send to apply; nothing
-is sent by the menu, and with a draft typed the aliases are disabled. The mode menu lists every
-mode with a one-line description and checks the current one; the others are disabled under
-"Change with Shift-Tab in Terminal": Claude Code cycles it with Shift-Tab, and a key that steps
-through modes could land on one the user did not choose. Effort is not in the transcript, so Chat
-does not show it. While the agent works, three dots (`ChatWorkingIndicator`) on a small card sit
+After Attach, the composer's row holds `ChatAgentControls` on iOS and the Mac: with a helper that
+offers `MoreDaemonFeatures::AGENT_CONTROLS`, the model, effort and mode menus (see Agent controls
+below); with an older helper, the session's model as the transcript records it, read only.
+
+While the agent works, three dots (`ChatWorkingIndicator`) on a small card sit
 centred a step above the composer, swept by the working shimmer and still under Reduce Motion;
 they float over the transcript so starting and stopping never moves it.
 

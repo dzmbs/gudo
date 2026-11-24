@@ -736,12 +736,13 @@ struct PaneSlot: View {
                          readsToolDetails: daemon.multiplayer.canPrompt,
                          working: working,
                          terminalWait: answersInChat ? nil : ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state),
-                         workingDirectory: daemon.meta[pane.id]?.cwd) { active in
+                         workingDirectory: daemon.meta[pane.id]?.cwd,
+                         agentControls: daemon.workspace.offersAgentControls
+                            ? ChatAgentControlsContext(hub: daemon.workspace, pane: pane.id.rawValue,
+                                                       canChange: daemon.multiplayer.isOwner, isWorking: working)
+                            : nil) { active in
                 terminalContent(pane, isActive: active)
             }
-            .environment(\.chatAgentControls, ChatAgentControlsContext(
-                hub: daemon.workspace, pane: pane.id.rawValue,
-                canChange: daemon.multiplayer.isOwner, isWorking: working))
         } else { terminalContent(pane) }
     }
 

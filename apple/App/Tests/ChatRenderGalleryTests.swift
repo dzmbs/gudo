@@ -54,7 +54,7 @@ final class ChatRenderGalleryTests: XCTestCase {
             if working || session != nil {
                 VStack(alignment: .leading, spacing: DS.Space.s) {
                     if working { ChatWorkingIndicator().padding(.leading, DS.Space.xl) }
-                    ChatSessionChips(session: session, canChooseModel: true, chooseModel: { _ in })
+                    ChatAgentControls(context: nil, session: session)
                         .padding(.horizontal, DS.Space.m)
                 }
                 .padding(.top, DS.Space.l)

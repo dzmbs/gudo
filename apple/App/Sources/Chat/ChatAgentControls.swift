@@ -3,7 +3,6 @@ import GudoCore
 import HostKit
 import SwiftUI
 
-#if os(iOS)
 /// Where Chat's agent controls read and change a pane's agent.
 struct ChatAgentControlsContext {
     let hub: DaemonWorkspace
@@ -14,14 +13,28 @@ struct ChatAgentControlsContext {
     let isWorking: Bool
 }
 
-extension EnvironmentValues {
-    @Entry var chatAgentControls: ChatAgentControlsContext?
-}
-
 /// The agent's model, reasoning effort and permission mode, each a small menu that changes the
 /// running agent: Claude Code restarts on the same conversation once its turn ends, Codex takes
-/// it with the next turn. Self-contained, so the composer places it where it fits.
+/// it with the next turn. Without a context (an older helper) the session's model shows, read only.
 struct ChatAgentControls: View {
+    let context: ChatAgentControlsContext?
+    let session: TimelineSession?
+
+    var body: some View {
+        if let context {
+            ChatAgentConfigMenus(context: context, session: session)
+        } else if let model = session?.model.map(ChatSessionControls.modelName) {
+            Text(verbatim: model).lineLimit(1)
+                .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+                .padding(.horizontal, DS.Space.s)
+                .frame(minHeight: DS.Size.touchTarget)
+                .accessibilityLabel("Model, \(model)")
+                .accessibilityIdentifier("chat-model")
+        }
+    }
+}
+
+private struct ChatAgentConfigMenus: View {
     let context: ChatAgentControlsContext
     let session: TimelineSession?
     @State private var failure: String?
@@ -29,9 +42,8 @@ struct ChatAgentControls: View {
 
     var body: some View {
         let config = context.hub.agentControls[context.pane]?.config
-        VStack(alignment: .trailing, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DS.Space.xxs) {
-                Spacer(minLength: 0)
                 if let note = ChatAgentControlsText.note(config, isWorking: context.isWorking) {
                     Text(note).lineLimit(1)
                         .foregroundStyle(DS.Palette.textTertiary)
@@ -190,7 +202,23 @@ struct ChatAgentControls: View {
     }
 }
 
-#endif
+/// A chip's label with the shared press fill, inside a 44 pt target.
+struct ChatChipButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? DS.Palette.textSecondary : DS.Palette.textTertiary)
+            .padding(.horizontal, DS.Space.s).padding(.vertical, DS.Space.xs)
+            .controlFill(ControlState(isPressed: configuration.isPressed, isEnabled: isEnabled),
+                         in: RoundedRectangle.rounded(DS.Radius.field))
+            .frame(minHeight: DS.Size.touchTarget)
+            .contentShape(.rect)
+            #if os(iOS)
+            .hoverEffect(.highlight)
+            #endif
+    }
+}
 
 /// What the agent controls say, apart from the views so it can be tested.
 nonisolated enum ChatAgentControlsText {

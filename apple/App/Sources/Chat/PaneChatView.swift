@@ -17,6 +17,8 @@ struct PaneChatView<Terminal: View>: View {
     var terminalWait: String?
     /// The agent's folder: tool rows show paths inside it relative to it.
     var workingDirectory: String?
+    /// Set when the helper offers agent controls (`DaemonWorkspace.offersAgentControls`).
+    var agentControls: ChatAgentControlsContext?
     @Environment(\.scenePhase) private var scenePhase
     @ViewBuilder var terminal: (Bool) -> Terminal
     private var selectedDetail: ChatDetail? {
@@ -308,7 +310,7 @@ struct PaneChatView<Terminal: View>: View {
                 .accessibilityIdentifier("chat-hide-keyboard")
             }
             #endif
-            agentControls
+            ChatAgentControls(context: agentControls, session: state.model?.frame.session)
             Spacer(minLength: 0)
             if let usage = ChatContextUsage(rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
                 ChatContextMeter(usage: usage)
@@ -316,16 +318,6 @@ struct PaneChatView<Terminal: View>: View {
             dictationButton
             if let action = primaryAction { primaryButton(action) }
         }
-    }
-
-    /// The agent's model, mode and effort. `ChatAgentControls` takes this place once it exists;
-    /// until then the session's chips show here on touch.
-    @ViewBuilder private var agentControls: some View {
-        #if os(iOS)
-        ChatSessionChips(session: state.model?.frame.session,
-                         canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
-                         chooseModel: chooseModel)
-        #endif
     }
 
     /// Whether a message typed now could go: this device may prompt, and the agent is not stopped
@@ -376,12 +368,6 @@ struct PaneChatView<Terminal: View>: View {
             .disabled(!permitsSending || state.photos.isBusy || state.photos.isFull || state.composer.isBusy || state.interrupt.isBusy)
             .accessibilityIdentifier("chat-add")
         }
-    }
-
-    private func chooseModel(_ command: String) {
-        guard state.capabilities.contains(.send), state.draft.isEmpty, canEditDraft(state.actionContext) else { return }
-        state.draft = command
-        draftFocused = true
     }
 
     func resend(_ text: String) {
