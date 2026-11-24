@@ -67,7 +67,7 @@ final class ChatAutocomplete {
         }
         var end = cursor
         while end < draft.endIndex, !draft[end].isWhitespace { end = draft.index(after: end) }
-        guard start < end, let first = draft[start...].first else { return nil }
+        guard start < cursor, start < end, let first = draft[start...].first else { return nil }
         let query = String(draft[draft.index(after: start)..<cursor])
         switch first {
         case "/" where start == draft.startIndex && ChatCommands.isCommandName(query):

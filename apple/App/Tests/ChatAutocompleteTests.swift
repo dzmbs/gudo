@@ -27,6 +27,8 @@ final class ChatAutocompleteTests: XCTestCase {
         XCTAssertEqual(trigger("look at @src/app.ts and", at: 13)?.query, "src/")
         XCTAssertNil(trigger("mail me@host"), "@ inside a word is not a mention")
         XCTAssertNil(trigger("look at @src "), "the word has ended")
+        XCTAssertNil(trigger("Kept across the switch", at: 0), "a cursor before a word's first letter offers nothing")
+        XCTAssertNil(trigger("look at @src", at: 8))
         let draft = "look at @src/app"
         XCTAssertEqual(trigger(draft).map { String(draft[$0.range]) }, "@src/app")
     }
