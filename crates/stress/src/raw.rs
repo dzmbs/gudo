@@ -282,11 +282,20 @@ pub async fn subs(key: &[u8], ticket: &str, limit_ms: u64) -> Result<()> {
     Ok(())
 }
 
-/// A PNG header padded to `size` bytes: all the daemon checks of a blob.
-fn padded_png(size: usize) -> Vec<u8> {
-    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10".to_vec();
-    png.resize(size, 0);
-    png
+/// A PNG of `size` bytes whose one `IDAT` chunk is padding: all the daemon checks of a blob
+/// is its chunk structure, which it walks to strip metadata.
+fn padded_png(size: usize) -> Result<Vec<u8>> {
+    let mut png =
+        b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x10\0\0\0\x10\x08\x06\0\0\0\0\0\0\0".to_vec();
+    let padding = size
+        .checked_sub(png.len() + 2 * 12)
+        .context("a blob smaller than a PNG")?;
+    let chunk_length = u32::try_from(padding).context("a blob over 4 GiB")?;
+    png.extend_from_slice(&chunk_length.to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.resize(png.len() + padding + 4, 0);
+    png.extend_from_slice(b"\0\0\0\0IEND\xae\x42\x60\x82");
+    Ok(png)
 }
 
 async fn open_stream(conn: &Connection, header: &StreamHeader) -> Result<(SendStream, RecvStream)> {
@@ -314,7 +323,7 @@ async fn put_blob(raw: &mut RawClient, size: usize) -> Result<proto::BlobHash> {
             None => bail!("closed before attaching"),
         }
     };
-    let image = padded_png(size);
+    let image = padded_png(size)?;
     let header = StreamHeader::Blob(proto::BlobHeader::Put {
         session_id,
         size: image.len() as u64,
