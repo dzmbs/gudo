@@ -39,6 +39,8 @@ final class ChatReviewCaptureTests: XCTestCase {
             try await capturePages("folded-open-", appearance: appearance, items: ChatScenes.longTurn(), limit: 1, opensSummary: true)
             try await capturePages("composer-", appearance: appearance, items: ChatScenes.workingTurn(), working: true, limit: 1,
                                    draft: "Also check the iPad layout", queued: ["Then run the page checks again"], attaches: true)
+            try await capturePages("autocomplete-", appearance: appearance, items: ChatScenes.longTurn(), limit: 1,
+                                   draft: "Look at @app", searchablePaths: ["src/app.ts", "src/apple.ts", "src/views/AppShell.tsx", "README.md"])
             try await capturePages("empty", appearance: appearance, items: [], limit: 1)
             try await capturePages("empty-finding", appearance: appearance, items: [], limit: 1, nativeSession: "")
         }
@@ -49,10 +51,11 @@ final class ChatReviewCaptureTests: XCTestCase {
     private func capturePages(_ name: String, appearance: String, items: [[String: Any]], working: Bool = false,
                               limit: Int = 6, draft: String = "", expanding: ChatRowID? = nil,
                               nativeSession: String = "fixture", opensSummary: Bool = false, queued: [String] = [],
-                              attaches: Bool = false) async throws {
+                              attaches: Bool = false, searchablePaths: [String] = []) async throws {
         let suite = "chat-review-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let fixture = try makeFixture(preferences: preferences, items: items, working: working, nativeSession: nativeSession)
+        let fixture = try makeFixture(preferences: preferences, items: items, working: working, nativeSession: nativeSession,
+                                      searchablePaths: searchablePaths)
         defer {
             fixture.state.deactivate()
             fixture.window.isHidden = true
@@ -61,6 +64,7 @@ final class ChatReviewCaptureTests: XCTestCase {
         }
         try await wait { fixture.state.model?.isLoading == false && fixture.state.controller != nil }
         fixture.state.draft = draft
+        if !searchablePaths.isEmpty { try await wait { !fixture.state.autocomplete.suggestions.isEmpty } }
         if let expanding { fixture.state.model?.toggle(expanding) }
         if opensSummary, let summary = fixture.state.model?.frame.rows.first(where: { ChatTurnCollapse.isSummary($0.id) }) {
             fixture.state.model?.toggle(summary.id)
@@ -103,7 +107,7 @@ final class ChatReviewCaptureTests: XCTestCase {
     }
 
     private func makeFixture(preferences: UserDefaults, items: [[String: Any]], working: Bool,
-                             nativeSession: String) throws -> Fixture {
+                             nativeSession: String, searchablePaths: [String]) throws -> Fixture {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let backend = PanePresentationTests.Backend()
         let pane = try Pane(id: PaneId(7), backend: backend, appearance: .fromPreferences(), onExit: {})
@@ -113,6 +117,7 @@ final class ChatReviewCaptureTests: XCTestCase {
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
         let snapshot = try ChatScenes.snapshot(items, nativeSession: nativeSession)
         let client = TimelineFixtureClient(snapshot: snapshot, nativeMessageReceipts: true)
+        client.searchablePaths = searchablePaths
         client.state.withLock { files in
             files.files[ChatScenes.image] = ChatScenes.dashboardPNG()
             files.files[ChatScenes.attachment] = ChatScenes.dashboardPNG()
