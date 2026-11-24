@@ -152,7 +152,7 @@ final class TouchSnapshotTests: XCTestCase {
         let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
         let last = try XCTUnwrap(app.tabs.last)
         drag.dragging = last
-        withAnimation(DS.Motion.standard) { drag.plan = .insert(last, into: .project(app.id), at: 0) }
+        withAnimation(DS.Motion.standard) { drag.plan = .insert(last, into: .hostProject(host: last.hostId, project: app.id), at: 0) }
         for (index, delay) in [0.05, 0.08, 0.3].enumerated() {
             await pump(delay)
             try capture(sidebar, "sidebar-reorder-\(index)")
@@ -163,6 +163,50 @@ final class TouchSnapshotTests: XCTestCase {
         sidebar.isHidden = true
         model.close()
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+    }
+
+    /// The tab list with one host (flat, as it always was) and with several (grouped by host,
+    /// one host down): the iPhone's Tabs page and the iPad's sidebar.
+    func testHostGroupedTabList() async throws {
+        let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let arrangements: [(name: String, arrange: (WindowModel) -> Void)] = [
+            ("one-host", { model in
+                while model.groups.tabs.count < 4 { model.newTab() }
+                model.newProject(from: Array(model.groups.tabs.prefix(2)), name: "acme-app", naming: false)
+            }),
+            ("hosts", { model in
+                DesignFixtures.projects(model)
+                (model.app.hosts.connection("fixture-hetzner") as? PreviewConnection)?.status = .offline(reason: "no route")
+                model.groups.toggleCollapsed("fixture-box")
+            }),
+        ]
+        for (name, arrange) in arrangements {
+            let model = WindowModel(app: .shared)
+            model.start()
+            for _ in 0..<50 where model.workspace?.focusedPane == nil { await pump(0.1) }
+            arrange(model)
+            let workspace = try XCTUnwrap(model.workspace)
+            for (surface, width, view) in [
+                ("tabs", CGFloat(393), AnyView(TabOverview(workspace: workspace))),
+                ("sidebar", SidebarWidth.standard + 40, AnyView(WorkspaceSidebar().environment(\.horizontalSizeClass, .regular))),
+            ] {
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: width, height: 852)
+                window.rootViewController = UIHostingController(rootView: view
+                    .environment(model)
+                    .environment(AppModel.shared)
+                    .chromeTheme(ThemeCatalog.theme(named: theme), windowTheme: .auto))
+                window.isHidden = false
+                await pump(1.5)
+                try capture(window, "\(surface)-\(name)")
+                window.isHidden = true
+            }
+            for project in model.projects { model.ungroupProject(project.id) }
+            model.close()
+            for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+        }
     }
 
     /// Tab history on touch: the Restore and idle rows, a selection with its bar, Select mode,

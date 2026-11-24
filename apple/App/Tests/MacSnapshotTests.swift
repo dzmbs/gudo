@@ -372,7 +372,7 @@ final class MacSnapshotTests: XCTestCase {
             else { return XCTFail("fixture") }
             await self.pump(1.5)
             // Within a project: the last tab to the top.
-            let plan = SidebarDrop.insert(last, into: .project(app.id), at: 0)
+            let plan = SidebarDrop.insert(last, into: .hostProject(host: last.hostId, project: app.id), at: 0)
             drag.dragging = last
             withAnimation(DS.Motion.standard) { drag.plan = plan }
             for (index, delay) in [0.0, 0.04, 0.04, 0.05, 0.06, 0.08, 0.12, 0.3].enumerated() {
@@ -395,7 +395,7 @@ final class MacSnapshotTests: XCTestCase {
             try? self.capture(self.current!, "projects-will-group")
             // Into another project between its rows: the row leaves its host and slides in.
             guard let infra = model.projects.first(where: { $0.name == "infra" }) else { return XCTFail("infra") }
-            withAnimation(DS.Motion.standard) { drag.plan = .insert(logs, into: .project(infra.id), at: 1) }
+            withAnimation(DS.Motion.standard) { drag.plan = .insert(logs, into: .hostProject(host: logs.hostId, project: infra.id), at: 0) }
             for (index, delay) in [0.03, 0.05, 0.08, 0.3].enumerated() {
                 await self.pump(delay)
                 try? self.capture(self.current!, "projects-into-\(index)")
@@ -403,6 +403,32 @@ final class MacSnapshotTests: XCTestCase {
             withAnimation(DS.Motion.standard) { drag.reset() }
         }
         for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) }
+    }
+
+    /// The sidebar with one host (flat, as it always was) and with several: grouped by host,
+    /// a host down and one folded, then scrolled so a host's header and its project's pin.
+    func testHostGroupedSidebar() async throws {
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        try await window("sidebar-one-host", screen: "single") { model in
+            while model.groups.tabs.count < 4 { model.newTab() }
+            model.newProject(from: Array(model.groups.tabs.prefix(2)), name: "acme-app", naming: false)
+        }
+        try await window("sidebar-hosts", screen: "projects")
+        try await window("sidebar-hosts-offline", screen: "projects") { model in
+            (model.app.hosts.connection("fixture-hetzner") as? PreviewConnection)?.status = .offline(reason: "no route")
+            model.groups.toggleCollapsed("fixture-box")
+        }
+        try await window("sidebar-hosts-pinned", screen: "projects", size: CGSize(width: 1000, height: 420)) { model in
+            await self.pump(1)
+            guard let window = self.current, let table = Self.table(in: window.contentView), let scrollView = table.enclosingScrollView,
+                  let studio = model.groups.group("fixture-studio"), let claude = studio.tabs.first(where: { $0.title == "claude" })
+            else { return XCTFail("the sidebar's list") }
+            let ids = model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id)
+            let leading = table.numberOfRows - ids.count
+            let row = table.rect(ofRow: (ids.firstIndex(of: "tab/\(studio.ref(claude.id))") ?? 0) + leading)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: row.minY - 60 - scrollView.contentInsets.top))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
     }
 
     /// A long sidebar scrolled part way: the header of the project under the top edge pinned
