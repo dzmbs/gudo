@@ -32,7 +32,7 @@ final class ChatPhotosTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
     }
 
-    func testUploadAppendsAnEscapedReferencePreservesConcurrentTypingAndNeverSends() async throws {
+    func testAnUploadBecomesAPillWithAnEscapedMentionAndLeavesTheDraftAlone() async throws {
         let state = try state(), file = try file()
         defer { state.deactivate() }
         var pending: CheckedContinuation<String, Never>?
@@ -43,11 +43,14 @@ final class ChatPhotosTests: XCTestCase {
         })
         try await wait { pending != nil }
         XCTAssertEqual(state.photos.phase, .uploading)
-        XCTAssertEqual(state.draft, "Original")
+        XCTAssertEqual(state.photos.pendingName, "Photo")
         state.draft = "Edited while uploading"
         pending?.resume(returning: "/fixture/Downloads/Gudo-Attachments/photo one.jpg")
         try await wait { state.photos.phase == .idle }
-        XCTAssertEqual(state.draft, "Edited while uploading\n@/fixture/Downloads/Gudo-Attachments/photo\\ one.jpg")
+        XCTAssertEqual(state.draft, "Edited while uploading")
+        XCTAssertEqual(state.photos.attachments.map(\.reference), ["@/fixture/Downloads/Gudo-Attachments/photo\\ one.jpg"])
+        XCTAssertEqual(state.photos.message(with: state.draft, session: state.actionContext.session),
+                       "Edited while uploading\n@/fixture/Downloads/Gudo-Attachments/photo\\ one.jpg")
         XCTAssertEqual(state.composer.phase, .idle)
         XCTAssertEqual(state.interrupt.phase, .idle)
     }
@@ -66,23 +69,24 @@ final class ChatPhotosTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(state.draft, "Retain this")
         XCTAssertEqual(state.photos.phase, .idle)
-        XCTAssertNil(state.photos.message)
+        XCTAssertTrue(state.photos.attachments.isEmpty)
     }
 
-    func testFullDraftKeepsTheUploadedReferenceForExplicitAdditionWithoutReuploading() async throws {
-        let state = try state(), file = try file()
+    func testPillsCanBeRemovedAndNeverCrossToAnotherSession() async throws {
+        let state = try state()
         defer { state.deactivate() }
-        var uploads = 0
-        state.draft = String(repeating: "a", count: ChatComposer.maximumDraftBytes)
-        state.photos.begin(in: state)
-        state.photos.load(in: state, photo: { file }, source: { _ in uploads += 1; return "/fixture/photo.jpg" })
-        try await wait { state.photos.phase == .ready }
-        XCTAssertEqual(state.draft.utf8.count, ChatComposer.maximumDraftBytes)
-        state.draft = "Shorter"
-        XCTAssertTrue(state.photos.append(to: state))
-        XCTAssertFalse(state.photos.append(to: state))
-        XCTAssertEqual(state.draft, "Shorter\n@/fixture/photo.jpg")
-        XCTAssertEqual(uploads, 1)
+        for name in ["one", "two"] {
+            let file = try file()
+            state.photos.begin(in: state)
+            state.photos.load(in: state, photo: { file }, source: { _ in "/fixture/\(name).jpg" })
+            try await wait { state.photos.phase == .idle && state.photos.attachments.count == (name == "one" ? 1 : 2) }
+        }
+        XCTAssertEqual(state.photos.message(with: "", session: state.actionContext.session), "@/fixture/one.jpg @/fixture/two.jpg")
+        state.photos.remove(try XCTUnwrap(state.photos.attachments.first).id)
+        XCTAssertEqual(state.photos.message(with: "  Look  ", session: state.actionContext.session), "Look\n@/fixture/two.jpg")
+        XCTAssertEqual(state.photos.message(with: "Look", session: "another session"), "Look")
+        state.photos.discardIfStale(session: "another session")
+        XCTAssertTrue(state.photos.attachments.isEmpty)
     }
 
     func testReferencesRefuseRelativeOversizeAndControlBearingPaths() throws {

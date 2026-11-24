@@ -38,6 +38,9 @@ final class ChatReviewCaptureTests: XCTestCase {
                                    draft: "Also check the iPad layout and tell me what changed.")
             try await capturePages("failed-expanded-", appearance: appearance, items: try failedTurn(), limit: 1,
                                    expanding: ChatRowID(item: "failed", part: 0))
+            try await capturePages("folded-open-", appearance: appearance, items: try longTurn(), limit: 1, opensSummary: true)
+            try await capturePages("composer-", appearance: appearance, items: try workingTurn(), working: true, limit: 1,
+                                   draft: "Also check the iPad layout", queued: ["Then run the page checks again"], attaches: true)
             try await capturePages("empty", appearance: appearance, items: [], limit: 1)
             try await capturePages("empty-finding", appearance: appearance, items: [], limit: 1, nativeSession: "")
         }
@@ -47,7 +50,8 @@ final class ChatReviewCaptureTests: XCTestCase {
 
     private func capturePages(_ name: String, appearance: String, items: [[String: Any]], working: Bool = false,
                               limit: Int = 6, draft: String = "", expanding: ChatRowID? = nil,
-                              nativeSession: String = "fixture") async throws {
+                              nativeSession: String = "fixture", opensSummary: Bool = false, queued: [String] = [],
+                              attaches: Bool = false) async throws {
         let suite = "chat-review-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
         let fixture = try makeFixture(preferences: preferences, items: items, working: working, nativeSession: nativeSession)
@@ -60,6 +64,16 @@ final class ChatReviewCaptureTests: XCTestCase {
         try await wait { fixture.state.model?.isLoading == false && fixture.state.controller != nil }
         fixture.state.draft = draft
         if let expanding { fixture.state.model?.toggle(expanding) }
+        if opensSummary, let summary = fixture.state.model?.frame.rows.first(where: { ChatTurnCollapse.isSummary($0.id) }) {
+            fixture.state.model?.toggle(summary.id)
+        }
+        for text in queued { fixture.state.queue.enqueue(text) }
+        if attaches {
+            let file = try ChatPhotoFile.prepare(data: Self.dashboardPNG(), name: "dashboard.png")
+            fixture.state.photos.begin(in: fixture.state)
+            fixture.state.photos.load(in: fixture.state, photo: { file }, source: { _ in "/work/uploads/dashboard.jpg" })
+            try await wait { fixture.state.photos.attachments.count == 1 }
+        }
         try await Task.sleep(for: .milliseconds(900))
         let device = UIDevice.current.userInterfaceIdiom == .pad ? "ipad" : "iphone"
         guard limit > 1, let controller = fixture.state.controller else {
@@ -101,7 +115,7 @@ final class ChatReviewCaptureTests: XCTestCase {
                                                "streaming": false]]),
             item("e1", body: tool("Edit", title: "Edit dashboard.css", input: #"{"file_path":"/work/dashboard.css"}"#)),
             item("e2", body: tool("Edit", title: "Edit kpi.html", input: #"{"file_path":"/work/kpi.html"}"#)),
-            item("end", body: ["TurnEnd": ["duration_ms": 94_000, "input_tokens": NSNull(), "output_tokens": 3_100]]),
+            item("end", body: ["TurnEnd": ["duration_ms": 94_000, "input_tokens": 61_000, "output_tokens": 3_100]]),
         ]
     }
 

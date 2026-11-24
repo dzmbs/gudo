@@ -11,6 +11,15 @@ import XCTest
 
 @MainActor
 final class PaneChatViewTests: XCTestCase {
+    /// These cover sending itself; queueing while the agent works has its own tests.
+    override func setUp() async throws {
+        UserDefaults.standard.set(ChatPreferences.SendWhileWorking.steer.rawValue, forKey: ChatPreferences.Key.sendWhileWorking)
+    }
+
+    override func tearDown() async throws {
+        UserDefaults.standard.removeObject(forKey: ChatPreferences.Key.sendWhileWorking)
+    }
+
     private struct Fixture {
         let pane: Pane
         let state: PaneChatState
@@ -300,7 +309,7 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertGreaterThan(editor.convert(editor.bounds, to: controller.view).minY, dots.maxY + DS.Space.s)
     }
 
-    func testAnEmptyComposerIsOneRowAndGrowsUpwardWithTheDraft() async throws {
+    func testAnEmptyComposerIsTheFieldOverItsButtonRowAndGrowsUpwardWithTheDraft() async throws {
         let suite = "chat-composer-row-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
         let fixture = try makeFixture(preferences: preferences, permitsSending: true)
@@ -314,13 +323,13 @@ final class PaneChatViewTests: XCTestCase {
         let controller = try XCTUnwrap(fixture.state.controller)
         try await Task.sleep(for: .milliseconds(100))
         controller.view.layoutIfNeeded()
-        let row = DS.Size.touchTarget + 2 * DS.Space.xs
-        let chips = DS.Size.touchTarget
+        let row = DS.Size.touchTarget
         let empty = controller.footer.view.frame
-        XCTAssertLessThanOrEqual(empty.height, DS.Space.xs + row + DS.Space.s + chips + DS.Space.s + 0.5)
+        XCTAssertLessThanOrEqual(empty.height, DS.Space.xs + 2 * DS.Space.xs + 2 * row + DS.Space.s + 0.5,
+                                 "one box: the field over the row with attach, dictation and Send")
         let editor = try XCTUnwrap(draftEditor(in: controller.footer.view))
         let field = editor.convert(editor.bounds, to: controller.footer.view)
-        XCTAssertLessThan(field.midY, DS.Space.xs + row, "the field shares the row with + and Send")
+        XCTAssertLessThanOrEqual(field.maxY, empty.height - DS.Space.s - DS.Space.xs - row + 1, "the field sits above the button row")
         fixture.state.draft = "First line\nSecond line\nThird line"
         try await wait {
             controller.view.layoutIfNeeded()
@@ -614,7 +623,7 @@ final class PaneChatViewTests: XCTestCase {
         XCTAssertEqual(fixture.state.interrupt.phase, .idle)
     }
 
-    func testPhotoUploadUsesTheExistingStreamAndDefersDraftInsertionWhileNativeTextIsMarked() async throws {
+    func testPhotoUploadUsesTheExistingStreamAndBecomesAPillWithoutTouchingTheDraft() async throws {
         let suite = "chat-photo-pane-test-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
         let fixture = try makeFixture(preferences: preferences, permitsSending: true, working: true, photoUploads: true)
@@ -622,7 +631,7 @@ final class PaneChatViewTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = directory.appending(path: "photo.jpg")
         try Data(repeating: 1, count: 10).write(to: url)
-        let file = ChatPhotoFile(url: url, bytes: 10)
+        let file = ChatPhotoFile(url: url, bytes: 10, name: "sketch.jpg")
         defer {
             fixture.state.deactivate()
             fixture.window.isHidden = true
@@ -645,31 +654,25 @@ final class PaneChatViewTests: XCTestCase {
         fixture.state.photos.load(in: fixture.state, photo: { file }, source: { file in
             try await owner.uploadPhoto(file, context: context)
         })
-        try await wait { fixture.state.photos.phase == .ready }
+        try await wait { fixture.state.photos.attachments.count == 1 }
         XCTAssertEqual(fixture.state.draft, "Review this photo")
         XCTAssertNotNil(editor.markedTextRange)
         let uploads = fixture.client.state.withLock { $0.uploads }
         let target = try XCTUnwrap(uploads.first)
         XCTAssertEqual(uploads.count, 1)
         XCTAssertTrue(target.path.hasPrefix("/fixture/home/" + PaneChatView<EmptyView>.attachmentsFolder))
+        XCTAssertTrue(target.path.hasSuffix(".jpg"))
         XCTAssertTrue(target.createNew && target.mkdirs)
         XCTAssertEqual(target.mode, 0o600)
+        XCTAssertEqual(fixture.state.photos.attachments.first?.name, "sketch.jpg")
+        XCTAssertEqual(fixture.state.photos.message(with: fixture.state.draft, session: fixture.state.actionContext.session),
+                       "Review this photo\n@" + target.path)
         editor.unmarkText()
-        XCTAssertTrue(fixture.state.photos.append(to: fixture.state))
         editor.resignFirstResponder()
         editor.removeFromSuperview()
-        XCTAssertEqual(fixture.state.draft, "Review this photo\n@" + target.path)
-        XCTAssertFalse(fixture.state.photos.append(to: fixture.state))
         XCTAssertEqual(fixture.state.composer.phase, .idle)
         XCTAssertEqual(fixture.state.interrupt.phase, .idle)
         XCTAssertTrue(fixture.backend.state.withLock { $0.input.isEmpty })
-        func draftEditor(in view: UIView) -> UITextView? {
-            if let text = view as? UITextView, text.isEditable, text.text == fixture.state.draft { return text }
-            return view.subviews.lazy.compactMap { draftEditor(in: $0) }.first
-        }
-        try await wait { draftEditor(in: fixture.window) != nil }
-        let draftEditor = try XCTUnwrap(draftEditor(in: fixture.window))
-        try await wait { draftEditor.bounds.height >= (draftEditor.font?.lineHeight ?? 1) * 1.9 }
         try await Task.sleep(for: .milliseconds(350))
         try capture(fixture.window, name: "photo-mock-added")
     }
@@ -860,6 +863,15 @@ nonisolated final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimeli
         let bytes = try Data(contentsOf: URL(fileURLWithPath: localPath))
         state.withLock { $0.uploads.append(target) }
         return Self.stat(target.path, size: UInt64(bytes.count))
+    }
+    /// Paths `chatFileSearch` offers; empty is a helper without the search.
+    nonisolated(unsafe) var searchablePaths: [String] = []
+    func offersChatFileSearch() -> Bool { !searchablePaths.isEmpty }
+    func chatFileSearch(paneId: UInt64, query: String, limit: UInt16) async throws -> FileMatches {
+        record("files \(paneId) \(query)")
+        let matches = searchablePaths.filter { query.isEmpty || $0.localizedCaseInsensitiveContains(query) }
+            .map { FileMatch(path: $0, kind: $0.hasSuffix("/") ? .dir : .file, positions: []) }
+        return FileMatches(root: "/fixture/project", matches: matches, scanned: UInt32(searchablePaths.count), truncated: false)
     }
     func timelineWatch(paneId: UInt64) async throws -> String { record("watch \(paneId)"); return snapshot }
     func timelineUnwatch(paneId: UInt64) async throws { record("unwatch \(paneId)") }

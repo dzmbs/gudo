@@ -1,6 +1,21 @@
+import Foundation
+import HostKit
+
+nonisolated extension ChatCommands {
+    /// A name a command may have: letters, digits, `-`, `_` and `:`, at most 128 bytes.
+    static func isCommandName(_ name: String) -> Bool {
+        name.utf8.count <= 128 && name.unicodeScalars.allSatisfy(validNameCharacter)
+    }
+
+    static func validNameCharacter(_ scalar: Unicode.Scalar) -> Bool {
+        CharacterSet.alphanumerics.contains(scalar) || "-_:".unicodeScalars.contains(scalar)
+    }
+}
+
+nonisolated enum ChatCommands {}
+
 #if os(iOS)
 import DesignSystem
-import HostKit
 import SwiftUI
 
 struct ChatCommandOffer: Identifiable {
@@ -16,7 +31,7 @@ struct ChatCommandOffer: Identifiable {
     }
 }
 
-enum ChatCommands {
+extension ChatCommands {
     static func query(_ draft: String) -> String? {
         if draft.isEmpty { return "" }
         guard draft.first == "/", draft.utf8.count <= 129 else { return nil }
@@ -43,10 +58,6 @@ enum ChatCommands {
         state.invalidateActions()
         state.draft = "/" + command.name + " "
         return true
-    }
-
-    private static func validNameCharacter(_ scalar: Unicode.Scalar) -> Bool {
-        CharacterSet.alphanumerics.contains(scalar) || "-_:".unicodeScalars.contains(scalar)
     }
 }
 

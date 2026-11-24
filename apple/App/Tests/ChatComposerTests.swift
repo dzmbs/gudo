@@ -139,14 +139,19 @@ final class ChatComposerTests: XCTestCase {
         XCTAssertThrowsError(try ChatSendStatus.decode(String(repeating: "x", count: 1_025)))
     }
 
-    func testTheTrailingButtonSwapsBetweenSendStopAndDictate() {
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: false, canSend: true), .dictate)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "  \n", isDictating: false, canStop: false, canSend: true), .dictate)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "fix it", isDictating: false, canStop: false, canSend: true), .send)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: true, canSend: true), .stop)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "queue this", isDictating: false, canStop: true, canSend: true), .send)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "fix it", isDictating: true, canStop: true, canSend: true), .finishDictation)
-        XCTAssertEqual(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: true, canSend: false), .stop)
-        XCTAssertNil(ChatComposer.trailingAction(draft: "", isDictating: false, canStop: false, canSend: false))
+    func testThePrimaryButtonSwapsBetweenSendQueueAndStop() {
+        func action(_ hasMessage: Bool, working: Bool = false, canStop: Bool = false, canSend: Bool = true,
+                    _ whileWorking: ChatPreferences.SendWhileWorking = .queue) -> ChatComposer.PrimaryAction? {
+            ChatComposer.primaryAction(hasMessage: hasMessage, isWorking: working, canStop: canStop, canSend: canSend,
+                                       whileWorking: whileWorking)
+        }
+        XCTAssertEqual(action(false), .send)
+        XCTAssertEqual(action(true), .send)
+        XCTAssertEqual(action(false, working: true, canStop: true), .stop)
+        XCTAssertEqual(action(true, working: true, canStop: true), .queue)
+        XCTAssertEqual(action(true, working: true, canStop: true, .steer), .send)
+        XCTAssertEqual(action(true, working: true), .queue)
+        XCTAssertEqual(action(false, working: true, canStop: true, canSend: false), .stop)
+        XCTAssertNil(action(false, canSend: false))
     }
 }

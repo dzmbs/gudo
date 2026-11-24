@@ -16,6 +16,8 @@ struct PaneChatView<Terminal: View>: View {
     var working = false
     /// The host's reason the agent waits on a screen only its terminal answers (`ChatEmptyState.terminalWait`).
     var terminalWait: String?
+    /// The agent's folder: tool rows show paths inside it relative to it.
+    var workingDirectory: String?
     @Environment(\.scenePhase) private var scenePhase
     @ViewBuilder var terminal: (Bool) -> Terminal
     private var selectedDetail: ChatDetail? {
@@ -23,8 +25,13 @@ struct PaneChatView<Terminal: View>: View {
         nonmutating set { state.detail = newValue }
     }
     @State private var photoPickerPresented = false
+    @State private var fileImporterPresented = false
     @State private var confirmationPresented = false
+    @State private var draftSelection: TextSelection?
     @FocusState private var draftFocused: Bool
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @AppStorage(ChatPreferences.Key.sendWhileWorking) private var sendWhileWorkingSetting = ChatPreferences.SendWhileWorking.queue.rawValue
+    @AppStorage(ChatPreferences.Key.collapsesTurns) private var collapsesTurns = true
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var dismissedNote: String?
 
@@ -80,21 +87,40 @@ struct PaneChatView<Terminal: View>: View {
         .onAppear {
             state.images.read = { [hub] path in try await ChatImageReader.read(path, from: hub) }
             state.activate(in: hub)
+            state.model?.collapsesTurns = collapsesTurns
+            drainQueue()
         }
         .onDisappear { state.deactivate() }
-        .onChange(of: state.draft) { _, draft in state.composer.draftChanged(draft) }
+        .onChange(of: state.draft) { _, _ in
+            state.composer.draftChanged(outgoingMessage)
+            updateAutocomplete()
+        }
+        .onChange(of: draftSelection) { _, _ in updateAutocomplete() }
+        .onChange(of: collapsesTurns) { _, collapses in state.model?.collapsesTurns = collapses }
+        .onChange(of: state.model?.frame.session?.title, initial: true) { _, title in
+            if let title, !title.isEmpty { state.sessionTitle = title }
+        }
+        .onChange(of: state.presentation) { _, presentation in if presentation == .chat { drainQueue() } }
         .onChange(of: state.actionContext) { _, _ in
             state.cancelPreparedActions()
             state.dictation.cancelIfStale()
             state.photos.cancelIfStale(in: state)
-            if !state.photos.isBusy { photoPickerPresented = false }
+            state.photos.discardIfStale(session: state.actionContext.session)
+            if !state.photos.isBusy { photoPickerPresented = false; fileImporterPresented = false }
             if case .commands(let offer) = selectedDetail?.content, offer.context != state.actionContext { selectedDetail = nil }
         }
         .onChange(of: permitsSending) { _, permits in if !permits { state.invalidateActions() } }
-        .onChange(of: working) { _, working in if !working { state.interrupt.reset() } }
+        .onChange(of: working) { _, working in
+            guard !working else { return }
+            state.interrupt.reset()
+            drainQueue()
+        }
         .onChange(of: scenePhase) { _, phase in sceneChanged(phase) }
+        .onChange(of: state.composer.phase) { _, phase in queuedSendMoved(to: phase) }
         .onChange(of: state.composer.confirmedText) { _, text in
-            if let text, state.draft == text { state.draft = "" }
+            guard let text, outgoingMessage == text else { return }
+            state.draft = ""
+            state.photos.discardAttachments()
         }
         .onChange(of: pendingConfirmation, initial: true) { _, pending in confirmationPresented = pending != nil }
         .alert(unsentWarning, isPresented: $confirmationPresented) {
@@ -112,6 +138,15 @@ struct PaneChatView<Terminal: View>: View {
             guard let item else { return }
             selectedPhoto = nil
             receivePhoto(item)
+        }
+        .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.item]) { result in receiveFile(result) }
+        .onChange(of: fileImporterPresented) { _, presented in
+            guard !presented else { return }
+            let generation = state.photos.generation
+            Task {
+                await Task.yield()
+                if state.photos.generation == generation, state.photos.phase == .picking { state.photos.cancel() }
+            }
         }
         .onChange(of: photoPickerPresented) { _, presented in
             guard !presented else { return }
@@ -174,47 +209,100 @@ struct PaneChatView<Terminal: View>: View {
         VStack(alignment: .leading, spacing: DS.Space.s) {
             if state.capabilities.contains(.approvals), let approval { approval.frame(maxWidth: .infinity) }
             if state.capabilities.contains(.send) {
-                VStack(alignment: .leading, spacing: 0) {
-                    composerNotes
-                    HStack(alignment: .bottom, spacing: 0) {
-                        leadingControl
-                        TextField("Message", text: $state.draft, prompt: Text(composerPrompt), axis: .vertical)
-                            .font(DS.Font.prose).lineLimit(1...6)
-                            .focused($draftFocused)
-                            .disabled(state.dictation.isActive || !composerTakesText)
-                            .padding(.vertical, DS.Space.gap10)
-                            .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
-                            .accessibilityIdentifier("chat-draft")
-                        trailingButton
-                    }
-                    .padding(DS.Space.xs)
+                if !state.queue.messages.isEmpty {
+                    ChatQueueStrip(messages: state.queue.messages, edit: editQueued, sendNow: sendQueuedNow,
+                                   remove: { state.queue.take($0.id) })
+                        .motionTransition(.fade)
                 }
-                .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
-                // Nothing can be sent: the composer says so by looking it, not only by ignoring taps.
-                .opacity(composerTakesText ? 1 : DS.Opacity.mutedGlyph)
-                .contentShape(.rect)
-                .onTapGesture { if !state.dictation.isActive, composerTakesText { draftFocused = true } }
-                .accessibilityElement(children: .contain)
-                .accessibilityIdentifier("chat-composer")
-                sessionControls
+                if state.autocomplete.isPresented {
+                    ChatAutocompleteList(autocomplete: state.autocomplete, accept: acceptSuggestion)
+                        .motionTransition(.fade)
+                }
+                composerBox
             } else {
                 if state.capabilities.contains(.read) {
                     Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
                         .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
                         .accessibilityIdentifier("chat-read-only")
                 }
-                if trailingAction != nil {
+                if let action = primaryAction, action == .stop {
                     HStack(spacing: 0) {
                         composerStatusLine
                         Spacer(minLength: 0)
-                        trailingButton
+                        primaryButton(action)
                     }
                 }
             }
         }
+        .animation(DS.Motion.standard, value: state.queue.messages)
+        .animation(DS.Motion.standard, value: state.autocomplete.isPresented)
         .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
         .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
         .foregroundStyle(DS.Palette.text)
+    }
+
+    /// One rounded box: pills for attachments, the field, and under it the row with attach,
+    /// the agent's controls, the context ring, dictation and Send.
+    private var composerBox: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !state.photos.attachments.isEmpty || state.photos.pendingName != nil {
+                ChatAttachmentPills(attachments: state.photos.attachments,
+                                    pending: state.photos.pendingName.map { name in state.photos.status.map { $0 + " " + name } ?? name },
+                                    remove: { state.photos.remove($0) })
+                    .padding(.top, DS.Space.s)
+                    .motionTransition(.fade)
+            }
+            composerNotes
+            draftField
+            bottomRow
+        }
+        .padding(DS.Space.xs)
+        .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
+        // Nothing can be sent: the composer says so by looking it, not only by ignoring taps.
+        .opacity(composerTakesText ? 1 : DS.Opacity.mutedGlyph)
+        .contentShape(.rect)
+        .onTapGesture { if !state.dictation.isActive, composerTakesText { draftFocused = true } }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-composer")
+    }
+
+    private var draftField: some View {
+        TextField("Message", text: $state.draft, selection: $draftSelection, prompt: Text(composerPrompt), axis: .vertical)
+            .font(DS.Font.prose).lineLimit(1...8)
+            .focused($draftFocused)
+            .disabled(state.dictation.isActive || !composerTakesText)
+            .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.gap10).padding(.bottom, DS.Space.xs)
+            .frame(maxWidth: .infinity, minHeight: DS.Size.touchTarget, alignment: .leading)
+            .onKeyPress(keys: [.upArrow, .downArrow, .tab, .return, .escape], phases: .down, action: suggestionKey)
+            .accessibilityIdentifier("chat-draft")
+    }
+
+    private var bottomRow: some View {
+        HStack(spacing: 0) {
+            leadingControl
+            if draftFocused, horizontalSizeClass == .compact {
+                Button { draftFocused = false } label: {
+                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
+                }
+                .buttonStyle(ChatComposerButtonStyle(.glyph))
+                .accessibilityIdentifier("chat-hide-keyboard")
+            }
+            agentControls
+            Spacer(minLength: 0)
+            if let usage = ChatContextUsage(rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
+                ChatContextMeter(usage: usage)
+            }
+            dictationButton
+            if let action = primaryAction { primaryButton(action) }
+        }
+    }
+
+    /// The agent's model, mode and effort. `ChatAgentControls` takes this place once it exists;
+    /// until then the session's chips show here.
+    private var agentControls: some View {
+        ChatSessionChips(session: state.model?.frame.session,
+                         canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
+                         chooseModel: chooseModel)
     }
 
     /// Whether a message typed now could go: this device may prompt, and the agent is not stopped
@@ -223,24 +311,19 @@ struct PaneChatView<Terminal: View>: View {
 
     private var composerPrompt: String {
         if terminalWait != nil { return "Answer in Terminal first" }
-        return permitsSending ? "Message" : "You can watch, not send"
+        guard permitsSending else { return "You can watch, not send" }
+        return horizontalSizeClass == .compact ? "Message, @files, /commands"
+            : "Message the agent, tag @files, or use /commands and /skills"
     }
 
-    /// What the composer is doing, or the command hint, on a line above the field, so the
-    /// row with the buttons never moves.
+    /// What the composer is doing on a line above the field, so the row with the buttons never moves.
     @ViewBuilder private var composerNotes: some View {
-        let offersCommands = state.draft.hasPrefix("/") && ChatCommands.query(state.draft) != nil
-        if composerStatus != nil || offersCommands {
+        if composerStatus != nil {
             HStack(spacing: DS.Space.s) {
                 composerStatusLine
-                if offersCommands, composerStatus == nil {
-                    Button("Choose command…", systemImage: "slash.circle", action: openCommands)
-                        .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                        .disabled(!permitsSending || state.dictation.isActive || state.composer.isBusy || state.interrupt.isBusy)
-                }
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, DS.Space.l)
+            .padding(.horizontal, DS.Space.m)
             .motionTransition(.fade)
         }
     }
@@ -254,32 +337,21 @@ struct PaneChatView<Terminal: View>: View {
             .accessibilityIdentifier("chat-cancel-dictation")
         } else {
             Menu {
+                Button("Photo Library", systemImage: "photo.on.rectangle", action: choosePhoto)
+                Button("Choose File", systemImage: "folder", action: chooseFile)
+                Button("Paste Image", systemImage: "doc.on.clipboard", action: pasteImage)
+                    .disabled(!UIPasteboard.general.hasImages)
+                Divider()
                 Button("Commands", systemImage: "slash.circle", action: openCommands)
                     .keyboardShortcut("/", modifiers: .command)
                     .disabled(ChatCommands.query(state.draft) == nil)
-                Button("Upload photo to host…", systemImage: "photo", action: choosePhoto)
             } label: {
-                Label("Add to message", systemImage: "plus").labelStyle(.iconOnly)
+                Label("Attach", systemImage: "paperclip").labelStyle(.iconOnly)
             }
             .menuStyle(.button)
             .buttonStyle(ChatComposerButtonStyle(.glyph))
-            .disabled(!permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy)
+            .disabled(!permitsSending || state.photos.isBusy || state.photos.isFull || state.composer.isBusy || state.interrupt.isBusy)
             .accessibilityIdentifier("chat-add")
-        }
-    }
-
-    private var sessionControls: some View {
-        HStack(spacing: DS.Space.xs) {
-            if draftFocused {
-                Button { draftFocused = false } label: {
-                    Label("Hide Keyboard", systemImage: "keyboard.chevron.compact.down").labelStyle(.iconOnly)
-                }
-                .buttonStyle(ChatComposerButtonStyle(.glyph))
-                .accessibilityIdentifier("chat-hide-keyboard")
-            }
-            ChatSessionChips(session: state.model?.frame.session,
-                             canChooseModel: permitsSending && state.draft.isEmpty && !state.composer.isBusy && !state.interrupt.isBusy,
-                             chooseModel: chooseModel)
         }
     }
 
@@ -305,98 +377,257 @@ struct PaneChatView<Terminal: View>: View {
                 if state.photos.isBusy {
                     Button("Cancel") { state.photos.cancel(); photoPickerPresented = false }
                         .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
-                } else if state.photos.phase == .ready {
-                    Button("Add photo") {
-                        if canEditDraft(state.actionContext) { state.photos.append(to: state) }
-                    }
-                    .font(DS.Font.caption).frame(minHeight: DS.Size.touchTarget)
                 }
             }
             .motionTransition(.fade)
         }
     }
 
-    private var trailingAction: ChatComposer.TrailingAction? {
-        ChatComposer.trailingAction(draft: state.draft, isDictating: state.dictation.isActive,
-                                    canStop: working && state.capabilities.contains(.stop),
-                                    canSend: state.capabilities.contains(.send))
+    // MARK: Send, queue and stop
+
+    /// What the message would be: the text, then the attachments' mentions.
+    var outgoingMessage: String { state.photos.message(with: state.draft, session: state.actionContext.session) }
+
+    private var hasMessage: Bool {
+        !outgoingMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    @ViewBuilder private var trailingButton: some View {
-        if let action = trailingAction {
-            Button { perform(action) } label: {
-                Label(trailingTitle(action), systemImage: trailingSymbol(action)).labelStyle(.iconOnly)
+    private var primaryAction: ChatComposer.PrimaryAction? {
+        ChatComposer.primaryAction(hasMessage: hasMessage, isWorking: working,
+                                   canStop: working && state.capabilities.contains(.stop),
+                                   canSend: state.capabilities.contains(.send),
+                                   whileWorking: sendWhileWorking)
+    }
+
+    private var sendWhileWorking: ChatPreferences.SendWhileWorking {
+        ChatPreferences.SendWhileWorking(rawValue: sendWhileWorkingSetting) ?? .queue
+    }
+
+    private func primaryButton(_ action: ChatComposer.PrimaryAction) -> some View {
+        Button { perform(action) } label: {
+            Label(primaryTitle(action), systemImage: primarySymbol(action)).labelStyle(.iconOnly)
+                .contentTransition(.symbolEffect(.replace))
+        }
+        .buttonStyle(ChatComposerButtonStyle(action: action))
+        .keyboardShortcut(primaryShortcut(action))
+        .disabled(isDisabled(action))
+        .animation(DS.Motion.micro, value: action)
+        .contextMenu {
+            if working, action != .stop, !isDisabled(action) {
+                Button(action == .queue ? "Send Now" : "Queue Until the Turn Ends",
+                       systemImage: action == .queue ? "arrow.up" : "text.append") { submit(alternate: true) }
+            }
+        }
+        .background {
+            Button("Send the other way") { submit(alternate: true) }
+                .keyboardShortcut(.return, modifiers: .option)
+                .disabled(!working || action == .stop || isDisabled(action))
+                .hidden()
+                .accessibilityHidden(true)
+        }
+        .accessibilityIdentifier(primaryIdentifier(action))
+    }
+
+    @ViewBuilder private var dictationButton: some View {
+        if state.capabilities.contains(.send) {
+            let finishing = state.dictation.isActive
+            Button(action: dictate) {
+                Label(finishing ? "Use dictation" : "Dictate", systemImage: finishing ? "checkmark" : "mic").labelStyle(.iconOnly)
                     .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(ChatComposerButtonStyle(action: action))
-            .keyboardShortcut(trailingShortcut(action))
-            .disabled(isDisabled(action))
-            .animation(DS.Motion.micro, value: action)
-            .accessibilityIdentifier(trailingIdentifier(action))
+            .buttonStyle(ChatComposerButtonStyle(.glyph))
+            .disabled(isDictationDisabled)
+            .accessibilityIdentifier("chat-dictate")
         }
     }
 
-    private func perform(_ action: ChatComposer.TrailingAction) {
+    private var isDictationDisabled: Bool {
+        state.presentation != .chat || !permitsSending || state.photos.isBusy || state.composer.isBusy || state.interrupt.isBusy
+            || (state.dictation.isActive && !state.dictation.canFinish)
+    }
+
+    private func perform(_ action: ChatComposer.PrimaryAction) {
         switch action {
-        case .send: send()
+        case .send, .queue: send()
         case .stop: interrupt()
-        case .dictate, .finishDictation: dictate()
         }
     }
 
-    private func trailingShortcut(_ action: ChatComposer.TrailingAction) -> KeyboardShortcut? {
+    private func primaryShortcut(_ action: ChatComposer.PrimaryAction) -> KeyboardShortcut? {
         switch action {
-        case .send: KeyboardShortcut(.return, modifiers: .command)
-        case .stop: KeyboardShortcut(.escape, modifiers: [])
-        case .dictate, .finishDictation: nil
+        case .send, .queue: KeyboardShortcut(.return, modifiers: .command)
+        case .stop: state.autocomplete.isPresented ? nil : KeyboardShortcut(.escape, modifiers: [])
         }
     }
 
-    private func trailingTitle(_ action: ChatComposer.TrailingAction) -> String {
+    private func primaryTitle(_ action: ChatComposer.PrimaryAction) -> String {
         switch action {
         case .send: "Send"
+        case .queue: "Queue"
         case .stop: "Stop"
-        case .dictate: "Dictate"
-        case .finishDictation: "Use dictation"
         }
     }
 
-    private func trailingSymbol(_ action: ChatComposer.TrailingAction) -> String {
+    private func primarySymbol(_ action: ChatComposer.PrimaryAction) -> String {
         switch action {
         case .send: "arrow.up"
+        case .queue: "text.append"
         case .stop: "stop.fill"
-        case .dictate: "mic.fill"
-        case .finishDictation: "checkmark"
         }
     }
 
-    private func trailingIdentifier(_ action: ChatComposer.TrailingAction) -> String {
+    private func primaryIdentifier(_ action: ChatComposer.PrimaryAction) -> String {
         switch action {
         case .send: "chat-send"
+        case .queue: "chat-queue-send"
         case .stop: "chat-stop"
-        case .dictate, .finishDictation: "chat-dictate"
         }
     }
 
-    private func isDisabled(_ action: ChatComposer.TrailingAction) -> Bool {
+    private func isDisabled(_ action: ChatComposer.PrimaryAction) -> Bool {
         let blocked = state.presentation != .chat || !permitsSending || state.photos.isBusy
         switch action {
         case .send:
             return blocked || state.dictation.isActive || state.interrupt.isBusy
-                || approval?.hasBlockedRequest == true || !state.composer.canSend(state.draft)
+                || approval?.hasBlockedRequest == true || !state.composer.canSend(outgoingMessage)
+        case .queue:
+            return blocked || state.dictation.isActive || state.queue.isFull || !hasMessage
+                || outgoingMessage.utf8.count > ChatComposer.maximumDraftBytes
         case .stop:
             return blocked || !state.interrupt.canBegin
-        case .dictate, .finishDictation:
-            return blocked || state.composer.isBusy || state.interrupt.isBusy
-                || (state.dictation.isActive && !state.dictation.canFinish)
         }
     }
 
+    /// Send by the setting: while the agent works, queue (or send now, if the setting says so);
+    /// `alternate` does the other.
+    func submit(alternate: Bool) {
+        let queues = working && (sendWhileWorking == .queue) != alternate
+        if queues { queueDraft() } else { deliver(outgoingMessage, queued: nil) }
+    }
+
+    func queueDraft() {
+        let message = outgoingMessage
+        guard state.capabilities.contains(.send), working, canEditDraft(state.actionContext),
+              state.queue.enqueue(message) else { return }
+        state.draft = ""
+        state.photos.discardAttachments()
+        state.autocomplete.close()
+    }
+
+    private func editQueued(_ message: ChatQueuedMessage) {
+        guard canEditDraft(state.actionContext), let taken = state.queue.take(message.id) else { return }
+        let draft = state.draft.isEmpty ? taken.text : state.draft + "\n" + taken.text
+        guard draft.utf8.count <= ChatComposer.maximumDraftBytes else { state.queue.restore(taken); return }
+        state.draft = draft
+        draftFocused = true
+    }
+
+    private func sendQueuedNow(_ message: ChatQueuedMessage) {
+        guard !state.composer.isBusy, let taken = state.queue.take(message.id) else { return }
+        deliver(taken.text, queued: taken)
+    }
+
+    /// When the turn ends, the oldest queued message goes, through the same once-only send.
+    func drainQueue() {
+        guard !working, let next = state.queue.messages.first, state.capabilities.contains(.send),
+              !state.composer.isBusy, !state.interrupt.isBusy, prepareAction(state.actionContext),
+              state.composer.canSend(next.text), let taken = state.queue.take(next.id) else { return }
+        deliver(taken.text, queued: taken)
+    }
+
+    /// A queued message that was cancelled before it went, or did not go through, returns to
+    /// the front of the queue.
+    private func queuedSendMoved(to phase: ChatComposer.Phase) {
+        guard let queued = state.queueInFlight else { return }
+        switch phase {
+        case .idle:
+            state.queue.restore(queued)
+            state.queueInFlight = nil
+        case .finished:
+            if state.composer.outcome == .notConfirmed { state.queue.restore(queued) }
+            state.queueInFlight = nil
+        case .preparing, .confirming, .sending: break
+        }
+    }
+
+    private func acceptSuggestion(_ index: Int) {
+        guard canEditDraft(state.actionContext),
+              let accepted = state.autocomplete.accept(index, in: state.draft) else { return }
+        state.draft = accepted.draft
+        draftSelection = TextSelection(insertionPoint: accepted.cursor)
+        draftFocused = true
+        updateAutocomplete()
+    }
+
+    private func suggestionKey(_ press: KeyPress) -> KeyPress.Result {
+        guard state.autocomplete.isPresented else { return .ignored }
+        switch press.key {
+        case .upArrow: state.autocomplete.moveSelection(by: -1)
+        case .downArrow: state.autocomplete.moveSelection(by: 1)
+        case .escape: state.autocomplete.dismiss()
+        case .tab, .return:
+            guard press.modifiers.isEmpty, !state.autocomplete.suggestions.isEmpty else { return .ignored }
+            acceptSuggestion(state.autocomplete.selection)
+        default: return .ignored
+        }
+        return .handled
+    }
+
+    func updateAutocomplete() {
+        guard state.capabilities.contains(.send), permitsSending, !state.dictation.isActive else {
+            state.autocomplete.close()
+            return
+        }
+        state.autocomplete.update(draft: state.draft, cursor: draftCursor,
+                                  commands: state.model?.frame.session?.commands ?? [], files: fileSource)
+    }
+
+    /// Where the cursor is in the draft; its end when the field is not being typed in.
+    private var draftCursor: String.Index? {
+        let draft = state.draft
+        // The field reports its selection after the text changes; an index from the text before
+        // may lie past this one's end or inside a character.
+        guard draftFocused, case .selection(let range) = draftSelection?.indices, range.upperBound < draft.endIndex,
+              draft.indices.contains(range.upperBound) else { return draft.endIndex }
+        return range.upperBound
+    }
+
+    private var fileSource: ChatAutocomplete.FileSource? {
+        guard let client = try? hub.timelineClient(), client.offersChatFileSearch() else { return nil }
+        let paneId = pane.id.rawValue
+        return { query in
+            try await client.chatFileSearch(paneId: paneId, query: query, limit: 30).matches.map { file in
+                ChatFileSuggestion(path: file.path, isDirectory: file.kind == .dir, positions: file.positions)
+            }
+        }
+    }
+
+    // MARK: Attachments
+
     func choosePhoto() {
-        guard state.capabilities.contains(.send), prepareAction(state.actionContext), !state.composer.isBusy, !state.interrupt.isBusy else { return }
+        guard beginAttaching() else { return }
+        photoPickerPresented = true
+    }
+
+    func chooseFile() {
+        guard beginAttaching() else { return }
+        fileImporterPresented = true
+    }
+
+    func pasteImage() {
+        guard let data = UIPasteboard.general.image?.pngData(), beginAttaching() else { return }
+        let context = state.actionContext
+        state.photos.load(in: state, photo: {
+            try await Task.detached(priority: .userInitiated) { try ChatPhotoFile.prepare(data: data) }.value
+        }, source: { file in try await uploadPhoto(file, context: context) })
+    }
+
+    private func beginAttaching() -> Bool {
+        guard state.capabilities.contains(.send), prepareAction(state.actionContext), !state.composer.isBusy,
+              !state.interrupt.isBusy, !state.photos.isFull else { return false }
         state.invalidateActions()
         state.photos.begin(in: state)
-        photoPickerPresented = true
+        return true
     }
 
     private func receivePhoto(_ item: PhotosPickerItem) {
@@ -408,15 +639,33 @@ struct PaneChatView<Terminal: View>: View {
         }, source: { file in try await uploadPhoto(file, context: context) })
     }
 
+    private func receiveFile(_ result: Result<URL, Error>) {
+        let context = state.actionContext
+        guard case .success(let url) = result, canEditDraft(context) else { state.photos.cancel(); return }
+        state.photos.load(in: state, photo: {
+            try await Task.detached(priority: .userInitiated) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                return try ChatPhotoFile.prepareFile(url)
+            }.value
+        }, source: { file in try await uploadPhoto(file, context: context) })
+    }
+
     static var attachmentsFolder: String {
         "Downloads/" + Brand.name.replacingOccurrences(of: " ", with: "-") + "-Attachments/"
+    }
+
+    /// A unique name in the attachments folder that keeps the file's own extension.
+    static func attachmentName(for file: ChatPhotoFile) -> String {
+        let pathExtension = file.url.pathExtension.filter { $0.isLetter || $0.isNumber }.prefix(12)
+        return UUID().uuidString + (pathExtension.isEmpty ? "" : "." + pathExtension)
     }
 
     func uploadPhoto(_ file: ChatPhotoFile, context: PaneChatState.ActionContext) async throws -> String {
         guard isCurrentPhotoContext(context), let client = hub.api else { throw CancellationError() }
         let home = try await client.fsStat(path: "~")
         guard isCurrentPhotoContext(context), home.kind == .dir else { throw CancellationError() }
-        let path = (home.path as NSString).appendingPathComponent(Self.attachmentsFolder + UUID().uuidString + ".jpg")
+        let path = (home.path as NSString).appendingPathComponent(Self.attachmentsFolder + Self.attachmentName(for: file))
         _ = try ChatPhotos.reference(path)
         let result = try await client.uploadFile(localPath: file.url.path,
             target: WriteTarget(path: path, ifMatch: nil, createNew: true, mkdirs: true, mode: 0o600), progress: nil)
@@ -478,18 +727,29 @@ struct PaneChatView<Terminal: View>: View {
         "The agent in Terminal may have unsent text."
     }
 
-    func send() {
+    func send() { submit(alternate: false) }
+
+    /// Sends `text` through the once-only prepare and send; a queued message whose send did not
+    /// go through goes back to the front of the queue.
+    private func deliver(_ text: String, queued: ChatQueuedMessage?) {
         let context = state.actionContext
-        guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(state.draft) else { return }
+        guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context), state.composer.canSend(text) else {
+            if let queued { state.queue.restore(queued) }
+            return
+        }
         state.dictation.cancel()
         state.photos.cancel()
-        let draft = state.draft
+        state.autocomplete.close()
         let generation = state.composer.requestGeneration
         Task {
             guard generation == state.composer.requestGeneration,
-                  state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context) else { return }
+                  state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context) else {
+                if let queued { state.queue.restore(queued) }
+                return
+            }
             if state.interrupt.phase == .finished { state.interrupt.reset() }
-            await state.composer.begin(draft) { command in
+            state.queueInFlight = queued
+            await state.composer.begin(text) { command in
                 guard state.capabilities.contains(.send), !state.interrupt.isBusy, prepareAction(context) else { throw CancellationError() }
                 let client = try hub.timelineClient()
                 let json: String
@@ -563,7 +823,7 @@ struct PaneChatView<Terminal: View>: View {
             state.presentDetail { _ in .longText(longText) }
         }, showDiff: { selectDiffPreview($0) },
         resend: state.capabilities.contains(.send) && permitsSending ? { resend($0) } : nil,
-        loadImage: readsToolDetails ? state.images : nil)
+        loadImage: readsToolDetails ? state.images : nil, workingDirectory: workingDirectory)
     }
 
     private func selectDiffPreview(_ target: ChatDiffTarget) {

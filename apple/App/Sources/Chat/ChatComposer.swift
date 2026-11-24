@@ -10,19 +10,23 @@ final class ChatComposer {
     enum Command { case prepare, send(ticket: UInt64, text: String, confirmation: UInt64?) }
     typealias Source = @MainActor (Command) async throws -> ChatSendStatus
     enum Phase: Equatable { case idle, preparing, confirming, sending, finished }
-    enum TrailingAction: Equatable { case send, stop, dictate, finishDictation }
+    enum PrimaryAction: Equatable { case send, queue, stop }
 
-    /// The one button at the composer's trailing edge: what the next tap most likely wants.
-    static func trailingAction(draft: String, isDictating: Bool, canStop: Bool, canSend: Bool) -> TrailingAction? {
-        if isDictating { return .finishDictation }
-        let hasDraft = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if canSend, hasDraft { return .send }
+    /// The disc at the composer's trailing edge: Send (or Queue while the agent works, as the
+    /// setting says) with a message written, else Stop while the agent works.
+    static func primaryAction(hasMessage: Bool, isWorking: Bool, canStop: Bool, canSend: Bool,
+                              whileWorking: ChatPreferences.SendWhileWorking) -> PrimaryAction? {
+        if canSend, hasMessage { return isWorking && whileWorking == .queue ? .queue : .send }
         if canStop { return .stop }
-        return canSend ? .dictate : nil
+        return canSend ? .send : nil
     }
+
+    enum Outcome: Equatable { case confirmed, sentNotConfirmed, notConfirmed }
 
     private(set) var phase: Phase = .idle
     private(set) var message: String?
+    /// How the last send ended; nil while one is under way or none has finished.
+    private(set) var outcome: Outcome?
     private(set) var confirmedText: String?
     private var text = ""
     private var offer: ChatSendOffer?
@@ -49,6 +53,7 @@ final class ChatComposer {
         generation = UUID()
         let request = generation
         message = nil
+        outcome = nil
         confirmedText = nil
         text = draft
         self.source = source
@@ -96,10 +101,13 @@ final class ChatComposer {
         case .confirmed:
             message = "Confirmed"
             confirmedText = text
+            outcome = .confirmed
         case .sentNotConfirmed:
             message = "Sent, not confirmed"
+            outcome = .sentNotConfirmed
         default:
             message = "Not confirmed, check the terminal"
+            outcome = .notConfirmed
         }
         phase = .finished
         offer = nil

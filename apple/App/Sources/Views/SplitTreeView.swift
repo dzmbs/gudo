@@ -736,7 +736,8 @@ struct PaneSlot: View {
                          permitsSending: daemon.multiplayer.isOwner,
                          readsToolDetails: daemon.multiplayer.canPrompt,
                          working: working,
-                         terminalWait: answersInChat ? nil : ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state)) { active in
+                         terminalWait: answersInChat ? nil : ChatEmptyState.terminalWait(daemon.meta[pane.id]?.agent?.state),
+                         workingDirectory: daemon.meta[pane.id]?.cwd) { active in
                 terminalContent(pane, isActive: active)
             }
             .environment(\.chatAgentControls, ChatAgentControlsContext(

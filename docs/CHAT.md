@@ -218,11 +218,17 @@ finish/cancel cannot control a replacement recording in another pane, and failur
 target. Agent/presentation/lifetime changes and backgrounding cancel. Starting may survive an inactive
 scene for system permission dialogs, but host controls remain unavailable during that interval.
 
-The composer is one rounded surface and, empty, one 44 pt row: the Add menu, the field and one trailing button that swaps in place between Send (a draft is typed), Stop (the agent is working and the draft is empty) and Dictate. Send is a disc in the prominent accent with its glyph in `onProminent`, Stop the same disc in the ink, both inside a 44 pt target, so the swap never moves the row. The field grows upward to six lines with the buttons held at the bottom; a status or the command hint takes a line above the field. Hide Keyboard sits at the leading end of the row under the composer. Terminal is reached from the header's Chat/Terminal switch, not the composer.
+The composer is one rounded box: attachment pills, then the field, then a row inside the box with Attach (photo library, a file, a pasted image, commands), the agent's controls, the context ring, Dictate and one trailing disc that swaps in place between Send, Queue (the agent is working and Send queues) and Stop (the agent is working and nothing is written). Send is a disc in the prominent accent with its glyph in `onProminent`, Stop the same disc in the ink, both inside a 44 pt target, so the swap never moves the row. The field grows upward to eight lines. Its placeholder says what it takes, "Message the agent, tag @files, or use /commands and /skills" ("Message, @files, /commands" on a phone). Hide Keyboard sits in the row while the field has the keyboard on a phone.
 
-With a helper that offers `MoreDaemonFeatures::AGENT_CONTROLS`, the chips under the composer are
-`ChatAgentControls` (see Agent controls below). With an older helper they stay as follows.
-Under the composer sit the session's model and permission mode, as the transcript records them
+While the agent works, Send queues by default (Settings › Agents › Chat): the message waits in a strip above the composer with Edit, Send now and Remove, and the oldest goes through the usual once-only send when the turn ends, one per turn; one that does not go through returns to the front. Holding Send, or Option-Return, does the other: sends now, for the agent to read mid-turn, or queues when sending now is the setting. Attachments upload to the host's attachments folder as before, then wait as pills until Send adds their `@path` mentions on a line after the text; a pill can be removed, and pills never carry to another session.
+
+Typing `/` as the message's first word, or `@` at the start of a word, opens suggestions above the composer: the session's commands, prefixes first, or the host's files. Up and Down move, Tab or Return takes one, Escape closes the list for that word. A folder keeps the list open.
+
+Finished turns fold (a setting turns it off): the prompt, one line naming what the agent did ("Ran 3 commands, read 2 files, 1 message"), the final reply, and under it a footer with Copy for the reply's Markdown, the turn's time and Changes. Opening the line shows every row again. A turn folds once its turn end arrives or a later prompt follows. The context ring reads the last finished turn's input tokens against the model's window, when both are known; tapping it says how full in words. Tool rows read as a verb and what it acted on, with a glyph for the kind ("Shell git status --short", "Read src/app.ts"), cut in the middle so a path keeps its file name.
+
+With a helper that offers `MoreDaemonFeatures::AGENT_CONTROLS`, the composer's row holds
+`ChatAgentControls` (see Agent controls below). With an older helper the row holds the session's
+model and permission mode, as the transcript records them
 (`ChatSessionChips`), each a small menu with a trailing up-down chevron and the shared press fill.
 Only Claude Code is offered its aliases; Codex and pi show their model without a menu.
 The model menu opens on the running model, checked, then the aliases with its own family first.

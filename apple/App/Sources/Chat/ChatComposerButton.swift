@@ -11,11 +11,10 @@ struct ChatComposerButtonStyle: ButtonStyle {
     let weight: Weight
     @Environment(\.isEnabled) private var isEnabled
 
-    init(action: ChatComposer.TrailingAction) {
+    init(action: ChatComposer.PrimaryAction) {
         switch action {
-        case .send: weight = .primary
+        case .send, .queue: weight = .primary
         case .stop: weight = .stop
-        case .dictate, .finishDictation: weight = .glyph
         }
     }
 

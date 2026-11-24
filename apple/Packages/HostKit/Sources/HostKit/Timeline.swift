@@ -12,6 +12,8 @@ nonisolated public protocol DaemonTimelineAPI: AnyObject, Sendable {
     func timelineToolOutput(paneId: UInt64, handle: String, offset: UInt64, len: UInt32) async throws -> String
     func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String
     func offersAgentTimeline() -> Bool
+    func chatFileSearch(paneId: UInt64, query: String, limit: UInt16) async throws -> FileMatches
+    func offersChatFileSearch() -> Bool
 }
 
 extension DaemonTimelineAPI {
@@ -35,6 +37,12 @@ extension DaemonTimelineAPI {
 
     public func timelineToolDiff(paneId: UInt64, handle: String) async throws -> String {
         throw WorkspaceError.Unavailable(message: "Update the helper to read complete recorded changes.")
+    }
+
+    nonisolated public func offersChatFileSearch() -> Bool { false }
+
+    public func chatFileSearch(paneId: UInt64, query: String, limit: UInt16) async throws -> FileMatches {
+        throw WorkspaceError.Unavailable(message: "Update the helper to tag files")
     }
 }
 

@@ -40,7 +40,13 @@ final class PaneChatState {
     let interrupt = ChatInterrupt()
     let dictation: ChatDictation
     let photos = ChatPhotos()
+    let queue = ChatQueue()
+    /// The queued message the composer is sending, to put back if it does not go.
+    var queueInFlight: ChatQueuedMessage?
+    let autocomplete = ChatAutocomplete()
     let images = ChatImageLoader()
+    /// The agent session's own title, kept after the timeline model is released, for the tab.
+    var sessionTitle: String?
     var detail: ChatDetail?
     var model: TimelineModel? { lease?.model }
     var capabilities: AgentCapabilities {
@@ -106,6 +112,9 @@ final class PaneChatState {
         invalidateActions()
         self.agent = supported
         terminalNotice = nil
+        queue.clear()
+        photos.discardAttachments()
+        sessionTitle = nil
         model?.stop()
         model?.receive(.reset)
         if supported == nil {
@@ -143,6 +152,7 @@ final class PaneChatState {
         actionEpoch = UUID()
         dictation.cancel()
         photos.cancel()
+        autocomplete.close()
         detail = nil
         cancelPreparedActions()
     }
