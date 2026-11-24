@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 @testable import HostKit
 import Synchronization
+import XCTest
 import GudoCore
 @testable import App
 
@@ -166,5 +167,37 @@ nonisolated func drive(_ count: Int, perSecond: Double, _ send: @escaping @Senda
             }
             done.resume()
         }
+    }
+}
+
+/// What Chat may cost on a long session: the first rows on screen after opening it, applying one
+/// streamed item on the main thread, the longest stall while streaming or scrolling, and memory.
+enum ChatPerformanceBudget {
+    static let firstRows: Duration = .milliseconds(150)
+    static let applyMean: Duration = .milliseconds(4)
+    static let applyMax: Duration = .milliseconds(8)
+    static let stall: Duration = .milliseconds(16)
+    static let addedMB = 20.0
+
+    static func check(label: String, firstRows: Duration, applies: some Collection<Duration>, stalls: [Duration],
+                      addedMB: Double, file: StaticString = #filePath, line: UInt = #line) {
+        let mean = applies.isEmpty ? .zero : applies.reduce(.zero, +) / applies.count
+        let worstApply = applies.max() ?? .zero
+        let worstStall = stalls.max() ?? .zero
+        print("chat-budget \(label): first rows \(firstRows.milliseconds) ms, apply mean \(mean.formattedMilliseconds),"
+              + " max \(worstApply.formattedMilliseconds), stall \(worstStall.milliseconds) ms, +\(Int(addedMB)) MB")
+        XCTAssertFalse(applies.isEmpty, "\(label): nothing was applied", file: file, line: line)
+        XCTAssertLessThanOrEqual(firstRows, Self.firstRows, "\(label): first rows", file: file, line: line)
+        XCTAssertLessThanOrEqual(mean, applyMean, "\(label): apply mean", file: file, line: line)
+        XCTAssertLessThanOrEqual(worstApply, applyMax, "\(label): apply max", file: file, line: line)
+        XCTAssertLessThanOrEqual(worstStall, stall, "\(label): main-thread stall", file: file, line: line)
+        XCTAssertLessThanOrEqual(addedMB, Self.addedMB, "\(label): memory added at open", file: file, line: line)
+    }
+}
+
+extension Duration {
+    var formattedMilliseconds: String {
+        let milliseconds = Double(components.seconds) * 1_000 + Double(components.attoseconds) / 1e15
+        return String(format: "%.2f ms", milliseconds)
     }
 }

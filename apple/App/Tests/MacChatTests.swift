@@ -174,8 +174,24 @@ final class MacChatTests: XCTestCase {
         }
     }
 
+    /// Opening a long session as the daemon sends it, its latest page with history above; the first
+    /// open in the process also pays for warming up.
+    private func openLatestPage(of session: [[String: Any]]) async throws -> Duration {
+        let page = Array(session.suffix(60))
+        let opened = ContinuousClock.now
+        let fixture = try MacChatFixture(snapshot: ChatScenes.snapshot(page, before: UInt64(session.count - page.count)))
+        defer { fixture.close() }
+        try await fixture.wait(timeout: .seconds(30)) {
+            guard let last = fixture.model?.frame.rows.last?.id else { return false }
+            return fixture.visibleRows.contains(last)
+        }
+        return ContinuousClock.now - opened
+    }
+
     private func measureLongSession(folds: Bool) async throws {
-        let snapshot = try ChatScenes.snapshot(ChatScenes.session(turns: 300))
+        let session = ChatScenes.session(turns: 300)
+        let latestPage = try await openLatestPage(of: session)
+        let snapshot = try ChatScenes.snapshot(session)
         let footprint = ProcessStats.footprintMB
         let opened = ContinuousClock.now
         let fixture = try MacChatFixture(snapshot: snapshot)
@@ -223,6 +239,9 @@ final class MacChatTests: XCTestCase {
         print("chat-perf \(label): 40 wheel gestures in \(scrolled.milliseconds) ms, \(measuredWhileScrolling) rows measured; \(scrollReport)")
         print("chat-perf \(label): 100 streamed appends in \(streamed.milliseconds) ms; apply max \(applies.max() ?? 0) ms,"
               + " mean \(applies.isEmpty ? 0 : applies.reduce(0, +) / applies.count) ms over \(applies.count); \(streamReport)")
+        print("chat-perf \(label): the latest page of the session on screen in \(latestPage.milliseconds) ms")
+        ChatPerformanceBudget.check(label: "Mac \(label)", firstRows: shown, applies: controller.applyDurations.dropFirst(appliesBefore),
+                                    stalls: [scrollReport.worst, streamReport.worst], addedMB: openFootprint)
     }
 }
 #endif

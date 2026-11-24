@@ -99,6 +99,70 @@ final class PaneChatViewTests: XCTestCase {
         }
     }
 
+    /// A 2,100-item session on a phone: time to the first rows, scrolling, streaming and memory,
+    /// against `ChatPerformanceBudget`. Timing runs only on request (`TEST_RUNNER_GUDO_CHAT_PERF=1`).
+    func testALongSessionOpensScrollsAndStreamsWithinBudget() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["GUDO_CHAT_PERF"] == nil, "timing runs on request")
+        let suite = "chat-long-session-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let session = ChatScenes.session(turns: 300)
+        let page = Array(session.suffix(60))
+        let pageOpened = ContinuousClock.now
+        let latest = try makeFixture(preferences: preferences, permitsSending: true,
+                                     snapshot: ChatScenes.snapshot(page, before: UInt64(session.count - page.count)))
+        try await wait(timeout: .seconds(30)) {
+            guard let controller = latest.state.controller, let rows = latest.state.model?.frame.rows.count, rows > 0 else { return false }
+            return controller.collection.indexPathsForVisibleItems.contains { $0.item == rows - 1 }
+        }
+        let latestPage = ContinuousClock.now - pageOpened
+        latest.state.deactivate()
+        latest.window.isHidden = true
+        latest.window.rootViewController = nil
+        let snapshot = try ChatScenes.snapshot(session)
+        let footprint = ProcessStats.footprintMB
+        let opened = ContinuousClock.now
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true, snapshot: snapshot)
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+        }
+        try await wait(timeout: .seconds(30)) {
+            guard let controller = fixture.state.controller, let rows = fixture.state.model?.frame.rows.count, rows > 0 else { return false }
+            return controller.collection.indexPathsForVisibleItems.contains { $0.item == rows - 1 }
+        }
+        let shown = ContinuousClock.now - opened
+        let controller = try XCTUnwrap(fixture.state.controller)
+        try await Task.sleep(for: .milliseconds(500))
+        let openFootprint = ProcessStats.footprintMB - footprint
+
+        let watch = HangWatch()
+        watch.start()
+        let collection = controller.collection
+        for step in 1...60 {
+            collection.setContentOffset(CGPoint(x: 0, y: max(0, collection.contentOffset.y - 120)), animated: false)
+            if step.isMultiple(of: 4) { try await Task.sleep(for: .milliseconds(16)) }
+        }
+        let scrollReport = watch.stop()
+
+        controller.jumpToLatest()
+        try await wait { fixture.state.model?.followsBottom == true }
+        let appliesBefore = controller.applyDurations.count
+        watch.start()
+        for sequence in 1...100 {
+            fixture.events.deliver(.timeline(paneId: 7, updateJson: try TimelineFixtureJSON.append(
+                "s299-reply", text: " More words stream in, sentence \(sequence).", sequence: UInt64(sequence))))
+            try await wait { fixture.state.model?.frame.cursor?.sequence == UInt64(sequence) }
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let streamReport = watch.stop()
+        let applies = controller.applyDurations.dropFirst(appliesBefore).map { Duration.milliseconds($0) }
+        print("chat-perf iOS: the latest page on screen in \(latestPage.milliseconds) ms (the first open warms up), the whole session in \(shown.milliseconds) ms")
+        ChatPerformanceBudget.check(label: "iOS", firstRows: shown, applies: applies,
+                                    stalls: [scrollReport.worst, streamReport.worst], addedMB: openFootprint)
+    }
+
     func testCapabilitiesNotKindSelectNativeControls() async throws {
         let suite = "chat-agent-capabilities-" + UUID().uuidString
         let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -786,8 +850,10 @@ final class PaneChatViewTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.presentationControl(in: $0) }.first
     }
 
-    private func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
-        for _ in 0..<2_000 {
+    private func wait(timeout: Duration = .seconds(5), _ condition: () -> Bool, file: StaticString = #filePath,
+                      line: UInt = #line) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
             if condition() { return }
             try await Task.sleep(for: .milliseconds(1))
         }
