@@ -97,6 +97,8 @@ struct PaneRecord {
     agent: Option<AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     agent_input: Option<CarriedLaunch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_launch: Option<crate::agent_config::CarriedClaudeLaunch>,
 }
 
 /// A pane as one build hands it to the next.
@@ -112,6 +114,8 @@ pub(crate) struct CarriedPane {
     pub agent: Option<AgentKind>,
     /// The launch a daemon-launched agent's input is fenced to, so Chat keeps sending to it.
     pub agent_input: Option<CarriedLaunch>,
+    /// The restart loop a launched Claude Code runs in, so Chat keeps changing it.
+    pub claude_launch: Option<crate::agent_config::CarriedClaudeLaunch>,
 }
 
 /// Everything a hand-off carries.
@@ -166,6 +170,7 @@ pub(crate) fn encode(carried: &Carried) -> io::Result<Vec<u8>> {
                 .map_or(0, |since| since.as_millis() as u64),
             agent: pane.agent,
             agent_input: pane.agent_input.clone(),
+            claude_launch: pane.claude_launch.clone(),
         });
     }
     let payload = Payload {
@@ -579,6 +584,7 @@ fn carried_pane(record: &PaneRecord, blobs: &[u8]) -> io::Result<CarriedPane> {
         launched_at: UNIX_EPOCH + Duration::from_millis(record.launched_at_ms),
         agent: record.agent,
         agent_input: record.agent_input.clone(),
+        claude_launch: record.claude_launch.clone(),
     })
 }
 
@@ -656,6 +662,7 @@ mod tests {
                 launched_at: UNIX_EPOCH + Duration::from_millis(1_700_000_000_000),
                 agent: Some(AgentKind::Claude),
                 agent_input: Some(CarriedLaunch::Open("launch".into())),
+                claude_launch: None,
             }],
         }
     }

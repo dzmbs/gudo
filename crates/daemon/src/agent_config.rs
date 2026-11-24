@@ -18,7 +18,7 @@ use proto::{
 };
 use serde_json::Value;
 
-pub(crate) use claude::ClaudeLaunch;
+pub(crate) use claude::{CarriedClaudeLaunch, ClaudeLaunch, relaunch_loop};
 pub use claude::{RelaunchCall, RelaunchReply, RelaunchStep};
 
 use crate::core::{ConnId, Core, Event, PaneEntry, lock};
@@ -315,6 +315,14 @@ pub(crate) fn turn_ended(core: &Core, pane: PaneId) {
 /// agent's.
 pub(crate) fn is_relaunching(entry: &PaneEntry) -> bool {
     claude::is_relaunching(entry)
+}
+
+/// The pane's agent ended for good: nothing is left to restart.
+pub(crate) fn agent_ended(core: &Core, entry: &PaneEntry) {
+    if lock(&entry.claude_launch).take().is_some() {
+        core.agent_controls.forget_reports(entry.pane.id);
+        changed(core, entry.pane.id);
+    }
 }
 
 /// Notes the permission mode a Claude Code hook reports.

@@ -4,6 +4,7 @@
 use std::ffi::OsString;
 
 use proto::{AgentChoice, AgentModeChoice, AgentModeRisk};
+use serde::{Deserialize, Serialize};
 
 use super::ClaudeCode;
 use crate::launch::LaunchSpec;
@@ -23,11 +24,20 @@ pub struct ClaudeCliOptions {
 }
 
 /// A model, permission mode and effort to start Claude Code with.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+}
+
+impl ClaudeConfig {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none() && self.mode.is_none() && self.effort.is_none()
+    }
 }
 
 /// The lines of the help entry for `flag`: its own line and its indented continuation.

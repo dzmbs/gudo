@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use client_core::grants::GrantSpec;
 use client_core::proto::{
-    AgentConfigValues, AgentControls, AgentKind, AgentPrompt, ApprovalError, Axis, LayoutOp,
-    OpOutcome, PaneId, PaneLaunch, QuestionAnswer, Roles, Scope, WsError,
+    AgentConfigSupport, AgentConfigTiming, AgentConfigValues, AgentControls, AgentKind,
+    AgentPrompt, ApprovalError, Axis, LayoutOp, OpOutcome, PaneId, PaneLaunch, QuestionAnswer,
+    Roles, Scope, WsError,
 };
 use client_core::{ClientConfig, WorkspaceEvent, WorkspaceEventQueue};
 use daemon::Daemon;
@@ -73,17 +74,20 @@ struct Fixture {
     events: UnboundedReceiver<WorkspaceEvent>,
 }
 
-async fn launch(dir: &Path) -> Fixture {
+/// A daemon whose panes find the fake `claude` first on their `PATH`, with its state in `dir`.
+async fn start_daemon(dir: &Path) -> Daemon {
     let home = dir.join("home");
     let bin = dir.join("programs");
-    std::fs::create_dir(&home).unwrap();
-    std::fs::write(home.join(".profile"), "PS1='SHELL> '; export PS1\n").unwrap();
-    std::fs::create_dir(&bin).unwrap();
     let program = bin.join("claude");
-    std::fs::write(&program, fake_claude(env!("CARGO_BIN_EXE_gudo-hook"))).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if !program.exists() {
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".profile"), "PS1='SHELL> '; export PS1\n").unwrap();
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(&program, fake_claude(env!("CARGO_BIN_EXE_gudo-hook"))).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let path = format!("{}:/usr/bin:/bin", bin.display());
-    let daemon = start_with(&dir.join("state"), |config| {
+    start_with(&dir.join("state"), |config| {
         config.hook_bin = Some(env!("CARGO_BIN_EXE_gudo-hook").into());
         config.pane_env.extend([
             ("HOME".into(), home.to_string_lossy().into_owned()),
@@ -94,11 +98,21 @@ async fn launch(dir: &Path) -> Fixture {
             ),
         ]);
     })
-    .await;
-    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    .await
+}
+
+async fn connect_owner(daemon: &Daemon) -> (TestClient, UnboundedReceiver<WorkspaceEvent>, PaneId) {
+    let mut owner = TestClient::connect(&ticket(daemon), ClientConfig::generate_key());
     let (listener, events) = WorkspaceEventQueue::channel();
     owner.client.set_workspace_listener(listener);
     let first = owner.attach_and_follow().await;
+    (owner, events, first)
+}
+
+async fn launch(dir: &Path) -> Fixture {
+    let home = dir.join("home");
+    let daemon = start_daemon(dir).await;
+    let (mut owner, events, first) = connect_owner(&daemon).await;
     let outcome = owner
         .op(LayoutOp::Split {
             pane_id: first,
@@ -391,4 +405,112 @@ async fn guests_cannot_change_settings_and_viewers_cannot_answer() {
         "the hook still waits"
     );
     fixture.daemon.shutdown().await;
+}
+
+/// The last `AGENT-UP` line that contains `needle`, once the fake prints one.
+async fn started_with(owner: &mut TestClient, pane: PaneId, needle: &str) -> String {
+    owner
+        .until(&format!("AGENT-UP with {needle}"), |client| {
+            client
+                .text(pane)
+                .lines()
+                .any(|line| line.contains("AGENT-UP") && line.contains(needle))
+        })
+        .await;
+    owner
+        .text(pane)
+        .lines()
+        .rfind(|line| line.contains("AGENT-UP") && line.contains(needle))
+        .expect("waited for above")
+        .to_owned()
+}
+
+async fn watch_when_tracked(owner: &TestClient, pane: PaneId) -> AgentControls {
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        match owner.client.agent_controls_watch(pane).await {
+            Ok(controls) => return controls,
+            Err(error) if tokio::time::Instant::now() > deadline => {
+                panic!("controls of pane {pane}: {error}")
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claude_restored_after_a_restart_keeps_its_settings_and_changes_from_chat() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut fixture = launch(dir.path()).await;
+    fixture.watch().await;
+    let session = fixture.session();
+    fixture.turn().await;
+    fixture
+        .owner
+        .client
+        .set_agent_config(fixture.pane, change(Some("sonnet"), None))
+        .await
+        .unwrap();
+    let pane = fixture.pane;
+    started_with(&mut fixture.owner, pane, "--model sonnet").await;
+    fixture.daemon.shutdown().await;
+
+    let daemon = start_daemon(dir.path()).await;
+    let (mut owner, _events, _) = connect_owner(&daemon).await;
+    owner.follow(pane).await;
+    let controls = watch_when_tracked(&owner, pane).await;
+    assert_eq!(
+        controls.config.support,
+        AgentConfigSupport::Supported,
+        "{controls:?}"
+    );
+    assert_eq!(controls.config.timing, AgentConfigTiming::Restart);
+    assert_eq!(controls.config.current.model.as_deref(), Some("sonnet"));
+    owner
+        .client
+        .set_agent_config(pane, change(None, Some("plan")))
+        .await
+        .unwrap();
+    let line = started_with(&mut owner, pane, "--permission-mode plan").await;
+    assert!(line.contains(&format!("--resume {session}")), "{line}");
+    assert!(line.contains("--model sonnet"), "keeps the model: {line}");
+    daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claude_started_by_hand_restarts_in_its_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let daemon = start_daemon(dir.path()).await;
+    let (mut owner, _events, pane) = connect_owner(&daemon).await;
+    let session = "6c1e2d3f-4a5b-4c6d-8e7f-90a1b2c3d4e5";
+    owner.type_line(pane, &format!("claude --session-id {session}"));
+    owner.wait_flat(pane, "AGENT-UP").await;
+    let controls = watch_when_tracked(&owner, pane).await;
+    assert_eq!(
+        controls.config.support,
+        AgentConfigSupport::Supported,
+        "{controls:?}"
+    );
+    assert_eq!(controls.config.timing, AgentConfigTiming::RestartInPane);
+    owner.type_line(pane, "prompt");
+    owner.wait_flat(pane, "TURN-START").await;
+    owner.type_line(pane, "stop");
+    owner.wait_flat(pane, "TURN-END").await;
+
+    owner
+        .client
+        .set_agent_config(pane, change(Some("sonnet"), None))
+        .await
+        .unwrap();
+    owner.wait_flat(pane, "AGENT-TERM").await;
+    let line = started_with(&mut owner, pane, "--model sonnet").await;
+    assert!(line.contains(&format!("--resume {session}")), "{line}");
+    assert!(
+        owner
+            .flat_text(pane)
+            .contains(&format!("claude --resume {session} --model sonnet")),
+        "typed into its shell: {}",
+        owner.text(pane)
+    );
+    daemon.shutdown().await;
 }

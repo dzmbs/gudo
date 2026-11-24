@@ -959,7 +959,7 @@ const MATRIX_PI_ID: &str = "019a1b2c-4e5f-7061-8b7c-8d9e0f1a2b3c";
 /// Claude Code typed by hand or launched by the helper (in a directory named `launched`): it
 /// answers the launch's version check, writes its transcript and reports it through its hooks.
 const MATRIX_CLAUDE: &str = r#"#!/bin/bash
-case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; esac
+case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; *" --help "*) exit 0 ;; esac
 case "$(basename "$PWD")" in launched) id=__LAUNCHED_ID__ ;; *) id=__ID__ ;; esac
 arguments="$*"
 while [ $# -gt 0 ]; do
@@ -1153,6 +1153,50 @@ async fn is_agent(client: &mut TestClient, pane: PaneId) {
                 .is_some_and(|meta| meta.agent.is_some())
         })
         .await;
+}
+
+/// A Claude Code the previous build launched takes a model chosen in Chat: it starts again on
+/// its conversation, in its pane, with the model.
+async fn changes_from_chat_after_the_update(
+    client: &mut TestClient,
+    pane: PaneId,
+    log: &dyn Fn() -> String,
+) {
+    let session = chat_session(client, pane, log).await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let controls = client.client.agent_controls_watch(pane).await;
+        if let Ok(controls) = &controls
+            && controls.config.support == client_core::proto::AgentConfigSupport::Supported
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{controls:?}\n{}", log());
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let change = client_core::proto::AgentConfigValues {
+        model: Some("sonnet".into()),
+        mode: None,
+        effort: None,
+    };
+    client
+        .client
+        .set_agent_config(pane, change)
+        .await
+        .unwrap_or_else(|error| panic!("change from Chat: {error}\n{}", log()));
+    let started = format!("claude-ready --resume {session} --model sonnet");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !client.flat_text(pane).contains(&started) {
+        assert!(
+            Instant::now() < deadline,
+            "never started again with the model:\n{}\n{}",
+            client.text(pane),
+            log()
+        );
+        client.until("pane output", |_| true).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    is_agent(client, pane).await;
 }
 
 async fn release_updates(update: Update, workload: Workload) {
@@ -1379,6 +1423,7 @@ async fn release_updates(update: Update, workload: Workload) {
             "{:?}",
             chat.capabilities
         );
+        changes_from_chat_after_the_update(&mut client, pane, &log).await;
     }
     let mut sessions = Vec::new();
     if carried || claude_saved {

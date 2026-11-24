@@ -192,6 +192,10 @@ pub(crate) struct AgentRecord {
     /// directory (the agent may have started elsewhere).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<PathBuf>,
+    /// The model, mode and effort Chat last started this Claude Code with, so it comes back
+    /// with them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<agents::ClaudeConfig>,
 }
 
 /// A pane that closed, kept so a recently closed tab can come back (`PaneLaunch::Reopen`).
@@ -1785,25 +1789,28 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble, resumable, run_again, created_at, agent_delay) = match start {
-            PaneStart::New => (
-                false,
-                Vec::new(),
-                None,
-                None,
-                proto::UnixMillis(crate::identity::now_millis()),
-                Duration::ZERO,
-            ),
-            // Without a recorded creation time the pane may be older than any guest.
-            PaneStart::Restored(restored) => (
-                restored.agent == AgentStart::Resumed,
-                restored.preamble,
-                restored.resumable,
-                restored.run_again,
-                restored.created_at.unwrap_or(proto::UnixMillis(0)),
-                restored.agent_delay,
-            ),
-        };
+        let (restored, preamble, resumable, run_again, created_at, agent_delay, agent_config) =
+            match start {
+                PaneStart::New => (
+                    false,
+                    Vec::new(),
+                    None,
+                    None,
+                    proto::UnixMillis(crate::identity::now_millis()),
+                    Duration::ZERO,
+                    None,
+                ),
+                // Without a recorded creation time the pane may be older than any guest.
+                PaneStart::Restored(restored) => (
+                    restored.agent == AgentStart::Resumed,
+                    restored.preamble,
+                    restored.resumable,
+                    restored.run_again,
+                    restored.created_at.unwrap_or(proto::UnixMillis(0)),
+                    restored.agent_delay,
+                    restored.agent_config,
+                ),
+            };
         let agent_wait = if agent_delay.is_zero() {
             String::new()
         } else {
@@ -2131,7 +2138,7 @@ impl Core {
                     },
                 };
                 let native_chat = self.cfg.hook_bin_runs();
-                let spec = if native_chat && self.cfg.codex_chat && *kind == AgentKind::Codex {
+                let mut spec = if native_chat && self.cfg.codex_chat && *kind == AgentKind::Codex {
                     let (source, spec) =
                         crate::agent_driver::codex::Live::start(&context, &mode)
                             .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
@@ -2156,6 +2163,9 @@ impl Core {
                 } else {
                     adapter.launch(&context, &mode)
                 };
+                if let Some(config) = agent_config.as_ref().filter(|_| *kind == AgentKind::Claude) {
+                    agents::ClaudeCode::apply_config(&mut spec, config);
+                }
                 for file in &spec.files {
                     if let Some(dir) = file.path.parent() {
                         let _ = std::fs::create_dir_all(dir);
@@ -2189,10 +2199,11 @@ impl Core {
                             session.clone(),
                             resume.is_some(),
                             spec.program != "claude",
+                            agent_config.clone().unwrap_or_default(),
                         ));
-                        let launch_id = shell_quote(&launch_id);
                         format!(
-                            "; while {shim} claude-relaunch-pending {launch_id} </dev/null; do {shim} claude-relaunch {launch_id}; done"
+                            "; {}",
+                            crate::agent_config::relaunch_loop(&shim, &launch_id)
                         )
                     }
                     _ => String::new(),
@@ -2309,6 +2320,7 @@ impl Core {
                     session_id: session_id.clone(),
                     account: Some(account.clone()),
                     transcript: None,
+                    config: agent_config.clone().filter(|_| *kind == AgentKind::Claude),
                 }),
             worktree,
             resumable: resumable.clone(),
@@ -2400,6 +2412,9 @@ impl Core {
                 launched_at: entry.launched_at,
                 agent: lock(&entry.agent).as_ref().map(AgentRuntime::kind),
                 agent_input: lock(&entry.pane.agent_input_gate).to_carried(),
+                claude_launch: lock(&entry.claude_launch)
+                    .as_ref()
+                    .and_then(crate::agent_config::ClaudeLaunch::to_carried),
             });
         }
         carried
@@ -2424,6 +2439,7 @@ impl Core {
                 session_id: None,
                 account: Some(proto::SYSTEM_ACCOUNT.into()),
                 transcript: None,
+                config: None,
             });
         }
         let created_at = *record.created_at.get_or_insert_with(|| {
@@ -2456,6 +2472,21 @@ impl Core {
             self.ws.accounts.pin(agent.kind, session, account);
         }
         let accounts_changed = agent.is_some();
+        let claude_launch = carried.claude_launch.map(|launch| {
+            let account = record
+                .agent
+                .as_ref()
+                .and_then(|agent| agent.account.as_deref())
+                .and_then(|account| self.ws.accounts.context(AgentKind::Claude, account))
+                .unwrap_or_else(agents::AccountContext::system);
+            let cwd = carried
+                .cwd
+                .clone()
+                .or_else(|| record.cwd.clone())
+                .unwrap_or_else(|| "/".into());
+            let context = self.hooks.launch_context(id, PathBuf::from(cwd), account);
+            crate::agent_config::ClaudeLaunch::from_carried(launch, context)
+        });
         if let Some(launch) = carried.agent_input {
             *lock(&pane.agent_input_gate) =
                 crate::agent_input::AgentInputGate::from_carried(launch);
@@ -2472,7 +2503,7 @@ impl Core {
             agent: Mutex::new(agent),
             codex: Mutex::new(None),
             pi: Mutex::new(None),
-            claude_launch: Mutex::new(None),
+            claude_launch: Mutex::new(claude_launch),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
@@ -3677,6 +3708,7 @@ pub(crate) fn record_agent_started_by_hand(
             session_id,
             account: Some(proto::SYSTEM_ACCOUNT.into()),
             transcript: None,
+            config: None,
         });
     }
     core.mark_dirty();
@@ -3711,6 +3743,7 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     core.agent_event(id, event);
     core.note_program_ending();
     *lock(&entry.agent) = None;
+    crate::agent_config::agent_ended(core, entry);
     {
         let mut record = lock(&entry.record);
         if let PaneLaunch::Agent { cwd, .. } = &record.launch {
@@ -3728,7 +3761,7 @@ pub(crate) enum PaneStart {
     /// Asked for by a client or an agent.
     New,
     /// Brought back after a restart.
-    Restored(Restored),
+    Restored(Box<Restored>),
 }
 
 /// What a pane brought back after a restart starts with.
@@ -3745,6 +3778,8 @@ pub(crate) struct Restored {
     pub created_at: Option<proto::UnixMillis>,
     /// How long its agent waits before starting, so agents resume one after another.
     pub agent_delay: Duration,
+    /// What its Claude Code was last started with from Chat.
+    pub agent_config: Option<agents::ClaudeConfig>,
 }
 
 /// A resuming agent reads its transcript and starts its runtime, about a second of CPU for
@@ -3917,7 +3952,7 @@ pub(crate) fn restore(
         } else {
             Duration::ZERO
         };
-        let start = PaneStart::Restored(Restored {
+        let start = PaneStart::Restored(Box::new(Restored {
             agent_delay,
             preamble,
             agent: if restored_agent {
@@ -3929,7 +3964,8 @@ pub(crate) fn restore(
             run_again: stopped_command
                 .filter(|command| !resumes_something && can_run_again(command)),
             created_at: record.created_at,
-        });
+            agent_config: record.agent.as_ref().and_then(|agent| agent.config.clone()),
+        }));
         if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");
             failed.push(id);

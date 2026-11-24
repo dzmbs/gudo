@@ -70,7 +70,9 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   question or a plan. Typing in the terminal returns the question to the terminal.
 - **Restarting Claude Code.** Only the paired owner changes an agent's settings. The restart loop
   asks with the pane's token and the launch's own id, and gets only arguments the daemon built
-  from choices the installed CLI listed; nothing restarts mid-turn.
+  from choices the installed CLI listed; nothing restarts mid-turn. A Claude without the loop is
+  started again by typing only at the pane's own shell once it is back in the foreground; a
+  line for a launch is fenced like a launch, so Chat input never reaches that shell.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
   A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.

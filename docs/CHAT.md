@@ -882,8 +882,17 @@ answering needs Approver, a signature by the device, and the pane's approval pol
   `--session-id` before the first turn, with `--model`, `--permission-mode`, `--effort`), sends
   Claude SIGTERM, and the shim starts it again in the same pane, under the same exit fence. Its
   SessionEnd and exit during the restart are not the agent's end. A change asked for mid-turn
-  waits for the turn's Stop and the app says "Applies after this turn". A Claude started by hand,
-  restored after a daemon restart or adopted from another helper reports why Chat cannot change it.
+  waits for the turn's Stop and the app says "Applies after this turn". The pane's record keeps
+  what Chat last started it with (`AgentRecord.config`), so a restored launch comes back in the
+  loop with the same flags, and a hot hand-off carries the loop (`CarriedClaudeLaunch`: launch
+  id, session, settings, a waiting change or restart). A Claude without the loop is changed at
+  its prompt: once idle it gets SIGTERM, and when the pane's own shell is back in the foreground
+  the daemon types the line that starts it again. For a launch of an older helper (its input
+  fenced) that line is the fenced loop itself, so the pane is a loop launch from then on. For a
+  Claude started by hand it is `claude --resume <session>` with the flags, in the user's own
+  shell, environment and directory; that config's timing is `RestartInPane` and the app asks
+  before sending the change. Context use comes from the status line's `context_window` (the
+  latest request's input, cached tokens included, against `context_window_size`).
 - **Codex.** Models come from the app-server's `model/list` (hidden ones left out); efforts are
   the current model's; modes are Read only, Auto and Full access (approval policy plus sandbox).
   A change rides on the next `turn/start` Chat sends and counts as applied once Codex accepts
