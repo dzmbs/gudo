@@ -683,6 +683,44 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// Chat in a pane: a long finished turn folded and opened, the composer with a queued
+    /// message and an attachment while the agent works, and `@` file suggestions.
+    func testChat() async throws {
+        try await chat("chat-folded") { _ in }
+        try await chat("chat-folded-open") { fixture in
+            guard let summary = fixture.model?.frame.rows.first(where: { ChatTurnCollapse.isSummary($0.id) }) else { return }
+            fixture.model?.toggle(summary.id)
+        }
+        try await chat("chat-composer", items: ChatScenes.workingTurn(), working: true) { fixture in
+            fixture.state.queue.enqueue("Then run the page checks again")
+            let file = try ChatPhotoFile.prepare(data: ChatScenes.dashboardPNG(), name: "dashboard.png")
+            fixture.state.photos.begin(in: fixture.state)
+            fixture.state.photos.load(in: fixture.state, photo: { file }, source: { _ in "/work/uploads/dashboard.jpg" })
+            try await fixture.wait { fixture.state.photos.attachments.count == 1 }
+            fixture.state.draft = "Also check the narrow layout"
+        }
+        try await chat("chat-autocomplete") { fixture in
+            fixture.client.searchablePaths = ["src/app.ts", "src/apple.ts", "src/views/AppShell.tsx", "README.md"]
+            fixture.state.draft = "Look at @app"
+            try await fixture.wait { fixture.state.autocomplete.suggestions.count == 3 }
+        }
+    }
+
+    private func chat(_ name: String, items: [[String: Any]] = ChatScenes.longTurn(), working: Bool = false,
+                      arrange: (MacChatFixture) async throws -> Void) async throws {
+        guard wanted(name) else { return }
+        let picture = ChatScenes.dashboardPNG()
+        let fixture = try MacChatFixture(snapshot: ChatScenes.snapshot(items), working: working, size: CGSize(width: 1000, height: 780),
+                                         files: [ChatScenes.image: picture, ChatScenes.attachment: picture]) { [self] root, size in
+            makeWindow(root, size: size)
+        }
+        defer { fixture.close() }
+        try await fixture.wait { fixture.model?.isLoading == false && !fixture.visibleRows.isEmpty }
+        try await arrange(fixture)
+        await pump(1.5)
+        try capture(fixture.window, name)
+    }
+
     func testSheets() async throws {
         for route in ["links", "launchAgent", "pairing", "join", "invite", "shortcuts"] {
             try await window(route, screen: route)
