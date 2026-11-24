@@ -117,6 +117,8 @@ enum SettingsIndex {
             .init(id: "browser-history", title: "Clear Browsing History", section: .browser, synonyms: ["browser", "history", "recent", "frequent"]),
             .init(id: "accounts", title: "Agent Accounts", section: .accounts, synonyms: ["account", "sign in", "login", "personal", "work", "claude", "codex"]),
             .init(id: "agent-power", title: "Keep hosts awake while agents work", section: .agentTools, synonyms: ["sleep", "battery", "power", "awake", "plugged in"]),
+            .init(id: "chat-fold-turns", title: "Fold Finished Turns", section: .agentTools, synonyms: ["chat", "collapse", "turn", "summary", "tools"]),
+            .init(id: "chat-send-while-working", title: "While the Agent Works, Send", section: .agentTools, synonyms: ["chat", "queue", "steer", "send", "interrupt"]),
             .init(id: "agent-tools", title: "Agent Hooks and Terminal Tools", section: .agentTools, synonyms: ["mcp", "claude", "codex", "browser", "drawings", "tools"]),
             .init(id: "record-agent-sessions", title: "Record Agent Sessions", section: .browser, synonyms: ["replay", "recording", "browser", "session", "rrweb"]),
             .init(id: "delete-replays", title: "Delete All Replays", section: .browser, synonyms: ["replay", "recording", "storage", "clear"]),

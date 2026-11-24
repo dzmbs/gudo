@@ -52,6 +52,16 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
         case showAll(TimelineLongText)
         case omitted
         case toolGroup(ChatToolGroup)
+        case turnSummary(ChatTurnSummary)
+        case turnFooter(ChatTurnFooter)
+
+        /// Made by folding other rows, not rendered from one item.
+        var isDerived: Bool {
+            switch self {
+            case .toolGroup, .turnSummary, .turnFooter: true
+            case .markdown, .item, .showAll, .omitted: false
+            }
+        }
     }
 }
 

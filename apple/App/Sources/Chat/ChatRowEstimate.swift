@@ -24,7 +24,7 @@ nonisolated enum ChatRowEstimate {
             }
         case .omitted: return 96 * scale
         case .showAll: return 60 * scale
-        case .toolGroup: return DS.Size.touchTarget * scale
+        case .toolGroup, .turnSummary, .turnFooter: return DS.Size.touchTarget * scale
         case .item(let item):
             switch item.body {
             case .plan(let plan): return CGFloat(min(plan.entries.count, 20) * 30 + 64) * scale

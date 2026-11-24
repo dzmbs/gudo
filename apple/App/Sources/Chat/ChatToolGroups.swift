@@ -85,6 +85,18 @@ nonisolated enum ChatToolGroups {
         return text.prefix(1).uppercased() + text.dropFirst()
     }
 
+    /// The glyph of the kind most of the calls are.
+    static func symbol(_ tools: [TimelineTool]) -> String {
+        var counts: [String: Int] = [:]
+        var order: [String] = []
+        for tool in tools {
+            let symbol = ChatToolLine.symbol(tool.kind)
+            if counts[symbol] == nil { order.append(symbol) }
+            counts[symbol, default: 0] += 1
+        }
+        return order.max { counts[$0, default: 0] < counts[$1, default: 0] } ?? ChatToolLine.symbol(.known(.other))
+    }
+
     /// The calls that did not finish, "1 failed, 1 denied", or nil when every one did.
     static func outcome(_ tools: [TimelineTool]) -> String? {
         var outcomes: [String] = []

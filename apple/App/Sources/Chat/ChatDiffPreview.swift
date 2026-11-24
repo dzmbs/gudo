@@ -28,6 +28,7 @@ nonisolated enum ChatDiffPreview {
             switch row.content {
             case .item(let item): [item]
             case .toolGroup(let group): group.tools
+            case .turnSummary(let summary): summary.tools
             default: []
             }
         }

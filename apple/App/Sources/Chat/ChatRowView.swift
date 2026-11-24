@@ -16,6 +16,8 @@ struct ChatRowActions {
     var resend: ((String) -> Void)?
     /// Reads an image file on the host; nil where this viewer may not read files.
     var loadImage: ChatImageLoader?
+    /// The agent's folder: paths inside it read relative to it.
+    var workingDirectory: String?
 }
 
 struct ChatRowView: View {
@@ -69,6 +71,8 @@ struct ChatRowView: View {
         case .item(let item): itemContent(item)
         case .showAll(let longText): showAllContent(longText)
         case .toolGroup(let group): toolGroupContent(group)
+        case .turnSummary(let summary): turnSummaryContent(summary)
+        case .turnFooter(let footer): turnFooterContent(footer)
         case .omitted:
             VStack(alignment: .leading, spacing: DS.Space.s) {
                 Text(verbatim: ChatRenderLimits.omittedMessage)
@@ -336,6 +340,8 @@ struct ChatRowView: View {
         }
         return Button(action: toggle) {
             HStack(spacing: DS.Space.xs) {
+                ChatToolGlyph(symbol: ChatToolGroups.symbol(tools), isFailed: false)
+                    .padding(.trailing, DS.Space.xs)
                 ViewThatFits(in: .horizontal) {
                     ForEach(ChatToolGroups.shortenedActions(tools), id: \.self) { actions in
                         Text(verbatim: actions).lineLimit(1).truncationMode(.tail)
@@ -364,17 +370,72 @@ struct ChatRowView: View {
         .accessibilityIdentifier("chat-tool-group")
     }
 
+    /// The verb at text contrast, then what it acted on, quieter and cut in the middle so a
+    /// path keeps its file name and a command its end.
+    private func toolLine(_ line: ChatToolLine) -> some View {
+        HStack(spacing: DS.Space.xs) {
+            Text(verbatim: line.verb).foregroundStyle(DS.Palette.text).lineLimit(1).fixedSize()
+            if !line.detail.isEmpty {
+                Text(verbatim: line.detail).foregroundStyle(DS.Palette.textSecondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .font(DS.Font.proseSecondary)
+    }
+
+    private func turnSummaryContent(_ summary: ChatTurnSummary) -> some View {
+        Button(action: toggle) {
+            HStack(spacing: DS.Space.xs) {
+                ChatToolGlyph(symbol: "list.bullet.indent", isFailed: false)
+                    .padding(.trailing, DS.Space.xs)
+                ViewThatFits(in: .horizontal) {
+                    ForEach(summary.shortenedLabels, id: \.self) { label in
+                        Text(verbatim: label).lineLimit(1).truncationMode(.tail)
+                    }
+                }
+                .foregroundStyle(DS.Palette.textSecondary)
+                if let outcome = summary.outcome {
+                    Text(verbatim: "(" + outcome + ")").foregroundStyle(DS.Palette.error)
+                        .lineLimit(1).fixedSize()
+                }
+                Image(systemName: "chevron.right").font(DS.Font.captionDetail).foregroundStyle(DS.Palette.textTertiary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                Spacer(minLength: 0)
+            }.font(DS.Font.proseSecondary).frame(minHeight: DS.Size.touchTarget)
+        }
+        .buttonStyle(ChatRowButtonStyle())
+        .accessibilityLabel(summary.label)
+        .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        .accessibilityHint("Shows what the agent did before this reply")
+        .accessibilityIdentifier("chat-turn-summary")
+    }
+
+    /// Copy for the reply first, where the eye lands after reading it, then the turn's time.
+    private func turnFooterContent(_ footer: ChatTurnFooter) -> some View {
+        HStack(spacing: DS.Space.s) {
+            ChatCopyButton(title: "Copy reply", text: footer.markdown)
+                .padding(.trailing, -DS.Space.m)
+                .accessibilityIdentifier("chat-turn-copy")
+            if let end = footer.end {
+                Text(verbatim: ChatItemPresentation.turnSummary(end))
+            }
+            Spacer(minLength: 0)
+            if footer.end != nil, actions.supportsDiffs {
+                Button("Changes", systemImage: "plus.forwardslash.minus") { actions.showDiff(.turn(footer.turn)) }
+            }
+        }
+        .font(DS.Font.meta).foregroundStyle(DS.Palette.textSecondary)
+        .padding(.leading, -DS.Space.m)
+    }
+
     private func toolContent(_ item: TimelineItem, tool: TimelineTool) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {
+            let line = ChatToolLine(tool, workingDirectory: actions.workingDirectory)
             Button(action: toggle) {
                 HStack(spacing: DS.Space.s) {
-                    Image(systemName: toolGlyph(tool.kind))
-                        .frame(width: DS.Space.l)
-                        .foregroundStyle(tool.status == .known(.failed) ? DS.Palette.error : DS.Palette.textSecondary)
-                    Text(verbatim: ChatItemPresentation.toolTitle(tool)).font(DS.Font.proseSecondary)
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .lineLimit(1).truncationMode(.tail)
-                        .shimmering(tool.status == .known(.running), text: ChatItemPresentation.toolTitle(tool))
+                    ChatToolGlyph(symbol: line.symbol, isFailed: tool.status == .known(.failed))
+                    toolLine(line)
+                        .shimmering(tool.status == .known(.running), text: line.text)
                     Group {
                         if let state = ChatItemPresentation.toolStateLabel(tool) {
                             Text(state).foregroundStyle(tool.status == .known(.interrupted) ? DS.Palette.textSecondary : DS.Palette.error)
@@ -392,7 +453,7 @@ struct ChatRowView: View {
                     Spacer(minLength: 0)
                 }.font(DS.Font.meta).frame(minHeight: DS.Size.touchTarget)
             }.buttonStyle(ChatRowButtonStyle())
-                .accessibilityLabel(ChatItemPresentation.toolKind(tool) + ": " + ChatItemPresentation.toolTitle(tool))
+                .accessibilityLabel(line.text)
                 .accessibilityValue([ChatItemPresentation.toolStatus(tool), tool.durationMs.map(duration),
                                      isExpanded ? "Expanded" : "Collapsed"].compactMap { $0 }.joined(separator: ", "))
             if let path = row.imagePath {
@@ -481,6 +542,8 @@ struct ChatRowView: View {
         case .omitted: ChatRenderLimits.omittedMessage
         case .showAll(let value): value.content.preview
         case .toolGroup(let group): group.summary
+        case .turnSummary(let summary): summary.label
+        case .turnFooter(let footer): footer.markdown
         case .item(let item):
             switch item.body {
             case .user(let value): value.text
@@ -519,18 +582,45 @@ struct ChatRowView: View {
     private func inlineCode(_ text: AttributedString) -> some View {
         ChatInlineCode.text(text).modifier(ChatCodeFill(fill: ChatInlineCode.hasCode(text) ? chrome.color(.raised) : nil))
     }
+}
 
-    private func toolGlyph(_ kind: TimelineToolKind) -> String {
-        switch kind {
-        case .known(.shell): "terminal"
-        case .known(.read): "doc.text"
-        case .known(.search): "magnifyingglass"
-        case .known(.edit), .known(.write): "pencil.line"
-        case .known(.fetch), .known(.webSearch): "globe"
-        case .known(.mcp): "puzzlepiece.extension"
-        case .known(.task): "square.stack.3d.up"
-        case .known(.other), .unknown: "wrench.and.screwdriver"
+/// A tool's kind as a small glyph in a fixed column, so the lines' words align.
+private struct ChatToolGlyph: View {
+    let symbol: String
+    let isFailed: Bool
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(DS.Font.caption)
+            .frame(width: DS.Space.l)
+            .foregroundStyle(isFailed ? DS.Palette.error : DS.Palette.textTertiary)
+            .accessibilityHidden(true)
+    }
+}
+
+/// Copy as an icon that answers with a checkmark for a moment, so the tap reads as done.
+struct ChatCopyButton: View {
+    let title: LocalizedStringKey
+    let text: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = text
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            Label(title, systemImage: copied ? "checkmark" : "doc.on.doc").labelStyle(.iconOnly)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
+                .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        .animation(DS.Motion.micro, value: copied)
+        .accessibilityValue(copied ? "Copied" : "")
     }
 }
 

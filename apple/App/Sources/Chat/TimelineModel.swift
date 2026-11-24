@@ -67,7 +67,7 @@ actor TimelineRenderWorker {
     }
 
     func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil,
-               expanded: Set<ChatRowID> = []) throws -> TimelineRenderResult {
+               expanded: Set<ChatRowID> = [], collapsesTurns: Bool = false) throws -> TimelineRenderResult {
         var next = window
         var changed: Set<String> = []
         var removed: Set<String> = []
@@ -126,15 +126,20 @@ actor TimelineRenderWorker {
         }
         let parentRevision = revision
         revision += 1
-        let rows = ChatToolGroups.fold(window.order.flatMap { rowsByItem[$0]?.rows ?? [] },
-                                       expanded: expanded, previous: groupRows)
+        let items = window.items
+        let turns = ChatTurnCollapse.fold(window.order.flatMap { rowsByItem[$0]?.rows ?? [] }, expanded: expanded,
+                                          collapses: collapsesTurns, reply: { identifier in
+            guard case .assistant(let assistant) = items[identifier]?.body else { return nil }
+            return assistant.text
+        }, previous: groupRows)
+        let rows = ChatToolGroups.fold(turns, expanded: expanded, previous: groupRows)
         let identifiers = rows.map(\.id)
         // A group's line and the calls it uncovers are rows no item changed.
         let shown = Set(self.identifiers)
         var listed = Set(changedRows.lazy.map(\.id))
         var groups: [ChatRowID: ChatRow] = [:]
         for row in rows {
-            if case .toolGroup = row.content { groups[row.id] = row }
+            if row.content.isDerived { groups[row.id] = row }
             let isNew = groupRows[row.id].map { $0 != row } ?? !shown.contains(row.id)
             if isNew, listed.insert(row.id).inserted { changedRows.append(row) }
         }
@@ -193,6 +198,10 @@ final class TimelineModel {
     private(set) var historyError: String?
     var followsBottom = true
     var expanded: Set<ChatRowID> = []
+    /// Finished turns fold behind one line (`ChatTurnCollapse`); a setting turns it off.
+    var collapsesTurns = ChatPreferences.collapsesTurns {
+        didSet { if collapsesTurns != oldValue { enqueue(.regroup) } }
+    }
 
     @ObservationIgnored var readingItem: String?
     @ObservationIgnored private var channel: TimelineChannel?
@@ -292,7 +301,7 @@ final class TimelineModel {
 
     func toggle(_ identifier: ChatRowID) {
         if expanded.contains(identifier) { expanded.remove(identifier) } else { expanded.insert(identifier) }
-        if ChatToolGroups.isGroup(identifier) { enqueue(.regroup) }
+        if ChatToolGroups.isGroup(identifier) || ChatTurnCollapse.isSummary(identifier) { enqueue(.regroup) }
     }
 
     func reachedBottom() { hasNewItems = false }
@@ -354,7 +363,8 @@ final class TimelineModel {
                 pendingBytes = 0
                 do {
                     let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom,
-                                                        historyAnchor: readingItem, expanded: expanded)
+                                                        historyAnchor: readingItem, expanded: expanded,
+                                                        collapsesTurns: collapsesTurns)
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     if !followsBottom, result.hasLiveChanges { hasNewItems = true }
                     frame = result.frame
