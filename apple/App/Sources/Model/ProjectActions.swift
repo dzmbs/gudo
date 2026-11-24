@@ -92,7 +92,7 @@ extension WindowModel {
     /// The name field of a project just made opens focused, its name selected (Finder's New
     /// Folder, Safari's New Tab Group).
     func startNaming(_ id: String) {
-        groups.collapsedProjects.remove(id)
+        groups.expand(project: id)
         namingProject = id
     }
 
@@ -119,14 +119,26 @@ extension WindowModel {
         groups.ungroupProject(id)
     }
 
+    /// Ungroups a project's tabs in one place: under one host, only that host's (the project
+    /// stays for its other hosts); everywhere, the whole project.
+    func ungroup(_ place: ProjectPlace) {
+        let refs = groups.rows(of: place)
+        guard let project = groups.project(place.project), refs.count < project.tabs.count else { return ungroupProject(place.project) }
+        for ref in refs { groups.apply(groups.planner().remove(ref)) }
+    }
+
     func moveProject(_ id: String, to index: Int) {
         groups.moveProject(id, to: index)
     }
 
     /// Closes every tab of a project (the project goes with its last tab).
     func closeProject(_ id: String) {
-        guard let project = groups.project(id) else { return }
-        for ref in project.tabs {
+        closeProject(ProjectPlace(id))
+    }
+
+    /// Closes the project's tabs in one place: under one host, only that host's.
+    func closeProject(_ place: ProjectPlace) {
+        for ref in groups.rows(of: place) {
             if ref.hostId == HostGroups.mixedId {
                 closeWindowTab(ref.tab, undoable: false)
             } else {
@@ -137,16 +149,18 @@ extension WindowModel {
 
     /// A new terminal in a project (its +, ⌘T from one of its tabs): on the current tab's host
     /// when that tab is in the project (joining right after it), else on the host of its first
-    /// tab (else the window's), at its end.
-    func newTab(inProject id: String) {
+    /// tab (else the window's), at its end. Asked for under one host (`on`), on that host, after
+    /// its last tab there.
+    func newTab(inProject id: String, on requestedHost: String? = nil) {
         guard let project = groups.project(id) else { return }
-        let current = currentTab.flatMap { project.tabs.contains($0) && $0.hostId != HostGroups.mixedId ? $0 : nil }
-        let preferred = current?.hostId ?? project.tabs.first(where: { $0.hostId != HostGroups.mixedId })?.hostId
+        let current = currentTab.flatMap { project.tabs.contains($0) && $0.hostId != HostGroups.mixedId && (requestedHost == nil || $0.hostId == requestedHost) ? $0 : nil }
+        let preferred = requestedHost ?? current?.hostId ?? project.tabs.first(where: { $0.hostId != HostGroups.mixedId })?.hostId
         guard let host = groups.newTabHost(preferred: preferred ?? currentGroupId) else {
             newTab(onGroup: preferred ?? currentGroupId)
             return
         }
-        let index = current.flatMap { project.tabs.firstIndex(of: $0) }.map { $0 + 1 } ?? .max
+        let lastOnHost = requestedHost.flatMap { wanted in project.tabs.lastIndex { $0.hostId == wanted } }
+        let index = (current.flatMap { project.tabs.firstIndex(of: $0) } ?? lastOnHost).map { $0 + 1 } ?? .max
         groups.expectNewTab(on: host, joining: id, at: index)
         newTab(onGroup: host)
         claimJoinedTabs()
@@ -159,7 +173,7 @@ extension WindowModel {
         // The project opens in the rows' own motion, not in a jump.
         withAnimation(DS.Motion.standard) {
             groups.apply(groups.planner().move(ref, into: project.id, at: index + 1))
-            groups.collapsedProjects.remove(project.id)
+            groups.expand(project: project.id)
         }
         flashJoined(ref)
     }
@@ -170,7 +184,7 @@ extension WindowModel {
         let joined = withAnimation(DS.Motion.standard) {
             let joined = groups.claimNewTabs()
             for ref in joined {
-                if let project = groups.project(of: ref) { groups.collapsedProjects.remove(project.id) }
+                if let project = groups.project(of: ref) { groups.expand(project: project.id) }
             }
             return joined
         }
@@ -205,20 +219,18 @@ extension WindowModel {
         groups.moveTab(currentTab, by: offset)
     }
 
-    /// Loose tabs that share a repository or directory, worth a one-tap project.
+    /// Loose tabs that share a repository or directory, worth a one-tap project. One host's
+    /// tabs at a time: the same folder on two hosts is two places.
     var projectSuggestions: [ProjectSuggestion] {
         let grouped = Set(projects.flatMap(\.tabs))
-        var loose: [(TabRef, String?)] = []
-        for group in groups.groups where group.id != HostGroups.mixedId {
-            let refs = groups.looseTabs(of: group, grouped: grouped)
-            guard !refs.isEmpty else { continue }
+        return groups.groups.flatMap { group -> [ProjectSuggestion] in
+            let refs = groups.looseTabs(of: group, grouped: grouped).filter { $0.hostId == group.id }
+            guard refs.count >= 2 else { return [] }
             let sidebar = groups.repoSidebar(for: group)
             let tabs = Dictionary(group.tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for ref in refs where ref.hostId == group.id {
-                loose.append((ref, tabs[ref.tab].flatMap { projectRoot(of: $0, in: group, sidebar: sidebar) }))
-            }
+            let loose = refs.map { ref in (ref, tabs[ref.tab].flatMap { projectRoot(of: $0, in: group, sidebar: sidebar) }) }
+            return ProjectSuggestion.find(loose, dismissed: groups.dismissedSuggestions)
         }
-        return ProjectSuggestion.find(loose, dismissed: groups.dismissedSuggestions)
     }
 
     /// The project a suggestion's tabs would join (one already named for their folder).

@@ -212,6 +212,11 @@ struct GroupedRowPosition: Equatable {
 extension EnvironmentValues {
     @Entry var sidebarListStyle = SidebarListStyle.plain
     @Entry var groupedRowPosition = GroupedRowPosition.alone
+    /// How far a row's content sits in from the list's edge, past its own margin: a level under
+    /// its host's header in a list grouped by host. Fills and selection keep the full width.
+    @Entry var sidebarIndent: CGFloat = 0
+    /// The list is grouped by host (more than one in the window).
+    @Entry var sidebarGroupedByHost = false
 }
 
 extension View {
@@ -240,6 +245,7 @@ private struct SidebarRowStyle: ViewModifier {
     @State private var hovered = false
     @Environment(\.sidebarListStyle) private var listStyle
     @Environment(\.groupedRowPosition) private var position
+    @Environment(\.sidebarIndent) private var indent
 
     func body(content: Content) -> some View {
         switch listStyle {
@@ -274,6 +280,7 @@ private struct SidebarRowStyle: ViewModifier {
 
     private func plain(_ content: Content) -> some View {
         content
+            .padding(.leading, indent)
             .padding(.horizontal, DS.Space.m)
             .padding(.vertical, DS.Space.row)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -378,6 +385,18 @@ extension HostGroup {
         case .ssh: "terminal"
         }
     }
+
+    /// Its state in a word or two while it is not live, said beside its name in a list grouped
+    /// by host, where its rows stay dimmed under it.
+    var awayWords: String? {
+        guard !showsAsLive else { return nil }
+        return switch connectionState {
+        case .connecting, .starting: "Connecting…"
+        case .reconnecting: "Reconnecting…"
+        case .needsAttention: "Can't connect"
+        default: "Offline"
+        }
+    }
 }
 
 /// One host's header in the tab list: its name and state, then its agents' plan usage.
@@ -403,6 +422,7 @@ private struct HostGroupHeader: View {
     let group: HostGroup
     let collapsed: Bool
     @Environment(WindowModel.self) private var model
+    @Environment(\.sidebarGroupedByHost) private var byHost
     @State private var hovered = false
 
     var body: some View {
@@ -424,11 +444,21 @@ private struct HostGroupHeader: View {
                     .help(group.failure ?? (live ? group.name : state.title))
                 Text(group.name)
                     .font(SidebarFont.section)
-                    .foregroundStyle(live ? DS.Palette.textSecondary : DS.Palette.textTertiary)
+                    // Grouped by host, the host heads its projects: a step brighter than theirs.
+                    .foregroundStyle(live ? (byHost ? DS.Palette.text : DS.Palette.textSecondary) : DS.Palette.textTertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     // The name takes the squeeze, never the badges and + beside it.
                     .layoutPriority(-1)
+                if byHost, let words = group.awayWords {
+                    Text(words)
+                        .font(DS.Font.meta)
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .contentTransition(.opacity)
+                        .accessibilityHidden(true)
+                }
                 if group.kind == .ssh {
                     // Plain SSH: tabs do not outlive the connection (no daemon to keep them).
                     Text("SSH")
@@ -441,8 +471,8 @@ private struct HostGroupHeader: View {
                         .help("Plain SSH: tabs end with the connection. Install the helper to keep them.")
                 }
                 Spacer(minLength: DS.Space.xs)
-                // What the collapse hides: the host's loose tabs.
-                if collapsed, case let hidden = model.groups.looseTabs(of: group).count, hidden > 0 {
+                // What the collapse hides: the host's loose tabs, and grouped by host its projects' too.
+                if collapsed, case let hidden = (byHost ? group.listed : model.groups.looseTabs(of: group)).count, hidden > 0 {
                     Text("\(hidden)")
                         .font(DS.Font.meta)
                         .foregroundStyle(DS.Palette.textTertiary)
@@ -1345,12 +1375,12 @@ struct CompactTerminalView: View {
             }
             ForEach(model.switcherSections) { section in
                 switch section.kind {
-                case .project(let id):
-                    if let project = model.groups.project(id) {
+                case .project(let place):
+                    if let project = model.groups.project(place.project) {
                         Section {
-                            projectItem(project)
+                            projectItem(project, in: place)
                             ForEach(section.tabs, id: \.self) { ref in
-                                switcherItem(ref, showsHost: project.hosts.count > 1)
+                                switcherItem(ref, showsHost: place.host == nil && project.hosts.count > 1)
                             }
                         }
                     }
@@ -1447,12 +1477,12 @@ struct CompactTerminalView: View {
 
     /// A project's first line in the switcher: its colour, name and where its tabs are; its
     /// menu holds what the sidebar header's does.
-    private func projectItem(_ project: Project) -> some View {
+    private func projectItem(_ project: Project, in place: ProjectPlace) -> some View {
         Menu {
-            ProjectMenu(project: project, collapsed: nil) { model.namingProject = project.id }
+            ProjectMenu(project: project, collapsed: nil, place: place) { model.namingProject = project.id }
         } label: {
             Text(project.name)
-            Text(model.switcherSubtitle(of: project))
+            Text(model.switcherSubtitle(of: project, in: place))
             projectIcon(project.color)
         }
     }

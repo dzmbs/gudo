@@ -11,9 +11,9 @@ import UniformTypeIdentifiers
 /// One line of the list. Ids are stable across sections: a tab's row is the same view whether it
 /// sits in a project or under its host.
 enum SidebarItem: Identifiable, Hashable {
-    case projectHeader(String)
+    case projectHeader(ProjectPlace)
     /// An empty project's one line: where its tabs will go.
-    case projectEmpty(String)
+    case projectEmpty(ProjectPlace)
     case row(TabRef, SidebarContainer)
     /// One pane of a tab opened into its panes, under the tab's row.
     case pane(TabRef, PaneId, SidebarContainer)
@@ -32,12 +32,12 @@ enum SidebarItem: Identifiable, Hashable {
 
     var id: String {
         switch self {
-        case .projectHeader(let id): "project/\(id)"
-        case .projectEmpty(let id): "project-empty/\(id)"
+        case .projectHeader(let place): "project/\(place.foldKey)"
+        case .projectEmpty(let place): "project-empty/\(place.foldKey)"
         case .row(let ref, _): "tab/\(ref)"
         case .pane(let ref, let pane, _): "pane/\(ref)/\(pane.rawValue)"
         case .windowHeader(let kind): "window/\(kind.rawValue)"
-        case .suggestion(let suggestion): "suggestion/\(suggestion.key)"
+        case .suggestion(let suggestion): "suggestion/\(suggestion.tabs.first?.hostId ?? "")/\(suggestion.key)"
         case .projectsIntro: "projects-intro"
         case .restoreTabs: "restore-tabs"
         case .idleTabs: "idle-tabs"
@@ -82,7 +82,7 @@ final class SidebarDragState {
     var dragging: TabRef?
     var plan: SidebarDrop?
     /// A project header being dragged, and where it would land.
-    var draggedProject: String?
+    var draggedProject: ProjectPlace?
     var projectMove: (id: String, index: Int)?
     @ObservationIgnored var springTarget: String?
     @ObservationIgnored var springTask: Task<Void, Never>?
@@ -113,13 +113,16 @@ final class SidebarGeometry {
     var frames: [String: CGRect] = [:]
     /// Where the list's space starts in the window's.
     var listOriginInWindow = CGPoint.zero
-    /// The pinned project header's height, as last drawn.
+    /// The pinned headers' heights, as last drawn.
     var headerHeight: CGFloat = 40
+    var hostHeaderHeight: CGFloat = 40
     let scroll = SidebarScroll()
     var items: [String: SidebarItem] = [:]
     /// The items' ids in list order.
     var order: [String] = []
     var sections: [SidebarSection] = []
+    /// The list is grouped by host: a host's header pins over its rows too.
+    var pinsHosts = false
 
     func item(at point: CGPoint) -> (SidebarItem, CGRect)? {
         for (id, frame) in frames where frame.contains(point) {
@@ -163,20 +166,25 @@ extension WindowModel {
             let moving = projects.remove(at: from)
             projects.insert(moving, at: min(max(projectMove.index, 0), projects.count))
         }
+        let byHost = hostGroups.count > 1
+        let shownSections = Set(sections.map(\.container))
+        func projectItems(_ place: ProjectPlace) -> [SidebarItem] {
+            let members = rows(place.container)
+            // A host's part of a project goes with its last row there, as the drop leaves it.
+            guard place.host == nil || !members.isEmpty else { return [] }
+            guard !self.groups.isCollapsed(place) else { return [.projectHeader(place)] }
+            let empty: [SidebarItem] = members.isEmpty && showsEmptyProjects ? [.projectEmpty(place)] : []
+            return [.projectHeader(place)] + tabItems(members, in: place.container) + empty
+        }
         var items: [SidebarItem] = []
         let restorable = groups.restoreDismissed ? 0 : groups.restorableTabs.count
         if restorable > 0 { items.append(.restoreTabs(restorable)) }
         if !idleTabs.isEmpty { items.append(.idleTabs(idleTabs.count)) }
-        for project in projects {
-            items.append(.projectHeader(project.id))
-            if !self.groups.collapsedProjects.contains(project.id) {
-                let members = rows(.project(project.id))
-                items += tabItems(members, in: .project(project.id))
-                if members.isEmpty, showsEmptyProjects { items.append(.projectEmpty(project.id)) }
-            }
+        for project in projects where !byHost || shownSections.contains(.project(project.id)) {
+            items += projectItems(ProjectPlace(project.id))
         }
         let suggestions = projectSuggestions.prefix(2)
-        items += suggestions.map(SidebarItem.suggestion)
+        if !byHost { items += suggestions.map(SidebarItem.suggestion) }
         // Before the first project, once, while there is something to group.
         if showsIntro, projects.isEmpty, suggestions.isEmpty, groups.tabs.count >= 2 {
             items.append(.projectsIntro)
@@ -192,6 +200,12 @@ extension WindowModel {
             items.append(.hostHeader(group.id))
             guard !self.groups.collapsed.contains(group.id) else { continue }
             items += tabItems(rows(.host(group.id)), in: .host(group.id))
+            if byHost {
+                items += suggestions.filter { $0.tabs.first?.hostId == group.id }.map(SidebarItem.suggestion)
+                for project in projects where shownSections.contains(.hostProject(host: group.id, project: project.id)) {
+                    items += projectItems(ProjectPlace(project.id, on: group.id))
+                }
+            }
             if let sidebar = self.groups.repoSidebar(for: group) {
                 for repo in sidebar.repos {
                     let fold = WorktreeFold(repo)
@@ -212,7 +226,7 @@ extension WindowModel {
 /// outside any project.
 struct SwitcherSection: Identifiable, Equatable {
     enum Kind: Hashable {
-        case project(String)
+        case project(ProjectPlace)
         case window
         case host(String)
     }
@@ -223,23 +237,26 @@ struct SwitcherSection: Identifiable, Equatable {
 }
 
 extension WindowModel {
-    /// The switcher's sections in the sidebar's order: projects, the window's tabs, then hosts.
-    /// Every tab is listed once.
+    /// The switcher's sections in the sidebar's order: projects, the window's tabs, then hosts
+    /// (grouped by host, each host's projects after its own tabs). Every tab is listed once.
     var switcherSections: [SwitcherSection] {
-        let grouped = Set(projects.flatMap(\.tabs))
-        var sections = projects.map { SwitcherSection(kind: .project($0.id), tabs: $0.tabs) }
-        let windowTabs = groups.windowTabs.filter { !grouped.contains($0) }
-        if !windowTabs.isEmpty { sections.append(SwitcherSection(kind: .window, tabs: windowTabs)) }
-        sections += groups.groups.map { SwitcherSection(kind: .host($0.id), tabs: groups.looseTabs(of: $0, grouped: grouped)) }
-        return sections
+        groups.sections.compactMap { section in
+            switch section.container {
+            case .window: section.rows.isEmpty ? nil : SwitcherSection(kind: .window, tabs: section.rows)
+            case .host(let id): SwitcherSection(kind: .host(id), tabs: section.rows)
+            case .project, .hostProject: section.container.projectPlace.map { SwitcherSection(kind: .project($0), tabs: section.rows) }
+            }
+        }
     }
 
     /// Under a project's name in the switcher: where its tabs run and how many there are.
-    func switcherSubtitle(of project: Project) -> String {
-        guard !project.tabs.isEmpty else { return "No tabs" }
-        let count = project.tabs.count == 1 ? "1 tab" : "\(project.tabs.count) tabs"
-        let hosts = project.hosts.count > 1 ? "\(project.hosts.count) hosts" : groupName(project.hosts.first ?? "")
-        return "\(hosts) · \(count)"
+    func switcherSubtitle(of project: Project, in place: ProjectPlace? = nil) -> String {
+        let tabs = place.map(groups.rows(of:)) ?? project.tabs
+        guard !tabs.isEmpty else { return "No tabs" }
+        let count = tabs.count == 1 ? "1 tab" : "\(tabs.count) tabs"
+        let hosts = Set(tabs.map(\.hostId))
+        let location = hosts.count > 1 ? "\(hosts.count) hosts" : groupName(place?.host ?? tabs[0].hostId)
+        return "\(location) · \(count)"
     }
 }
 
@@ -260,11 +277,13 @@ struct SidebarTabList: View {
             drop: drag.plan, projectMove: drag.projectMove, showsIntro: !introDismissed, opensPanes: listStyle == .plain,
             showsEmptyProjects: listStyle == .grouped)
         let numbers = Dictionary(model.groups.tabs.enumerated().map { ($1, $0 + 1) }, uniquingKeysWith: { first, _ in first })
-        let _ = geometry.record(items, sections)
+        let byHost = model.groups.groupsByHost
+        let _ = geometry.record(items, sections, pinsHosts: byHost)
         Group {
             ForEach(items) { item in
                 SidebarItemView(item: item, numbers: numbers)
                     .environment(\.groupedRowPosition, Self.position(of: item, in: items))
+                    .environment(\.sidebarIndent, byHost && item.isUnderHost ? SidebarIndent.level : 0)
                     .motionTransition(.row)
                     .onGeometryChange(for: SidebarRowPlace.self) { proxy in
                         SidebarRowPlace(frame: proxy.frame(in: .named(Self.space)), frameInWindow: proxy.frame(in: .global))
@@ -275,6 +294,7 @@ struct SidebarTabList: View {
                     .onDisappear { geometry.place(item.id, nil) }
             }
         }
+        .environment(\.sidebarGroupedByHost, byHost)
         .animation(DS.Motion.standard, value: items)
         // Taught once: the first project, however made, retires the hint for good.
         .onChange(of: model.projects.isEmpty, initial: true) { _, empty in
@@ -298,10 +318,38 @@ private extension SidebarItem {
     var cardSection: String? {
         switch self {
         case .row(_, let container), .pane(_, _, let container): "\(container)"
-        case .projectEmpty(let id): "\(SidebarContainer.project(id))"
+        case .projectEmpty(let place): "\(place.container)"
         default: nil
         }
     }
+}
+
+extension SidebarItem {
+    /// The host whose section holds this line, in a list grouped by host (its header included).
+    var hostSection: String? {
+        switch self {
+        case .hostHeader(let id), .hostPlaceholder(let id), .repoFold(let id, _), .worktree(let id, _, _): id
+        case .projectHeader(let place), .projectEmpty(let place): place.host
+        case .row(_, let container), .pane(_, _, let container):
+            switch container {
+            case .host(let id), .hostProject(let id, _): id
+            case .project, .window: nil
+            }
+        case .suggestion(let suggestion): suggestion.tabs.first?.hostId
+        case .windowHeader, .projectsIntro, .restoreTabs, .idleTabs: nil
+        }
+    }
+
+    /// A line inside a host's section, drawn a level in from the host's header.
+    var isUnderHost: Bool {
+        if case .hostHeader = self { return false }
+        return hostSection != nil
+    }
+}
+
+/// How far a host's lines sit in from its header, in a list grouped by host.
+enum SidebarIndent {
+    static let level = DS.Space.m
 }
 
 extension SidebarGeometry {
@@ -316,23 +364,34 @@ extension SidebarGeometry {
     }
 
     func pin() {
-        let pinned = StickyProjectHeader.pinned(in: self, top: scroll.top, height: headerHeight).flatMap { pinned -> PinnedProject? in
-            // Across the rows' own width, inside the list's margins.
-            guard let row = frames.values.first else { return nil }
-            let edge = listOriginInWindow.y + scroll.top
-            let frame = CGRect(x: listOriginInWindow.x + row.minX, y: edge + pinned.offset, width: row.width, height: headerHeight)
-            return PinnedProject(project: pinned.project, edge: edge, frame: frame)
+        // Across the rows' own width, inside the list's margins.
+        guard let row = frames.values.first else {
+            if scroll.pinned != nil { scroll.pinned = nil }
+            return
         }
+        let edge = listOriginInWindow.y + scroll.top
+        func frame(top: CGFloat, offset: CGFloat, height: CGFloat) -> CGRect {
+            CGRect(x: listOriginInWindow.x + row.minX, y: listOriginInWindow.y + top + offset, width: row.width, height: height)
+        }
+        let host = pinsHosts ? StickyProjectHeader.pinnedHost(in: self, top: scroll.top, height: hostHeaderHeight) : nil
+        // Under the host's pinned header, the project's pins at that header's foot.
+        let projectTop = host.map { scroll.top + $0.offset + hostHeaderHeight } ?? scroll.top
+        let project = StickyProjectHeader.pinned(in: self, top: projectTop, height: headerHeight)
+        let pinned: PinnedHeaders? = host == nil && project == nil ? nil : PinnedHeaders(
+            edge: edge,
+            host: host.map { ($0.host, frame(top: scroll.top, offset: $0.offset, height: hostHeaderHeight)) },
+            project: project.map { ($0.project, frame(top: projectTop, offset: $0.offset, height: headerHeight)) })
         if scroll.pinned != pinned { scroll.pinned = pinned }
     }
 }
 
 private extension SidebarGeometry {
-    func record(_ items: [SidebarItem], _ sections: [SidebarSection]) {
+    func record(_ items: [SidebarItem], _ sections: [SidebarSection], pinsHosts: Bool) {
         self.items = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         order = items.map(\.id)
         frames = frames.filter { self.items[$0.key] != nil }
         self.sections = sections
+        self.pinsHosts = pinsHosts
     }
 }
 
@@ -344,10 +403,10 @@ private struct SidebarItemView: View {
 
     var body: some View {
         switch item {
-        case .projectHeader(let id):
-            if let project = model.groups.project(id) { ProjectHeader(project: project) }
-        case .projectEmpty(let id):
-            if let project = model.groups.project(id) { ProjectEmptyRow(project: project) }
+        case .projectHeader(let place):
+            if let project = model.groups.project(place.project) { ProjectHeader(project: project, place: place) }
+        case .projectEmpty(let place):
+            if let project = model.groups.project(place.project) { ProjectEmptyRow(project: project, place: place) }
         case .row(let ref, let container):
             SidebarTabRow(ref: ref, container: container, number: numbers[ref] ?? 0)
         case .pane(let ref, let pane, _):
@@ -552,10 +611,13 @@ struct SidebarDropDelegate: DropDelegate {
                 let fraction = frame.height > 0 ? (point.y - frame.minY) / frame.height : 0.5
                 next = SidebarDrop.plan(dragging: ref, over: target, at: fraction, in: geometry.section(container)) ?? next
             }
-        case .projectHeader(let id), .projectEmpty(let id):
-            let rows = geometry.section(.project(id)).rows
-            if !rows.contains(ref) { next = .insert(ref, into: .project(id), at: rows.count) }
-            if model.groups.collapsedProjects.contains(id) { springTarget = id }
+        case .projectHeader(let place), .projectEmpty(let place):
+            // A tab from another host joins the project where its own host shows it.
+            let landing = geometry.pinsHosts && !SidebarDrop.accepts(place.container, ref)
+                ? ProjectPlace(place.project, on: model.groups.home(of: ref)) : place
+            let rows = geometry.section(landing.container).rows
+            if !rows.contains(ref) { next = .insert(ref, into: landing.container, at: rows.count) }
+            if model.groups.isCollapsed(place) { springTarget = place.foldKey }
         case .hostHeader(let id), .hostPlaceholder(let id):
             if ref.hostId == id, !geometry.section(.host(id)).rows.contains(ref) {
                 next = .insert(ref, into: .host(id), at: 0)
@@ -591,14 +653,16 @@ struct SidebarDropDelegate: DropDelegate {
         }
     }
 
-    private func updateProjectMove(_ id: String, over item: SidebarItem) {
-        let target: String? = switch item {
+    /// Projects reorder among their neighbours under the same host.
+    private func updateProjectMove(_ dragged: ProjectPlace, over item: SidebarItem) {
+        let target: ProjectPlace? = switch item {
         case .projectHeader(let other), .projectEmpty(let other): other
-        case .row(_, .project(let other)): other
+        case .row(_, let container): container.projectPlace
         default: nil
         }
         let order = model.projects.map(\.id)
-        guard let target, let index = order.firstIndex(of: target) else { return }
+        guard let target, target.host == dragged.host, let index = order.firstIndex(of: target.project) else { return }
+        let id = dragged.project
         let move: (id: String, index: Int)? = index == order.firstIndex(of: id) ? nil : (id, index)
         if move?.id != drag.projectMove?.id || move?.index != drag.projectMove?.index {
             withAnimation(DS.Motion.standard) { drag.projectMove = move }
@@ -629,8 +693,8 @@ struct ProjectMark: View {
     }
 }
 
-/// Where the sidebar list shows its content, and the project header pinned over it: observed
-/// only by the pinned header.
+/// Where the sidebar list shows its content, and the headers pinned over it: observed only by
+/// the pinned headers.
 @MainActor
 @Observable
 final class SidebarScroll {
@@ -638,17 +702,27 @@ final class SidebarScroll {
     @ObservationIgnored var top: CGFloat = 0
     /// Where it ends over the footer.
     @ObservationIgnored var bottom: CGFloat = 0
-    var pinned: PinnedProject?
+    var pinned: PinnedHeaders?
 }
 
-/// The project header pinned over the list, in the window's space.
-struct PinnedProject: Equatable {
-    let project: String
+/// The headers pinned over the list, in the window's space: the host's whose section runs
+/// under the top edge (in a list grouped by host), and under it the project's. Each sits at
+/// its edge, or above it, pushed up by the end of its rows; as wide as the rows.
+struct PinnedHeaders: Equatable {
     /// Where the list's content starts under the window's bars.
     let edge: CGFloat
-    /// Where the header sits: at the edge, or above it, pushed up by the end of its rows; as
-    /// wide as the rows.
-    let frame: CGRect
+    let host: String?
+    let hostFrame: CGRect
+    let project: ProjectPlace?
+    let projectFrame: CGRect
+
+    init(edge: CGFloat, host: (id: String, frame: CGRect)?, project: (place: ProjectPlace, frame: CGRect)?) {
+        self.edge = edge
+        self.host = host?.id
+        hostFrame = host?.frame ?? .zero
+        self.project = project?.place
+        projectFrame = project?.frame ?? .zero
+    }
 }
 
 /// Which way the list scrolls to show a row: not at all while the row shows whole.
@@ -689,8 +763,9 @@ extension SidebarGeometry {
     /// Scrolls `proxy` so `ref`'s row shows whole, the least way, when it does not, in `animation`.
     func reveal(_ ref: TabRef, proxy: ScrollViewProxy, animation: Animation?) {
         guard let item = items.values.first(where: { if case .row(let row, _) = $0 { row == ref } else { false } }) else { return }
-        let header: String? = if case .row(_, .project(let project)) = item { SidebarItem.projectHeader(project).id } else { nil }
-        let covered = header.flatMap { frames[$0]?.height } ?? 0
+        let projectHeader = item.projectPlace.map { SidebarItem.projectHeader($0).id }
+        let hostHeader = pinsHosts ? item.hostSection.map { SidebarItem.hostHeader($0).id } : nil
+        let covered = [projectHeader, hostHeader].compactMap { $0.flatMap { frames[$0]?.height } }.reduce(0, +)
         let visible = scroll.top + covered...max(scroll.top + covered, scroll.bottom)
         let move = SidebarReveal.move(to: item.id, in: order, frames: frames, visible: visible)
         let rowHeight = frames[item.id]?.height ?? frames.values.map(\.height).min() ?? 0
@@ -704,7 +779,8 @@ extension SidebarGeometry {
 }
 
 /// The header of the project whose rows run under the list's top edge, pinned there until the
-/// end of its rows pushes it up, as list section headers do.
+/// end of its rows pushes it up, as list section headers do. Grouped by host, the host's header
+/// pins above it the same way, until the next host's header pushes it up.
 struct StickyProjectHeader: View {
     let geometry: SidebarGeometry
     @Environment(WindowModel.self) private var model
@@ -713,53 +789,92 @@ struct StickyProjectHeader: View {
     var body: some View {
         let pinned = geometry.scroll.pinned
         ZStack(alignment: .top) {
-            if let pinned, let project = model.groups.project(pinned.project) {
-                ProjectHeader(project: project)
-                    .padding(.leading, max(0, pinned.frame.minX - frameInWindow.minX))
-                    .padding(.trailing, max(0, frameInWindow.maxX - pinned.frame.maxX))
-                    .background(DS.Palette.sidebar)
-                    .overlay(alignment: .bottom) { Hairline(style: DS.Palette.separator) }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
-                        geometry.headerHeight = height
-                        geometry.pin()
-                    }
-                    .offset(y: pinned.frame.minY - frameInWindow.minY)
-                    .transition(.identity)
+            if let pinned, let place = pinned.project, let project = model.groups.project(place.project) {
+                pinnedHeader(frame: pinned.projectFrame) {
+                    ProjectHeader(project: project, place: place)
+                        .environment(\.sidebarIndent, place.host == nil ? 0 : SidebarIndent.level)
+                } height: { geometry.headerHeight = $0 }
+            }
+            // Over the project's header, which slides under it when pushed up.
+            if let pinned, let host = pinned.host, let group = model.groups.group(host) {
+                pinnedHeader(frame: pinned.hostFrame, rule: pinned.project == nil) {
+                    HostGroupHeaderItem(group: group).environment(\.sidebarGroupedByHost, true)
+                } height: { geometry.hostHeaderHeight = $0 }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("sidebar-pinned-headers")
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frameInWindow = $0 }
         // A header pushed up leaves under the bars, not over them.
         .mask(alignment: .top) { Rectangle().padding(.top, max(0, (pinned?.edge ?? 0) - frameInWindow.minY)) }
     }
 
+    private func pinnedHeader(
+        frame: CGRect, rule: Bool = true, @ViewBuilder _ header: () -> some View, height: @escaping (CGFloat) -> Void
+    ) -> some View {
+        header()
+            .padding(.leading, max(0, frame.minX - frameInWindow.minX))
+            .padding(.trailing, max(0, frameInWindow.maxX - frame.maxX))
+            .background(DS.Palette.sidebar)
+            .overlay(alignment: .bottom) { if rule { Hairline(style: DS.Palette.separator) } }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured in
+                height(measured)
+                geometry.pin()
+            }
+            .offset(y: frame.minY - frameInWindow.minY)
+            .transition(.identity)
+    }
+
     /// The project whose rows cross the top edge, and how far the end of its rows has pushed its
     /// header up. Read from the items at and below the edge: the list lets go of items as they
     /// pass under the window's bars, the project's own header among them.
-    static func pinned(in geometry: SidebarGeometry, top: CGFloat, height: CGFloat) -> (project: String, offset: CGFloat)? {
+    static func pinned(in geometry: SidebarGeometry, top: CGFloat, height: CGFloat) -> (project: ProjectPlace, offset: CGFloat)? {
+        pinnedRun(in: geometry, top: top, height: height, of: \.projectPlace).map { ($0.run, $0.offset) }
+    }
+
+    /// The host whose section crosses the top edge, and how far the next host's header has
+    /// pushed its header up.
+    static func pinnedHost(in geometry: SidebarGeometry, top: CGFloat, height: CGFloat) -> (host: String, offset: CGFloat)? {
+        pinnedRun(in: geometry, top: top, height: height, of: \.hostSection).map { ($0.run, $0.offset) }
+    }
+
+    private static func pinnedRun<Run: Equatable>(
+        in geometry: SidebarGeometry, top: CGFloat, height: CGFloat, of run: (SidebarItem) -> Run?
+    ) -> (run: Run, offset: CGFloat)? {
         let order = geometry.order
         guard let first = order.indices.first(where: { geometry.frames[order[$0]].map { $0.maxY > top } ?? false }),
               let firstFrame = geometry.frames[order[first]]
         else { return nil }
         let atEdge = firstFrame.minY < top ? first : first - 1
-        guard order.indices.contains(atEdge), let project = geometry.items[order[atEdge]]?.project,
-              let last = order.lastIndex(where: { geometry.items[$0]?.project == project })
+        guard order.indices.contains(atEdge), let item = geometry.items[order[atEdge]], let current = run(item),
+              let last = order.lastIndex(where: { id in geometry.items[id].flatMap(run) == current })
         else { return nil }
         // Where the rows end: the next item's top, or the last row's end, once either is laid out.
         let bottom = (order.indices.contains(last + 1) ? geometry.frames[order[last + 1]]?.minY : nil)
             ?? geometry.frames[order[last]]?.maxY ?? .infinity
         guard bottom > top else { return nil }
-        return (project, min(0, bottom - top - height))
+        return (current, min(0, bottom - top - height))
     }
 }
 
-private extension SidebarItem {
-    /// The project a header or line belongs to.
-    var project: String? {
+extension SidebarItem {
+    /// The project and place a header or line belongs to.
+    var projectPlace: ProjectPlace? {
         switch self {
-        case .projectHeader(let project), .projectEmpty(let project), .row(_, .project(let project)), .pane(_, _, .project(let project)): project
+        case .projectHeader(let place), .projectEmpty(let place): place
+        case .row(_, let container), .pane(_, _, let container): container.projectPlace
         default: nil
         }
+    }
+}
+
+/// What VoiceOver says for a project's header: "acme-app, on studio, project, 3 tabs". Grouped
+/// by host, it names the host whose part of the project the header heads.
+enum ProjectHeaderLabel {
+    static func spoken(_ name: String, host: String?, tabs: Int) -> String {
+        let count = tabs == 1 ? "1 tab" : "\(tabs) tabs"
+        return [name, host.map { "on \($0)" }, "project", count].compactMap(\.self).joined(separator: ", ")
     }
 }
 
@@ -767,8 +882,12 @@ private extension SidebarItem {
 /// A click collapses it; dragging it reorders projects; its menu holds the rest.
 private struct ProjectHeader: View {
     let project: Project
+    /// Where this header stands: grouped by host, a project has one under each of its hosts.
+    let place: ProjectPlace
     @Environment(WindowModel.self) private var model
     @Environment(SidebarDragState.self) private var drag
+    @Environment(\.sidebarIndent) private var indent
+    @Environment(\.chrome) private var chrome
     @State private var hovered = false
     @State private var renaming = false
     @State private var draft = ""
@@ -776,9 +895,11 @@ private struct ProjectHeader: View {
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        let collapsed = model.groups.collapsedProjects.contains(project.id)
+        let collapsed = model.groups.isCollapsed(place)
+        let tabs = model.groups.rows(of: place)
+        let host = place.host.flatMap(model.groups.group)
         // A tab joining from elsewhere lights the project it joins.
-        let dropping = { if case .insert(let ref, .project(let id), _)? = drag.plan { id == project.id && !project.tabs.contains(ref) } else { false } }()
+        let dropping = { if case .insert(let ref, let container, _)? = drag.plan { container == place.container && !tabs.contains(ref) } else { false } }()
         // Lined up with a host's header: its mark where the host's icon sits, its name where the
         // host's name starts, so the rows under both read as indented.
         HStack(spacing: DS.Space.s) {
@@ -794,32 +915,34 @@ private struct ProjectHeader: View {
                     .layoutPriority(-1)
             }
             Spacer(minLength: DS.Space.xs)
-            if collapsed, !project.tabs.isEmpty {
-                Text(project.tabs.count == 1 ? "1 tab" : "\(project.tabs.count) tabs")
+            if collapsed, !tabs.isEmpty {
+                Text(tabs.count == 1 ? "1 tab" : "\(tabs.count) tabs")
                     .monospacedDigit()
                     .font(SidebarFont.number)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .contentTransition(.numericText())
-                if let state = model.mostUrgentState(inProject: project) {
+                if let state = model.mostUrgentState(of: tabs) {
                     StateMark(state).motionTransition(.pill())
                 }
             }
-            Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id) }
+            Button("New Terminal in \(project.name)", systemImage: "plus") { model.newTab(inProject: project.id, on: place.host) }
                 .labelStyle(.iconOnly)
                 .buttonStyle(.bar)
                 .font(.callout)
-                .opacity(controlsShown ? 1 : 0)
-                .accessibilityIdentifier("project-new-tab-\(project.name)")
+                .opacity(controlsShown && canOpen(host) ? 1 : 0)
+                .disabled(!canOpen(host))
+                .accessibilityIdentifier(host.map { "project-new-tab-\(project.name)-\($0.name)" } ?? "project-new-tab-\(project.name)")
             // An empty project is its header alone: nothing to fold.
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(DS.Palette.textTertiary)
                 .rotationEffect(.degrees(collapsed ? 0 : 90))
-                .opacity(!project.tabs.isEmpty && (controlsShown || collapsed) ? 1 : 0)
+                .opacity(!tabs.isEmpty && (controlsShown || collapsed) ? 1 : 0)
                 .accessibilityHidden(true)
         }
         .frame(minHeight: 28)
-        .padding(.leading, DS.Space.l)
+        .opacity(host.map { $0.showsAsLive ? 1 : chrome.awayOpacity } ?? 1)
+        .padding(.leading, DS.Space.l + indent)
         .padding(.trailing, DS.Space.gap10)
         .padding(.top, DS.Space.m)
         .animation(DS.Motion.micro, value: controlsShown)
@@ -829,9 +952,10 @@ private struct ProjectHeader: View {
                 .padding(.horizontal, DS.Space.s)
                 .padding(.top, DS.Space.s)
         }
-        // The name field of a project just made opens at once, its name selected.
+        // The name field of a project just made opens at once, its name selected, in the first
+        // place the list shows it.
         .onChange(of: model.namingProject, initial: true) { _, id in
-            if id == project.id { startRename() }
+            if id == project.id, model.groups.places(of: project.id).first == place { startRename() }
         }
         .contentShape(.rect)
         // A click acts at once; the second click of a double-click renames instead of folding back.
@@ -839,27 +963,32 @@ private struct ProjectHeader: View {
             #if os(macOS)
             if NSApp.currentEvent?.clickCount == 2 { return startRename() }
             #endif
-            withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) }
+            withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(place) }
         }
         .onHover { hovered = $0 }
         .onDrag {
-            drag.draggedProject = project.id
+            drag.draggedProject = place
             model.draggedTab = nil
             return TabDrag.provider(forProject: project.id, in: model)
         } preview: {
             DragLiftPreview(title: project.name, systemImage: "square.fill")
         }
         .opacity(drag.projectMove?.id == project.id ? 0.4 : 1)
-        .contextMenu { ProjectMenu(project: project, collapsed: collapsed) { startRename() } }
+        .contextMenu { ProjectMenu(project: project, collapsed: collapsed, place: place) { startRename() } }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(project.name), project, \(project.tabs.count) tabs")
+        .accessibilityLabel(ProjectHeaderLabel.spoken(project.name, host: host?.name, tabs: tabs.count))
         .accessibilityHint(collapsed ? "Shows its tabs" : "Hides its tabs")
         .accessibilityAddTraits(.isHeader)
-        .accessibilityIdentifier("project-\(project.name)")
+        .accessibilityIdentifier(host.map { "project-\(project.name)-\($0.name)" } ?? "project-\(project.name)")
         // Combined, the header's own tap and + are reached as its actions.
-        .accessibilityAction { withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) } }
-        .accessibilityAction(named: "New Terminal") { model.newTab(inProject: project.id) }
+        .accessibilityAction { withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(place) } }
+        .accessibilityAction(named: "New Terminal") { model.newTab(inProject: project.id, on: place.host) }
         .accessibilityAction(named: "Rename") { startRename() }
+    }
+
+    /// A project's + opens on its host while that host takes new tabs; across hosts, anywhere.
+    private func canOpen(_ host: HostGroup?) -> Bool {
+        host.map { $0.isLocal || $0.isReady } ?? true
     }
 
     private var controlsShown: Bool {
@@ -905,14 +1034,17 @@ private struct ProjectHeader: View {
 }
 
 /// A project's menu: Rename, Colour, New Terminal, Collapse, Ungroup, Close All Tabs. Without
-/// `collapsed` (the compact switcher, which has nothing to collapse) there is no Collapse.
+/// `collapsed` (the compact switcher, which has nothing to collapse) there is no Collapse. In a
+/// `place` under one host, New Terminal, Ungroup and Close All Tabs act on that host's part.
 struct ProjectMenu: View {
     let project: Project
     let collapsed: Bool?
+    var place: ProjectPlace?
     let rename: () -> Void
     @Environment(WindowModel.self) private var model
 
     var body: some View {
+        let place = place ?? ProjectPlace(project.id)
         Button("Rename…", systemImage: "pencil", action: rename)
         Menu("Colour") {
             ForEach(ProjectColor.names.indices, id: \.self) { index in
@@ -928,10 +1060,10 @@ struct ProjectMenu: View {
                 .tint(DS.Palette.project(index))
             }
         }
-        Button("New Terminal", systemImage: "terminal") { model.newTab(inProject: project.id) }
+        Button("New Terminal", systemImage: "terminal") { model.newTab(inProject: project.id, on: place.host) }
         if let collapsed {
             Button(collapsed ? "Expand" : "Collapse", systemImage: collapsed ? "chevron.down" : "chevron.right") {
-                withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(project: project.id) }
+                withAnimation(DS.Motion.standard) { model.groups.toggleCollapsed(place) }
             }
         }
         Divider()
@@ -941,9 +1073,9 @@ struct ProjectMenu: View {
             }
         } else {
             Button("Ungroup", systemImage: "rectangle.stack.badge.minus") {
-                withAnimation(DS.Motion.standard) { model.ungroupProject(project.id) }
+                withAnimation(DS.Motion.standard) { model.ungroup(place) }
             }
-            Button("Close All Tabs", systemImage: "xmark.square", role: .destructive) { model.closeProject(project.id) }
+            Button("Close All Tabs", systemImage: "xmark.square", role: .destructive) { model.closeProject(place) }
         }
     }
 }
@@ -1018,15 +1150,16 @@ private struct SuggestionRow: View {
 /// An empty project's line under its header: where its tabs go, and a tap makes one.
 private struct ProjectEmptyRow: View {
     let project: Project
+    let place: ProjectPlace
     @Environment(WindowModel.self) private var model
     @Environment(SidebarDragState.self) private var drag
 
     var body: some View {
-        let dropping = { if case .insert(_, .project(let id), _)? = drag.plan { id == project.id } else { false } }()
+        let dropping = { if case .insert(_, let container, _)? = drag.plan { container == place.container } else { false } }()
         let tint = DS.Palette.project(project.color)
         let size = SidebarFont.icon
         Button {
-            model.newTab(inProject: project.id)
+            model.newTab(inProject: project.id, on: place.host)
         } label: {
             HStack(spacing: DS.Space.gap10) {
                 Image(systemName: "plus")

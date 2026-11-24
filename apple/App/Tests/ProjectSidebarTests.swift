@@ -60,13 +60,15 @@ final class ProjectSidebarTests: XCTestCase {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(30))
         let project = try XCTUnwrap(model.projects.first)
-        let frames = try project.tabs.map { try XCTUnwrap(geometry.frames["tab/\($0)"]) }
+        let place = try XCTUnwrap(model.groups.places(of: project.id).first)
+        let rows = model.groups.rows(of: place)
+        let frames = try rows.map { try XCTUnwrap(geometry.frames["tab/\($0)"]) }
         for pair in zip(frames, frames.dropFirst()) {
             XCTAssertGreaterThan(pair.1.minY, pair.0.minY)
             XCTAssertLessThanOrEqual(pair.0.maxY, pair.1.minY + 1)
         }
         let point = CGPoint(x: frames[0].midX, y: frames[0].midY)
-        XCTAssertEqual(geometry.item(at: point)?.0.id, "tab/\(project.tabs[0])")
+        XCTAssertEqual(geometry.item(at: point)?.0.id, "tab/\(rows[0])")
     }
     #endif
 
@@ -78,10 +80,11 @@ final class ProjectSidebarTests: XCTestCase {
         let app = try XCTUnwrap(model.projects.first)
         let infra = try XCTUnwrap(model.projects.last)
         let logs = try XCTUnwrap(model.groups.sections.first { $0.container == .host("fixture-studio") }?.rows.first)
+        // Grouped by host: each host's part of a project is its own run of rows.
         let drops: [SidebarDrop] = [
-            .insert(app.tabs[2], into: .project(app.id), at: 0),
-            .insert(logs, into: .project(infra.id), at: 1),
-            .insert(infra.tabs[0], into: .project(app.id), at: 3),
+            .insert(app.tabs[2], into: .hostProject(host: app.tabs[2].hostId, project: app.id), at: 0),
+            .insert(logs, into: .hostProject(host: logs.hostId, project: infra.id), at: 0),
+            .insert(infra.tabs[0], into: .hostProject(host: infra.tabs[0].hostId, project: app.id), at: 1),
             .insert(app.tabs[0], into: .host(app.tabs[0].hostId), at: 0),
         ]
         for drop in drops {
@@ -102,8 +105,9 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(made.name, "New Project")
         // Its name opens for typing at once.
         XCTAssertEqual(model.namingProject, made.id)
-        // Its rows lead ⌘-numbers in project order.
-        XCTAssertEqual(Array(model.groups.tabs.prefix(5)), model.projects.flatMap(\.tabs).prefix(5).map { $0 })
+        // ⌘-numbers follow the rows top to bottom.
+        let rows = model.sidebarItems(drop: nil, projectMove: nil).items.compactMap { if case .row(let ref, _) = $0 { ref } else { nil } }
+        XCTAssertEqual(model.groups.tabs, rows)
     }
 
     /// ⌘T from a project's tab adds to that project, beside it, and shows it; ⌘T anywhere else,
@@ -134,10 +138,10 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(made.name, "New Project")
         XCTAssertEqual(made.tabs, [])
         XCTAssertEqual(model.namingProject, made.id)
-        XCTAssertTrue(ids().contains(SidebarItem.projectHeader(made.id).id))
-        XCTAssertFalse(ids().contains(SidebarItem.projectEmpty(made.id).id), "an empty project is its header alone, + on hover")
+        XCTAssertTrue(ids().contains(SidebarItem.projectHeader(ProjectPlace(made.id)).id))
+        XCTAssertFalse(ids().contains(SidebarItem.projectEmpty(ProjectPlace(made.id)).id), "an empty project is its header alone, + on hover")
         let grouped = model.sidebarItems(drop: nil, projectMove: nil, showsEmptyProjects: true).items.map(\.id)
-        XCTAssertTrue(grouped.contains(SidebarItem.projectEmpty(made.id).id), "the phone's cards keep a line to tap")
+        XCTAssertTrue(grouped.contains(SidebarItem.projectEmpty(ProjectPlace(made.id)).id), "the phone's cards keep a line to tap")
         model.newEmptyProject()
         XCTAssertEqual(model.projects.last?.name, "New Project 2")
         model.renameProject(made.id, to: "infra")
@@ -153,13 +157,15 @@ final class ProjectSidebarTests: XCTestCase {
         XCTAssertEqual(model.groupLabel(logs, onto: try XCTUnwrap(loose.first)), "Group")
     }
 
-    /// The iPhone switcher: projects first, as in the sidebar, then each host's other tabs;
-    /// every tab once, in ⌘-number order.
-    func testSwitcherListsProjectsThenHostsWithEveryTabOnce() throws {
+    /// The iPhone switcher, grouped by host as the sidebar is: each host's own tabs, then its
+    /// part of each project; every tab once, in ⌘-number order.
+    func testSwitcherListsEachHostThenItsProjectsWithEveryTabOnce() throws {
         let sections = model.switcherSections
-        let projectIds = model.projects.map(\.id)
-        XCTAssertEqual(sections.prefix(projectIds.count).map(\.kind), projectIds.map { .project($0) })
-        XCTAssertEqual(sections.dropFirst(projectIds.count).map(\.kind), model.groups.groups.map { .host($0.id) })
+        let expected = model.groups.groups.flatMap { group -> [SwitcherSection.Kind] in
+            let places = model.projects.map { ProjectPlace($0.id, on: group.id) }.filter { !model.groups.rows(of: $0).isEmpty }
+            return [.host(group.id)] + places.map { .project($0) }
+        }
+        XCTAssertEqual(sections.map(\.kind), expected)
         let listed = sections.flatMap(\.tabs)
         XCTAssertEqual(listed, model.groups.tabs)
         XCTAssertEqual(Set(listed).count, listed.count)
@@ -167,7 +173,7 @@ final class ProjectSidebarTests: XCTestCase {
         let sidebarOrder = ids().compactMap { id in id.hasPrefix("project/") || id.hasPrefix("host/") ? id : nil }
         let switcherOrder = sections.map { section -> String in
             switch section.kind {
-            case .project(let id): SidebarItem.projectHeader(id).id
+            case .project(let place): SidebarItem.projectHeader(place).id
             case .host(let id): SidebarItem.hostHeader(id).id
             case .window: "window"
             }
@@ -176,6 +182,7 @@ final class ProjectSidebarTests: XCTestCase {
 
         let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
         XCTAssertEqual(model.switcherSubtitle(of: app), "2 hosts · 3 tabs")
+        XCTAssertEqual(model.switcherSubtitle(of: app, in: ProjectPlace(app.id, on: "fixture-studio")), "studio · 2 tabs")
         model.newEmptyProject()
         XCTAssertEqual(model.switcherSubtitle(of: try XCTUnwrap(model.projects.last)), "No tabs")
     }
@@ -212,7 +219,7 @@ final class ProjectSidebarTests: XCTestCase {
         let infra = try XCTUnwrap(model.projects.first { $0.name == "infra" })
         // The host's own neighbour of db-migrate is deploy, in infra.
         XCTAssertTrue(infra.tabs.contains(hetzner.ref(try XCTUnwrap(hetzner.tabs.first { $0.title == "deploy" }).id)))
-        model.groups.collapsedProjects.insert(infra.id)
+        model.groups.toggleCollapsed(ProjectPlace(infra.id, on: hetzner.id))
         model.focus(migrate)
         XCTAssertEqual(model.currentTab, migrate)
         model.closeTab(migrate, undoable: false)
@@ -232,11 +239,14 @@ final class ProjectSidebarTests: XCTestCase {
 
     func testMoveTabKeysStayWithinTheSection() throws {
         let app = try XCTUnwrap(model.projects.first)
+        let onStudio = ProjectPlace(app.id, on: app.tabs[0].hostId)
+        let rows = model.groups.rows(of: onStudio)
+        XCTAssertEqual(rows.count, 2)
         model.focus(app.tabs[0])
         model.moveCurrentTab(by: 1)
-        XCTAssertEqual(model.projects.first?.tabs[1], app.tabs[0])
+        XCTAssertEqual(model.groups.rows(of: onStudio), rows.reversed(), "within its host's rows of the project")
         model.moveCurrentTab(by: 5)
-        XCTAssertEqual(model.projects.first?.tabs[1], app.tabs[0], "past the end: stays")
+        XCTAssertEqual(model.groups.rows(of: onStudio), rows.reversed(), "past the end: stays")
     }
 }
 
@@ -275,7 +285,7 @@ final class RepositoryTabsTests: XCTestCase {
         let app = try XCTUnwrap(model.projects.first { $0.name == "acme-app" })
         XCTAssertNotNil(model.groups.repoSidebar(for: try XCTUnwrap(model.groups.group("fixture-studio")))?.repos.first)
         XCTAssertTrue(items.contains(.row(logs, .host("fixture-studio"))))
-        XCTAssertTrue(items.contains(.row(claude, .project(app.id))))
+        XCTAssertTrue(items.contains(.row(claude, .hostProject(host: "fixture-studio", project: app.id))))
         let allTabs = model.groups.groups.flatMap { group in group.tabs.map { group.ref($0.id) } }
         XCTAssertEqual(Set(rows), Set(allTabs))
         XCTAssertEqual(rows.count, allTabs.count, "each tab once")
@@ -305,12 +315,12 @@ final class RepositoryTabsTests: XCTestCase {
     func testARepositoryTabDropsIntoAProject() throws {
         let logs = try ref("logs")
         let infra = try XCTUnwrap(model.projects.first { $0.name == "infra" })
-        let drop = SidebarDrop.insert(logs, into: .project(infra.id), at: 0)
+        let drop = SidebarDrop.insert(logs, into: .hostProject(host: "fixture-studio", project: infra.id), at: 0)
         let preview = model.sidebarItems(drop: drop, projectMove: nil).items.map(\.id)
         model.commit(drop)
         XCTAssertEqual(items.map(\.id), preview)
-        XCTAssertEqual(model.groups.project(infra.id)?.tabs.first, logs)
-        XCTAssertTrue(items.contains(.row(logs, .project(infra.id))))
+        XCTAssertEqual(model.groups.project(infra.id)?.tabs.contains(logs), true)
+        XCTAssertTrue(items.contains(.row(logs, .hostProject(host: "fixture-studio", project: infra.id))))
         XCTAssertEqual(model.groups.worktree(of: logs)?.branch, "fix/retry", "context stays with the tab")
 
         model.removeFromProject(logs)

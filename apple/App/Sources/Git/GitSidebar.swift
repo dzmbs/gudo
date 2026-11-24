@@ -61,10 +61,11 @@ private struct GitRowStyle: ViewModifier {
     let selected: Bool
     var depth = 0
     @State private var hovered = false
+    @Environment(\.sidebarIndent) private var indent
 
     func body(content: Content) -> some View {
         content
-            .padding(.leading, DS.Space.m + CGFloat(depth) * GitRow.indent)
+            .padding(.leading, DS.Space.m + indent + CGFloat(depth) * GitRow.indent)
             .padding(.trailing, DS.Space.m)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)

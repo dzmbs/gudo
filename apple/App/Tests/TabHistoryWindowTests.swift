@@ -82,11 +82,13 @@ final class TabHistoryWindowTests: XCTestCase {
         model.clickTab(hetzner, modifiers: .command)
         model.tabSelection.toggle(model.currentTab!, current: nil)
         XCTAssertEqual(Set(model.selectedTabs), [studio, hetzner])
-        let drop = SidebarDrop.insert(hetzner, into: .project(infra.id), at: 0)
+        let drop = SidebarDrop.insert(hetzner, into: .hostProject(host: hetzner.hostId, project: infra.id), at: 0)
         let preview = model.sidebarItems(drop: drop, projectMove: nil).items.map(\.id)
         model.commit(drop)
         XCTAssertEqual(model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id), preview)
-        XCTAssertEqual(Array(model.groups.project(infra.id)!.tabs.prefix(2)), [hetzner, studio])
+        // The other host's tab joins the project too, under its own host.
+        XCTAssertEqual(model.groups.project(infra.id)?.tabs.first, hetzner)
+        XCTAssertEqual(model.groups.rows(of: ProjectPlace(infra.id, on: studio.hostId)), [studio])
     }
 
     /// "A New Terminal": what the hosts had stays out of sight (still on the hosts), a fresh
