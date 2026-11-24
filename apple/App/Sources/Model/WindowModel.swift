@@ -865,7 +865,8 @@ final class WindowModel {
         openHosts ids: [String], collapsed: Set<String>, focus ref: TabRef?, pane: PaneId? = nil, mixedTabs: [CompositeTab] = []
     ) {
         groups.restore(ids)
-        groups.collapsed = collapsed.intersection(Set(ids))
+        // This device's own group is never an open host, yet folds like one.
+        groups.collapsed = collapsed.intersection(Set(ids + [HostGroups.localId]))
         restoreMixedTabs(mixedTabs, openHosts: ids)
         syncWorkspaces()
         if mixedTabs.isEmpty, let host = Self.launchHost(restoring: groups.openHosts, saved: app.hosts.records,
