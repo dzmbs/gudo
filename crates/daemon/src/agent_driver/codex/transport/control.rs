@@ -53,7 +53,10 @@ pub(in crate::agent_driver::codex) struct Command {
 }
 
 enum Action {
-    Send(String),
+    Send {
+        text: String,
+        images: Vec<std::path::PathBuf>,
+    },
     Stop,
     Approve {
         request: CodexRpcId,
@@ -107,13 +110,17 @@ impl Live {
         &self,
         session: Option<&str>,
         text: &str,
+        images: &[std::path::PathBuf],
         acknowledgement: SendAcknowledgement,
     ) -> Result<UnconfirmedSend, WsError> {
         let command = self.command(
             session,
             acknowledgement.revision,
             acknowledgement.actor,
-            Action::Send(text.to_owned()),
+            Action::Send {
+                text: text.to_owned(),
+                images: images.to_vec(),
+            },
             Some(acknowledgement),
         )?;
         self.enqueue(command)?;
@@ -316,7 +323,7 @@ async fn execute(
     let reply = rpc::reply(&mut connection, rpc::REQUEST_ID).await?;
     let reply: Value = serde_json::from_str(&reply).map_err(io::Error::other)?;
     match &command.action {
-        Action::Send(_) => {
+        Action::Send { .. } => {
             let turn = if command.turn.is_some() {
                 reply["result"]["turnId"].as_str()
             } else {
@@ -382,12 +389,19 @@ fn serialize(source: &Weak<Live>, command: &Command) -> Result<String, ControlEr
     }
     let thread = command.binding.thread_id();
     let request = match &command.action {
-        Action::Send(text) => {
+        Action::Send { text, images } => {
             if !core.identity.is_owner_device(command.actor.device) || events.has_pending_approval()
             {
                 return Err(ControlError::Obsolete);
             }
-            let input = json!([{"type":"text","text":text,"text_elements":[]}]);
+            let input: Vec<Value> =
+                std::iter::once(json!({"type":"text","text":text,"text_elements":[]}))
+                    .chain(
+                        images
+                            .iter()
+                            .map(|path| json!({"type":"localImage","path":path})),
+                    )
+                    .collect();
             if let Some(turn) = &command.turn {
                 json!({"id":rpc::REQUEST_ID,"method":"turn/steer","params":{"threadId":thread,"expectedTurnId":turn,"input":input}})
             } else {

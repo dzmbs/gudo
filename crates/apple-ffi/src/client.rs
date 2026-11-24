@@ -797,6 +797,12 @@ impl DaemonClient {
             .daemon_offers(proto::MoreDaemonFeatures::PI_AGENT)
     }
 
+    /// Whether Chat can send images to an agent (`chat_send_images`).
+    pub fn sends_chat_images(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::CHAT_IMAGES)
+    }
+
     /// Starts following a pane's output. Kept across reconnects.
     pub fn subscribe(&self, pane_id: u64) {
         self.inner.subscribe(PaneId(pane_id));

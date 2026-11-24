@@ -18,12 +18,19 @@ pub(crate) async fn request(
         return Err(WsError::Denied("Only the owner can send from Chat.".into()));
     }
     let pane = match &request {
-        WorkspaceRequest::ChatPrepare { pane_id } | WorkspaceRequest::ChatSend { pane_id, .. } => {
-            *pane_id
-        }
+        WorkspaceRequest::ChatPrepare { pane_id }
+        | WorkspaceRequest::ChatSend { pane_id, .. }
+        | WorkspaceRequest::ChatSendImages { pane_id, .. } => *pane_id,
         _ => return Err(unavailable()),
     };
     let entry = core.pane(pane).ok_or_else(unavailable)?;
+    // Disk I/O before the input gate is taken.
+    let images = match &request {
+        WorkspaceRequest::ChatSendImages { images, .. } => {
+            Some(super::chat_images::store(core, pane, images)?)
+        }
+        _ => None,
+    };
     let bracketed = entry.pane.line_snapshot().bracketed;
     let (unconfirmed, mut receipt, audit) = {
         let mut gate = lock(&entry.pane.agent_input_gate);
@@ -78,6 +85,12 @@ pub(crate) async fn request(
                 text,
                 confirmed_revision,
                 ..
+            }
+            | WorkspaceRequest::ChatSendImages {
+                ticket,
+                text,
+                confirmed_revision,
+                ..
             } => {
                 driver(kind).check_prompt(&text)?;
                 let receipt = match gate.draft.admit(
@@ -101,15 +114,25 @@ pub(crate) async fn request(
                 gate.advance_revision();
                 let submission = matches!(&gate.phase, AgentInputPhase::Open(_))
                     .then(|| {
-                        driver(kind)
-                            .send(
+                        let acknowledgement = gate.draft.acknowledgement(gate.revision, conn.actor);
+                        match &images {
+                            Some(images) => driver(kind).send_images(
                                 core,
                                 &entry.pane,
                                 session.as_deref(),
                                 &text,
-                                gate.draft.acknowledgement(gate.revision, conn.actor),
-                            )
-                            .ok()
+                                images,
+                                acknowledgement,
+                            ),
+                            None => driver(kind).send(
+                                core,
+                                &entry.pane,
+                                session.as_deref(),
+                                &text,
+                                acknowledgement,
+                            ),
+                        }
+                        .ok()
                     })
                     .flatten();
                 if submission.is_none() {

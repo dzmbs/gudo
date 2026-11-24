@@ -77,6 +77,7 @@ impl AgentDriver for TerminalDriver {
             return source.send_prompt(
                 session,
                 text,
+                &[],
                 acknowledgement.ok_or_else(|| {
                     WsError::Unavailable("Codex send requires an admission receipt.".into())
                 })?,
@@ -84,6 +85,28 @@ impl AgentDriver for TerminalDriver {
         }
         send(pane, text)?;
         Ok(UnconfirmedSend::SentNotConfirmed)
+    }
+
+    fn send_images(
+        &self,
+        core: &Core,
+        pane: &Pane,
+        session: Option<&str>,
+        text: &str,
+        images: &[std::path::PathBuf],
+        acknowledgement: Option<super::SendAcknowledgement>,
+    ) -> Result<UnconfirmedSend, WsError> {
+        let source = source(core, pane.id).ok_or_else(|| {
+            WsError::Unavailable("Attach images to this Codex in Terminal.".into())
+        })?;
+        source.send_prompt(
+            session,
+            text,
+            images,
+            acknowledgement.ok_or_else(|| {
+                WsError::Unavailable("Codex send requires an admission receipt.".into())
+            })?,
+        )
     }
 
     fn stop(

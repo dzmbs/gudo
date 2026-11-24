@@ -30,12 +30,13 @@ fn prompt(
     pane: &Pane,
     session: Option<&str>,
     text: &str,
+    images: &[std::path::PathBuf],
     acknowledgement: Option<super::SendAcknowledgement>,
 ) -> Result<UnconfirmedSend, WsError> {
     let (entry, bridge) = connected(core, pane.id).ok_or_else(|| {
         WsError::Unavailable("This pi is not connected to the helper. Use Terminal.".into())
     })?;
-    let reply = bridge.request(&bridge::Request::Prompt { text })?;
+    let reply = bridge.request(&bridge::Request::Prompt { text, images })?;
     let session = session.unwrap_or_default().to_owned();
     tokio::spawn(async move {
         let accepted = reply.await.is_ok();
@@ -137,7 +138,19 @@ impl AgentDriver for PiDriver {
             super::terminal::send(pane, text)?;
             return Ok(UnconfirmedSend::SentNotConfirmed);
         }
-        prompt(core, pane, session, text, acknowledgement)
+        prompt(core, pane, session, text, &[], acknowledgement)
+    }
+
+    fn send_images(
+        &self,
+        core: &Core,
+        pane: &Pane,
+        session: Option<&str>,
+        text: &str,
+        images: &[std::path::PathBuf],
+        acknowledgement: Option<super::SendAcknowledgement>,
+    ) -> Result<UnconfirmedSend, WsError> {
+        prompt(core, pane, session, text, images, acknowledgement)
     }
 
     fn stop(

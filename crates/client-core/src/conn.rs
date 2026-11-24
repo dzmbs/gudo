@@ -1044,6 +1044,13 @@ fn control_supported(
             ..
         } => more_features.contains(proto::MoreDaemonFeatures::REPO_ROOT),
         ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::ChatSendImages { .. },
+            ..
+        } => {
+            features.contains(proto::DaemonFeatures::CHAT_SEND)
+                && more_features.contains(proto::MoreDaemonFeatures::CHAT_IMAGES)
+        }
+        ClientCtl::Workspace {
             req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
             ..
         } => features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES),

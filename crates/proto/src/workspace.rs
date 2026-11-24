@@ -402,6 +402,16 @@ pub enum WorkspaceRequest {
     RepoRoot {
         path: String,
     },
+    /// As `ChatSend`, with images the agent sees beside the text, at most four →
+    /// [`WorkspaceResponse::ChatSend`]. Only daemons offering
+    /// [`MoreDaemonFeatures::CHAT_IMAGES`](crate::MoreDaemonFeatures::CHAT_IMAGES) understand it.
+    ChatSendImages {
+        pane_id: PaneId,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+        images: Vec<crate::PngSource>,
+    },
 }
 
 /// The answer to a [`WorkspaceRequest`].

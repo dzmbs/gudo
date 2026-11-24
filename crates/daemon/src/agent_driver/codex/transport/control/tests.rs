@@ -55,7 +55,10 @@ impl Fixture {
                     .control_revision()
                     .unwrap(),
                 self.actor,
-                Action::Send(text.into()),
+                Action::Send {
+                    text: text.into(),
+                    images: Vec::new(),
+                },
                 None,
             )
             .unwrap()
@@ -107,6 +110,35 @@ impl Fixture {
         command.signers.push(crate::mp::Authz::owner(self.actor));
         command
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn attached_images_reach_codex_as_local_images() {
+    let fixture = Fixture::new().await;
+    let source = Arc::downgrade(&fixture.source);
+    let command = fixture
+        .source
+        .command(
+            None,
+            lock(&fixture.raw.entry.pane.agent_input_gate)
+                .control_revision()
+                .unwrap(),
+            fixture.actor,
+            Action::Send {
+                text: "What is wrong here?".into(),
+                images: vec!["/state/chat-images/shot.png".into()],
+            },
+            None,
+        )
+        .unwrap();
+    let request: Value = serde_json::from_str(&serialize(&source, &command).unwrap()).unwrap();
+    assert_eq!(request["method"], "turn/start");
+    assert_eq!(request["params"]["input"][0]["text"], "What is wrong here?");
+    assert_eq!(
+        request["params"]["input"][1],
+        json!({"type": "localImage", "path": "/state/chat-images/shot.png"})
+    );
+    fixture.raw.daemon.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

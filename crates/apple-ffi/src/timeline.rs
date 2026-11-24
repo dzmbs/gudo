@@ -40,6 +40,32 @@ impl DaemonClient {
         .await
     }
 
+    /// `chat_send` with images (PNG or JPEG bytes, at most four) the agent sees beside the text.
+    /// Needs the helper's `CHAT_IMAGES` feature.
+    pub async fn chat_send_images(
+        &self,
+        pane_id: u64,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+        images: Vec<Vec<u8>>,
+    ) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            encoded(
+                &client
+                    .chat_send_images(
+                        proto::PaneId(pane_id),
+                        ticket,
+                        text,
+                        confirmed_revision,
+                        images,
+                    )
+                    .await?,
+            )
+        })
+        .await
+    }
+
     pub async fn chat_interrupt_prepare(&self, pane_id: u64) -> Result<String, WorkspaceError> {
         self.ws_call(|client| async move {
             encoded(

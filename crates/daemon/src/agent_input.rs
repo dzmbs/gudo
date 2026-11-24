@@ -1,6 +1,7 @@
 //! The local exit fence for daemon-launched agent PTYs.
 
 mod chat;
+mod chat_images;
 #[cfg(test)]
 pub(crate) mod chat_tests;
 mod draft;

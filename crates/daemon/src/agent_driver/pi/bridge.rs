@@ -166,7 +166,10 @@ enum Incoming {
 /// What the daemon asks of pi.
 #[derive(Debug)]
 pub(crate) enum Request<'a> {
-    Prompt { text: &'a str },
+    Prompt {
+        text: &'a str,
+        images: &'a [std::path::PathBuf],
+    },
     Abort,
     #[cfg_attr(
         not(test),
@@ -188,7 +191,20 @@ pub(crate) enum Request<'a> {
 impl Request<'_> {
     fn encode(&self, id: u64) -> Value {
         match self {
-            Self::Prompt { text } => json!({"id": id, "type": "prompt", "text": text}),
+            Self::Prompt { text, images } => {
+                let images: Vec<Value> = images
+                    .iter()
+                    .map(|path| {
+                        let media_type =
+                            match path.extension().and_then(|extension| extension.to_str()) {
+                                Some("jpg" | "jpeg") => "image/jpeg",
+                                _ => "image/png",
+                            };
+                        json!({"path": path, "media_type": media_type})
+                    })
+                    .collect();
+                json!({"id": id, "type": "prompt", "text": text, "images": images})
+            }
             Self::Abort => json!({"id": id, "type": "abort"}),
             Self::SetModel { provider, model } => {
                 json!({"id": id, "type": "set_model", "provider": provider, "model": model})

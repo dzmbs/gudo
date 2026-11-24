@@ -344,6 +344,7 @@ pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
         | proto::MoreDaemonFeatures::RUN_AGAIN
         | proto::MoreDaemonFeatures::SPLIT_RATIOS
         | proto::MoreDaemonFeatures::PI_AGENT
+        | proto::MoreDaemonFeatures::CHAT_IMAGES
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {

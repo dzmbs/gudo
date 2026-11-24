@@ -208,6 +208,20 @@ pub(crate) trait AgentDriver: Send + Sync {
         text: &str,
         acknowledgement: Option<SendAcknowledgement>,
     ) -> Result<UnconfirmedSend, WsError>;
+    /// As `send`, with images the agent sees beside the text, as files on the host.
+    fn send_images(
+        &self,
+        _core: &Core,
+        _pane: &Pane,
+        _session: Option<&str>,
+        _text: &str,
+        _images: &[std::path::PathBuf],
+        _acknowledgement: Option<SendAcknowledgement>,
+    ) -> Result<UnconfirmedSend, WsError> {
+        Err(WsError::Unavailable(
+            "Attach images to this agent in Terminal.".into(),
+        ))
+    }
     fn stop(
         &self,
         core: &Core,

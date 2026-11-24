@@ -977,6 +977,48 @@ impl Client {
             WorkspaceResponse::ChatSend(status) => status)
     }
 
+    /// [`chat_send`](Self::chat_send) with images the agent sees beside the text: PNG or JPEG
+    /// bytes, at most four. Images over 1 MiB are uploaded first.
+    pub async fn chat_send_images(
+        &self,
+        pane_id: PaneId,
+        ticket: u64,
+        text: String,
+        confirmed_revision: Option<u64>,
+        images: Vec<Vec<u8>>,
+    ) -> Result<proto::ChatSendStatus, WsError> {
+        crate::chat_send::require(self.inner.daemon_features())?;
+        if !self.daemon_offers(proto::MoreDaemonFeatures::CHAT_IMAGES) {
+            return Err(WsError::Unavailable(
+                "Update the helper to send images from Chat.".into(),
+            ));
+        }
+        let mut sources = Vec::with_capacity(images.len());
+        for bytes in images {
+            sources.push(if bytes.len() <= 1 << 20 {
+                proto::PngSource::Inline(bytes)
+            } else {
+                let session = self
+                    .session_of(pane_id)
+                    .map_err(|error| WsError::Invalid(error.to_string()))?;
+                let image = self
+                    .blob_upload(session, bytes)
+                    .await
+                    .map_err(|error| WsError::Failed(error.to_string()))?;
+                proto::PngSource::Blob(image.hash)
+            });
+        }
+        let request = WorkspaceRequest::ChatSendImages {
+            pane_id,
+            ticket,
+            text,
+            confirmed_revision,
+            images: sources,
+        };
+        expect!(self.workspace_with_timeout(request, Duration::from_secs(30)).await?,
+            WorkspaceResponse::ChatSend(status) => status)
+    }
+
     pub async fn chat_interrupt_prepare(
         &self,
         pane_id: PaneId,

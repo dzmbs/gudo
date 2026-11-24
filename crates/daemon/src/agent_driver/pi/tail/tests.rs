@@ -672,3 +672,30 @@ async fn a_connected_pi_lists_and_changes_its_model_and_thinking_level() {
     changing.await.unwrap();
     pi.daemon.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connected_pi_gets_chat_images_as_files_beside_the_prompt() {
+    let mut fixture = Fixture::new();
+    fixture.reply("Ready.");
+    let pi = pi_pane(&mut fixture, true).await;
+    let pane = pi.entry.pane.id;
+    let mut bridge = FakeBridge::connect(&pi).await;
+    pi.client.timeline_watch_capabilities(pane).await.unwrap();
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR\0\0\0\x02\0\0\0\x03".to_vec();
+    png.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let (ticket, _) = prepared(&pi).await;
+    let client = Arc::clone(&pi.client);
+    let sending = tokio::spawn(async move {
+        client
+            .chat_send_images(pane, ticket, "What is wrong here?".into(), None, vec![png])
+            .await
+    });
+    let request = bridge.reply_to("prompt").await;
+    assert_eq!(request["text"], "What is wrong here?");
+    assert_eq!(request["images"][0]["media_type"], "image/png");
+    let path = std::path::PathBuf::from(request["images"][0]["path"].as_str().unwrap());
+    assert!(path.starts_with(pi.daemon.core.cfg.state_dir.join("chat-images")));
+    assert!(std::fs::read(&path).unwrap().starts_with(b"\x89PNG"));
+    assert_eq!(sending.await.unwrap().unwrap(), ChatSendStatus::Confirmed);
+    pi.daemon.shutdown().await;
+}

@@ -781,7 +781,7 @@ impl Client {
             .session_id)
     }
 
-    fn session_of(&self, _pane: PaneId) -> Result<SessionId, ArtifactError> {
+    pub(crate) fn session_of(&self, _pane: PaneId) -> Result<SessionId, ArtifactError> {
         lock(&self.inner.wanted)
             .session
             .ok_or_else(|| ArtifactError::Invalid("attach to a session first".into()))

@@ -467,5 +467,7 @@ bitset! {
         /// Launches `PaneLaunch::Agent` with `AgentKind::Pi`, reports pi panes as agents (`"pi"`)
         /// and serves their Chat to timeline schema 3 watches.
         PI_AGENT = 4;
+        /// Answers `WorkspaceRequest::ChatSendImages`.
+        CHAT_IMAGES = 5;
     }
 }

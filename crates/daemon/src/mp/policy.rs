@@ -219,7 +219,9 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::TurnDiff { pane_id, .. }
         | R::TimelineToolOutput { pane_id, .. }
         | R::TimelineToolDiff { pane_id, .. } => (Need::Prompt, Target::Pane(*pane_id)),
-        R::ChatPrepare { pane_id } | R::ChatSend { pane_id, .. }
+        R::ChatPrepare { pane_id }
+        | R::ChatSend { pane_id, .. }
+        | R::ChatSendImages { pane_id, .. }
         | R::ChatInterruptPrepare { pane_id } | R::ChatInterrupt { pane_id, .. } => {
             (Need::Prompt, Target::Pane(*pane_id))
         }
