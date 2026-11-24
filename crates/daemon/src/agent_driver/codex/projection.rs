@@ -1,9 +1,12 @@
-use agents::{CodexInput, CodexItem, CodexLiveEvent};
+use agents::{
+    CodexFileChange, CodexFileChangeKind, CodexInput, CodexItem, CodexLiveEvent, CodexPlanStatus,
+    CodexTokenCounts, CodexTokenUsage, CodexWebSearchAction,
+};
 use proto::{
-    AgentKind, OutputHandle, TimelineBody, TimelineCursor, TimelineField, TimelineItem,
-    TimelineNoticeKind, TimelineOp, TimelineOrigin, TimelineOutputRef, TimelineSession,
-    TimelineSnapshot, TimelineTextRole, TimelineTool, TimelineToolKind, TimelineToolStatus,
-    UnixMillis, WsError,
+    AgentKind, FileDiff, OutputHandle, TimelineAttachment, TimelineBody, TimelineCursor,
+    TimelineField, TimelineItem, TimelineNoticeKind, TimelineOp, TimelineOrigin, TimelineOutputRef,
+    TimelinePlanEntry, TimelinePlanStatus, TimelineSession, TimelineSnapshot, TimelineTextRole,
+    TimelineTool, TimelineToolKind, TimelineToolStatus, UnixMillis, WsError,
 };
 #[cfg(test)]
 mod tests;
@@ -19,6 +22,9 @@ pub(super) const LONG_TEXT_BYTES: usize = 64 * 1024;
 const PREVIEW_BYTES: usize = 16 * 1024;
 const TITLE_BYTES: usize = 2 * 1024;
 const INPUT_BYTES: usize = 64 * 1024;
+const NOTICE_BYTES: usize = 2 * 1024;
+/// Files of one change previewed inline; all of them stay in its recorded changes.
+const PREVIEWED_FILES: usize = 64;
 const TOO_LARGE: &str = "This is too large for Chat. Check Terminal.";
 /// Codex sends this context to the model as user messages; its markers, matched as Codex does.
 const INJECTED_CONTEXT_MARKERS: [(&str, &str); 6] = [
@@ -59,6 +65,24 @@ impl Location {
     }
 }
 
+/// How full the model's context window was at its latest request.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the agent-configuration state reads it")
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContextUsage {
+    pub used: u64,
+    pub window: u64,
+}
+
+/// The running turn: when it started and the thread's token totals before it.
+struct ActiveTurn {
+    id: String,
+    started_at: u64,
+    base: Option<CodexTokenCounts>,
+}
+
 pub(super) struct Projection {
     cursor: TimelineCursor,
     session: TimelineSession,
@@ -66,6 +90,10 @@ pub(super) struct Projection {
     order: VecDeque<String>,
     next_item: u64,
     bytes: usize,
+    usage: Option<CodexTokenUsage>,
+    active: Option<ActiveTurn>,
+    /// Turns this projection saw end, live or from history.
+    ended_turns: u64,
 }
 
 impl Projection {
@@ -87,7 +115,22 @@ impl Projection {
             order: VecDeque::new(),
             next_item: 0,
             bytes: 0,
+            usage: None,
+            active: None,
+            ended_turns: 0,
         }
+    }
+
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the agent-configuration state reads it")
+    )]
+    pub fn context(&self) -> Option<ContextUsage> {
+        let usage = self.usage?;
+        Some(ContextUsage {
+            used: usage.last.total_tokens,
+            window: usage.model_context_window?,
+        })
     }
 
     /// Marks where an item too large to observe went past.
@@ -166,46 +209,119 @@ impl Projection {
                 };
                 self.upsert(id, turn, body)
             }
-            CodexLiveEvent::TurnCompleted { turn, outcome } => {
-                let ids: Vec<_> = self
-                    .items
-                    .iter()
-                    .filter(|(_, (_, item))| {
-                        item.turn.as_deref() == Some(&turn)
-                            && matches!(
-                                item.body,
-                                TimelineBody::Assistant {
-                                    streaming: true,
-                                    ..
-                                }
-                            )
-                    })
-                    .map(|(id, _)| id.clone())
-                    .collect();
-                let mut operations = Vec::new();
-                for id in ids {
-                    let (_, item) = self.items.get(&id).ok_or_else(budget)?;
-                    let TimelineBody::Assistant { text, .. } = &item.body else {
-                        continue;
-                    };
-                    operations.extend(self.upsert(
-                        id,
-                        turn.clone(),
-                        TimelineBody::Assistant {
-                            text: text.clone(),
-                            streaming: false,
-                        },
-                    )?);
-                }
-                if let Some(body) = turn_notice(outcome) {
-                    operations.extend(self.upsert(turn_notice_id(&turn), turn, body)?);
-                }
-                Ok(operations)
+            CodexLiveEvent::TurnStarted { turn } => {
+                self.active = Some(ActiveTurn {
+                    id: turn,
+                    started_at: crate::identity::now_millis(),
+                    // A thread with no earlier turn starts from nothing; one resumed from
+                    // history without its counts has no known start.
+                    base: self
+                        .usage
+                        .map(|usage| usage.total)
+                        .or_else(|| (self.ended_turns == 0).then(CodexTokenCounts::default)),
+                });
+                Ok(Vec::new())
             }
-            CodexLiveEvent::TurnStarted { .. }
-            | CodexLiveEvent::ApprovalWaiting { .. }
-            | CodexLiveEvent::ApprovalResolved { .. } => Ok(Vec::new()),
+            CodexLiveEvent::PlanUpdated { turn, plan } => {
+                self.upsert(plan_id(&turn), turn, plan_body(plan))
+            }
+            CodexLiveEvent::TokenUsage { usage, .. } => {
+                self.usage = Some(usage);
+                Ok(Vec::new())
+            }
+            CodexLiveEvent::Error {
+                turn,
+                message,
+                will_retry: true,
+            } => self.upsert(
+                format!("turn:{turn}:retry"),
+                turn,
+                notice(TimelineNoticeKind::Retry, &message),
+            ),
+            CodexLiveEvent::Error { .. } => Ok(Vec::new()),
+            CodexLiveEvent::TurnCompleted {
+                turn,
+                outcome,
+                error,
+                duration_ms,
+            } => self.complete_turn(turn, outcome, error, duration_ms),
+            CodexLiveEvent::ApprovalWaiting { .. } | CodexLiveEvent::ApprovalResolved { .. } => {
+                Ok(Vec::new())
+            }
         }
+    }
+
+    fn complete_turn(
+        &mut self,
+        turn: String,
+        outcome: agents::CodexTurnOutcome,
+        error: Option<String>,
+        duration_ms: Option<u64>,
+    ) -> Result<Vec<TimelineOp>, WsError> {
+        let ids: Vec<_> = self
+            .items
+            .iter()
+            .filter(|(_, (_, item))| {
+                item.turn.as_deref() == Some(&turn)
+                    && matches!(
+                        item.body,
+                        TimelineBody::Assistant {
+                            streaming: true,
+                            ..
+                        }
+                    )
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut operations = Vec::new();
+        for id in ids {
+            let (_, item) = self.items.get(&id).ok_or_else(budget)?;
+            let TimelineBody::Assistant { text, .. } = &item.body else {
+                continue;
+            };
+            operations.extend(self.upsert(
+                id,
+                turn.clone(),
+                TimelineBody::Assistant {
+                    text: text.clone(),
+                    streaming: false,
+                },
+            )?);
+        }
+        if let Some(body) = turn_failure(outcome, error.as_deref()) {
+            operations.extend(self.upsert(turn_notice_id(&turn), turn.clone(), body)?);
+        }
+        self.ended_turns += 1;
+        let active = self.active.take().filter(|active| active.id == turn);
+        let duration_ms = duration_ms.or_else(|| {
+            active
+                .as_ref()
+                .map(|active| crate::identity::now_millis().saturating_sub(active.started_at))
+        });
+        if let Some(duration_ms) = duration_ms {
+            let tokens = self.turn_tokens(active.and_then(|active| active.base));
+            operations.extend(self.upsert(
+                turn_end_id(&turn),
+                turn,
+                TimelineBody::TurnEnd {
+                    duration_ms,
+                    input_tokens: tokens.map(|tokens| tokens.input_tokens),
+                    output_tokens: tokens.map(|tokens| tokens.output_tokens),
+                },
+            )?);
+        }
+        Ok(operations)
+    }
+
+    /// The tokens the turn used: the thread's totals now less those before it began.
+    fn turn_tokens(&self, base: Option<CodexTokenCounts>) -> Option<CodexTokenCounts> {
+        let usage = self.usage?;
+        let base = base?;
+        Some(CodexTokenCounts {
+            input_tokens: usage.total.input_tokens.saturating_sub(base.input_tokens),
+            output_tokens: usage.total.output_tokens.saturating_sub(base.output_tokens),
+            ..CodexTokenCounts::default()
+        })
     }
 
     fn append(
@@ -353,25 +469,60 @@ pub(super) fn turn_notice_id(turn: &str) -> String {
     format!("turn:{turn}:status")
 }
 
-pub(super) fn turn_notice(outcome: agents::CodexTurnOutcome) -> Option<TimelineBody> {
-    let (kind, text) = match outcome {
-        agents::CodexTurnOutcome::Completed => return None,
-        agents::CodexTurnOutcome::Interrupted => {
+pub(super) fn turn_end_id(turn: &str) -> String {
+    format!("turn:{turn}:end")
+}
+
+pub(super) fn plan_id(turn: &str) -> String {
+    format!("turn:{turn}:plan")
+}
+
+pub(super) fn plan_body(plan: Vec<agents::CodexPlanStep>) -> TimelineBody {
+    let entries = plan
+        .into_iter()
+        .map(|step| TimelinePlanEntry {
+            text: head(&step.step, TITLE_BYTES).to_owned(),
+            status: match step.status {
+                CodexPlanStatus::Completed => TimelinePlanStatus::Completed,
+                CodexPlanStatus::InProgress => TimelinePlanStatus::InProgress,
+                CodexPlanStatus::Pending | CodexPlanStatus::Unknown => TimelinePlanStatus::Pending,
+            },
+        })
+        .collect();
+    TimelineBody::Plan { entries }
+}
+
+pub(super) fn notice(kind: TimelineNoticeKind, text: &str) -> TimelineBody {
+    TimelineBody::Notice {
+        kind,
+        text: head(text, NOTICE_BYTES).to_owned(),
+    }
+}
+
+/// The notice of a turn that did not complete, with Codex's own reason when it gave one.
+pub(super) fn turn_failure(
+    outcome: agents::CodexTurnOutcome,
+    error: Option<&str>,
+) -> Option<TimelineBody> {
+    let error = error.map(str::trim).filter(|error| !error.is_empty());
+    let (kind, text) = match (outcome, error) {
+        (agents::CodexTurnOutcome::Completed, _) => return None,
+        (agents::CodexTurnOutcome::Interrupted, _) => {
             (TimelineNoticeKind::Interrupted, "Turn interrupted.")
         }
-        agents::CodexTurnOutcome::Failed => (
+        (agents::CodexTurnOutcome::Failed | agents::CodexTurnOutcome::Unknown, Some(error)) => {
+            (TimelineNoticeKind::Error, error)
+        }
+        (agents::CodexTurnOutcome::Failed, None) => (
             TimelineNoticeKind::Error,
             "Turn failed. Check Terminal for details.",
         ),
-        agents::CodexTurnOutcome::Unknown => (
+        (agents::CodexTurnOutcome::Unknown, None) => (
             TimelineNoticeKind::Error,
             "Turn finished with an unknown status. Check Terminal.",
         ),
     };
-    Some(TimelineBody::Notice {
-        kind,
-        text: text.into(),
-    })
+    Some(notice(kind, text))
 }
 
 fn is_injected_context(content: &[CodexInput]) -> bool {
@@ -380,7 +531,9 @@ fn is_injected_context(content: &[CodexInput]) -> bool {
             CodexInput::Text { text } => INJECTED_CONTEXT_MARKERS
                 .iter()
                 .any(|(start, end)| is_marked(text, start, end)),
-            CodexInput::Unsupported => false,
+            CodexInput::LocalImage { .. } | CodexInput::Image { .. } | CodexInput::Unsupported => {
+                false
+            }
         })
 }
 
@@ -423,17 +576,47 @@ fn budget() -> WsError {
 
 /// The whole text an item's handle pages through: what its preview starts or ends.
 pub(super) fn paged_text(item: &CodexItem) -> Option<String> {
-    match item {
-        CodexItem::UserMessage { content, .. } => Some(user_text(content)),
-        CodexItem::AgentMessage { text, .. } => Some(text.clone()),
+    let text = match item {
+        CodexItem::UserMessage { content, .. } => user_text(content),
+        CodexItem::AgentMessage { text, .. } | CodexItem::Plan { text, .. } => text.clone(),
         CodexItem::Reasoning {
             summary, content, ..
-        } => Some(reasoning_text(summary, content)),
+        } => reasoning_text(summary, content),
         CodexItem::CommandExecution {
             aggregated_output, ..
-        } => aggregated_output.clone(),
-        CodexItem::Unsupported => None,
-    }
+        } => aggregated_output.clone()?,
+        CodexItem::FileChange { changes, .. } => changes_text(changes),
+        CodexItem::McpToolCall { result, error, .. } => {
+            let mut parts: Vec<String> = result.iter().map(|result| result.text()).collect();
+            parts.extend(error.iter().map(|error| error.message.clone()));
+            parts.retain(|part| !part.is_empty());
+            parts.join("\n")
+        }
+        CodexItem::DynamicToolCall { content_items, .. } => {
+            agents::codex_content_text(content_items.as_deref().unwrap_or_default())
+        }
+        CodexItem::CollabAgentToolCall { agents_states, .. } => agents_states
+            .values()
+            .filter_map(|state| state.message.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        CodexItem::WebSearch { .. }
+        | CodexItem::ImageView { .. }
+        | CodexItem::ContextCompaction { .. }
+        | CodexItem::EnteredReviewMode { .. }
+        | CodexItem::ExitedReviewMode { .. }
+        | CodexItem::Unsupported => return None,
+    };
+    Some(text).filter(|text| !text.is_empty())
+}
+
+/// Each changed file's path and its diff, or its whole text for an added or deleted file.
+fn changes_text(changes: &[CodexFileChange]) -> String {
+    changes
+        .iter()
+        .map(|change| format!("{}\n{}", change.path, change.diff))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn user_text(content: &[CodexInput]) -> String {
@@ -441,10 +624,38 @@ fn user_text(content: &[CodexInput]) -> String {
     for part in content {
         match part {
             CodexInput::Text { text: part } => text.push_str(part),
+            CodexInput::LocalImage { .. } | CodexInput::Image { .. } => {}
             CodexInput::Unsupported => text.push_str("\n[Attachment available in Terminal]\n"),
         }
     }
     text
+}
+
+fn attachments(content: &[CodexInput]) -> Vec<TimelineAttachment> {
+    content
+        .iter()
+        .filter_map(|part| match part {
+            CodexInput::LocalImage { path } => Some(TimelineAttachment {
+                path: head(path, TITLE_BYTES).to_owned(),
+                media_type: image_media_type(path).map(str::to_owned),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn image_media_type(path: &str) -> Option<&'static str> {
+    let extension = std::path::Path::new(path)
+        .extension()?
+        .to_str()?
+        .to_ascii_lowercase();
+    Some(match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => return None,
+    })
 }
 
 fn reasoning_text(summary: &[String], content: &[String]) -> String {
@@ -519,20 +730,6 @@ pub(super) fn tool(kind: TimelineToolKind, name: String, title: &str, input: &st
     }
 }
 
-/// The output of `item` in `turn`, previewed by its tail and paged whole by its handle.
-pub(super) fn output_ref(
-    location: Location,
-    turn: &str,
-    item: &str,
-    text: &str,
-) -> Option<TimelineOutputRef> {
-    Some(TimelineOutputRef {
-        handle: location.handle(&item_id(turn, item))?,
-        preview: crate::timeline::output_preview(text),
-        bytes: text.len() as u64,
-    })
-}
-
 /// The timeline id and body Chat shows for `item`; `None` for context Codex injects.
 pub(super) fn body(
     item: CodexItem,
@@ -546,7 +743,15 @@ pub(super) fn body(
                 return None;
             }
             let id = item_id(turn, &id);
-            let body = fitted_text(TimelineTextRole::User, user_text(&content), &id, location);
+            let body = match fitted_text(TimelineTextRole::User, user_text(&content), &id, location)
+            {
+                TimelineBody::User { text, queued, .. } => TimelineBody::User {
+                    text,
+                    attachments: attachments(&content),
+                    queued,
+                },
+                body => body,
+            };
             (id, body)
         }
         CodexItem::AgentMessage { id, text } => {
@@ -620,6 +825,33 @@ pub(super) fn body(
             });
             (id, body)
         }
+        CodexItem::Plan { ref id, .. } => {
+            let id = item_id(turn, id);
+            let text = paged_text(&item).unwrap_or_default();
+            let body = fitted_text(TimelineTextRole::Assistant, text, &id, location);
+            (id, body)
+        }
+        CodexItem::ContextCompaction { id } => (
+            item_id(turn, &id),
+            notice(TimelineNoticeKind::Compacted, "Context compacted"),
+        ),
+        CodexItem::EnteredReviewMode { id, review } => (
+            item_id(turn, &id),
+            notice(
+                TimelineNoticeKind::ModeChanged,
+                &format!("Reviewing {}", review.trim()),
+            ),
+        ),
+        CodexItem::ExitedReviewMode { id, .. } => (
+            item_id(turn, &id),
+            notice(TimelineNoticeKind::ModeChanged, "Review finished"),
+        ),
+        CodexItem::FileChange { .. }
+        | CodexItem::McpToolCall { .. }
+        | CodexItem::DynamicToolCall { .. }
+        | CodexItem::CollabAgentToolCall { .. }
+        | CodexItem::WebSearch { .. }
+        | CodexItem::ImageView { .. } => tool_body(item, turn, location)?,
         CodexItem::Unsupported => (
             item_id(turn, &format!("unsupported:{turn}")),
             TimelineBody::Notice {
@@ -629,4 +861,182 @@ pub(super) fn body(
         ),
     };
     Some(shaped)
+}
+
+/// A tool row: an edit, an MCP or other tool call, another agent, a web search or an image
+/// the agent looked at. Its output handle pages the result, or every file's diff.
+fn tool_body(item: CodexItem, turn: &str, location: Location) -> Option<(String, TimelineBody)> {
+    let id = item_id(turn, item.id()?);
+    let output = paged_text(&item).and_then(|text| {
+        Some(TimelineOutputRef {
+            handle: location.handle(&id)?,
+            preview: crate::timeline::output_preview(&text),
+            bytes: text.len() as u64,
+        })
+    });
+    let tool = match item {
+        CodexItem::FileChange {
+            changes, status, ..
+        } => {
+            let paths: Vec<&str> = changes.iter().map(|change| change.path.as_str()).collect();
+            let writes_only = !changes.is_empty()
+                && changes
+                    .iter()
+                    .all(|change| change.kind == CodexFileChangeKind::Add);
+            let (kind, name) = if writes_only {
+                (TimelineToolKind::Write, "Write")
+            } else {
+                (TimelineToolKind::Edit, "Edit")
+            };
+            TimelineTool {
+                status: tool_status(&status),
+                diff: changes
+                    .iter()
+                    .take(PREVIEWED_FILES)
+                    .flat_map(file_preview)
+                    .collect(),
+                ..tool(kind, name.into(), &paths.join(", "), &paths.join("\n"))
+            }
+        }
+        CodexItem::McpToolCall {
+            server,
+            tool: name,
+            status,
+            arguments,
+            error,
+            duration_ms,
+            ..
+        } => TimelineTool {
+            status: match tool_status(&status) {
+                TimelineToolStatus::Done if error.is_some() => TimelineToolStatus::Failed,
+                status => status,
+            },
+            duration_ms,
+            ..tool(
+                TimelineToolKind::Mcp,
+                format!("mcp__{server}__{name}"),
+                &format!("{server} {name}"),
+                &arguments_text(&arguments),
+            )
+        },
+        CodexItem::DynamicToolCall {
+            tool: name,
+            status,
+            arguments,
+            duration_ms,
+            ..
+        } => TimelineTool {
+            status: tool_status(&status),
+            duration_ms,
+            ..tool(
+                TimelineToolKind::Other,
+                name.clone(),
+                &name,
+                &arguments_text(&arguments),
+            )
+        },
+        CodexItem::CollabAgentToolCall {
+            tool: action,
+            status,
+            prompt,
+            model,
+            ..
+        } => {
+            let prompt = prompt.unwrap_or_default();
+            let summary = prompt
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map_or_else(|| agent_action(&action).to_owned(), str::to_owned);
+            let input = match model {
+                Some(model) if !prompt.is_empty() => format!("{prompt}\n\nModel: {model}"),
+                _ => prompt,
+            };
+            TimelineTool {
+                status: tool_status(&status),
+                ..tool(
+                    TimelineToolKind::Task,
+                    agent_action(&action).into(),
+                    &summary,
+                    &input,
+                )
+            }
+        }
+        CodexItem::WebSearch { query, action, .. } => {
+            let title = match action {
+                Some(CodexWebSearchAction::OpenPage { url: Some(url) }) => url,
+                Some(CodexWebSearchAction::FindInPage {
+                    url: Some(url),
+                    pattern,
+                }) => match pattern {
+                    Some(pattern) => format!("{pattern} in {url}"),
+                    None => url,
+                },
+                _ => query,
+            };
+            tool(
+                TimelineToolKind::WebSearch,
+                "Web search".into(),
+                &title,
+                &title,
+            )
+        }
+        CodexItem::ImageView { path, .. } => {
+            tool(TimelineToolKind::Read, "View image".into(), &path, &path)
+        }
+        _ => return None,
+    };
+    Some((id, TimelineBody::Tool(TimelineTool { output, ..tool })))
+}
+
+fn tool_status(status: &str) -> TimelineToolStatus {
+    match status {
+        "completed" => TimelineToolStatus::Done,
+        "inProgress" | "in_progress" => TimelineToolStatus::Running,
+        "declined" => TimelineToolStatus::Denied,
+        "interrupted" => TimelineToolStatus::Interrupted,
+        _ => TimelineToolStatus::Failed,
+    }
+}
+
+fn agent_action(action: &str) -> &'static str {
+    match action {
+        "spawnAgent" | "spawn_agent" => "Start agent",
+        "sendInput" | "send_input" | "sendMessage" | "send_message" => "Message agent",
+        "resumeAgent" | "resume_agent" => "Resume agent",
+        "wait" => "Wait for agents",
+        "closeAgent" | "close_agent" => "Close agent",
+        "followupTask" | "followup_task" => "Follow-up task",
+        "interruptAgent" | "interrupt_agent" => "Interrupt agent",
+        "listAgents" | "list_agents" => "List agents",
+        _ => "Agent",
+    }
+}
+
+fn arguments_text(arguments: &serde_json::Value) -> String {
+    match arguments {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(text) => text.clone(),
+        arguments => arguments.to_string(),
+    }
+}
+
+/// The bounded inline preview of one file of a change.
+fn file_preview(change: &CodexFileChange) -> Vec<FileDiff> {
+    use crate::timeline::claude_diff::{created_preview, deleted_preview, unified_preview};
+    match &change.kind {
+        CodexFileChangeKind::Add => created_preview(&change.path, &change.diff),
+        CodexFileChangeKind::Delete => deleted_preview(&change.path, &change.diff),
+        CodexFileChangeKind::Update { move_path } => {
+            let path = move_path.as_deref().unwrap_or(&change.path);
+            let mut diff = unified_preview(path, &change.diff);
+            if move_path.is_some() {
+                for file in &mut diff {
+                    file.old_path = Some(change.path.clone());
+                    file.change = proto::FileChange::Renamed;
+                }
+            }
+            diff
+        }
+    }
 }

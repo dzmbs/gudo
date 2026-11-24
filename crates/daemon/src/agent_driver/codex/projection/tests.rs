@@ -338,3 +338,139 @@ fn context_codex_injects_as_user_messages_is_not_a_user_row() {
         [TimelineBody::User { .. }, TimelineBody::User { .. }]
     ));
 }
+
+fn replayed(source: &str) -> Projection {
+    let fixture: serde_json::Value = serde_json::from_str(source).unwrap();
+    let mut connection = agents::CodexBinding::default();
+    connection
+        .observe_tui(&fixture["request"].to_string())
+        .unwrap();
+    connection
+        .observe_server(&fixture["response"].to_string())
+        .unwrap();
+    let binding = connection.binding().unwrap().clone();
+    let mut events = agents::CodexLiveEvents::new(binding.clone());
+    let mut projection = Projection::new(binding.thread_id().into());
+    for frame in fixture["events"].as_array().unwrap() {
+        if let Some(event) = events.observe(&connection, &frame.to_string()).unwrap() {
+            projection.apply(event).unwrap();
+        }
+    }
+    projection
+}
+
+fn tools(bodies: &[TimelineBody]) -> Vec<&TimelineTool> {
+    bodies
+        .iter()
+        .filter_map(|body| match body {
+            TimelineBody::Tool(tool) => Some(tool),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn file_changes_tools_plans_usage_and_failures_are_rows_like_claude_turns() {
+    let projection = replayed(include_str!(
+        "../../../../../agents/tests/fixtures/codex-live/pane-items.json"
+    ));
+    let bodies = bodies(&projection);
+    assert!(matches!(&bodies[0], TimelineBody::Plan { entries }
+        if entries.len() == 3
+            && entries[0].status == proto::TimelinePlanStatus::Completed
+            && entries[1].status == proto::TimelinePlanStatus::InProgress
+            && entries[1].text == "Fix the off-by-one"));
+    let tools = tools(&bodies);
+    let edit = tools[0];
+    assert_eq!(
+        (edit.kind, edit.status),
+        (TimelineToolKind::Edit, TimelineToolStatus::Done)
+    );
+    assert_eq!(edit.diff.len(), 2);
+    assert_eq!(edit.diff[0].path, "/fixture/src/parse.rs");
+    assert_eq!((edit.diff[0].additions, edit.diff[0].deletions), (1, 1));
+    assert_eq!(edit.diff[1].change, proto::FileChange::Added);
+    assert!(edit.output.is_some());
+    let mcp = tools[1];
+    assert_eq!(mcp.kind, TimelineToolKind::Mcp);
+    assert_eq!(mcp.name, "mcp__docs__search");
+    assert_eq!(mcp.duration_ms, Some(42));
+    assert!(mcp.input.contains("parser"));
+    assert_eq!(
+        mcp.output.as_ref().map(|output| output.preview.as_str()),
+        Some("parse.rs: the parser")
+    );
+    assert_eq!(
+        (tools[2].kind, tools[2].title.as_str()),
+        (TimelineToolKind::WebSearch, "rust slice end")
+    );
+    assert_eq!(
+        (tools[3].kind, tools[3].title.as_str()),
+        (TimelineToolKind::Read, "/fixture/screenshot.png")
+    );
+    let agent = tools[4];
+    assert_eq!(agent.kind, TimelineToolKind::Task);
+    assert_eq!(agent.title, "Check the tests");
+    assert_eq!(
+        agent.output.as_ref().map(|output| output.preview.as_str()),
+        Some("All tests pass.")
+    );
+    assert!(bodies.iter().any(|body| matches!(
+        body,
+        TimelineBody::Notice {
+            kind: TimelineNoticeKind::Compacted,
+            ..
+        }
+    )));
+    assert!(bodies.iter().any(|body| matches!(body,
+        TimelineBody::Notice { kind: TimelineNoticeKind::Retry, text } if text == "Reconnecting... 1/5")));
+    assert!(bodies.iter().any(|body| matches!(body,
+        TimelineBody::Notice { kind: TimelineNoticeKind::Error, text }
+            if text == "Usage limit reached. Try again later.")));
+    assert!(matches!(
+        bodies.last(),
+        Some(TimelineBody::TurnEnd {
+            duration_ms: 3150,
+            input_tokens: Some(12000),
+            output_tokens: Some(900),
+        })
+    ));
+    assert!(bodies.iter().all(|body| !matches!(body,
+        TimelineBody::Notice { text, .. } if text.contains("available in Terminal"))));
+    assert_eq!(
+        projection.context(),
+        Some(ContextUsage {
+            used: 6400,
+            window: 258_400
+        })
+    );
+}
+
+#[test]
+fn a_users_attached_images_are_attachments_not_terminal_markers() {
+    let mut projection = Projection::new("thread".into());
+    projection
+        .apply(CodexLiveEvent::Item {
+            turn: "turn".into(),
+            completed: true,
+            item: CodexItem::UserMessage {
+                id: "user".into(),
+                content: vec![
+                    CodexInput::Text {
+                        text: "What is wrong here?".into(),
+                    },
+                    CodexInput::LocalImage {
+                        path: "/host/send/shot@1.png".into(),
+                    },
+                ],
+            },
+        })
+        .unwrap();
+    assert!(
+        matches!(&bodies(&projection)[0], TimelineBody::User { text, attachments, .. }
+        if text == "What is wrong here?"
+            && attachments.len() == 1
+            && attachments[0].path == "/host/send/shot@1.png"
+            && attachments[0].media_type.as_deref() == Some("image/png"))
+    );
+}

@@ -177,7 +177,11 @@ fn parent(path: &Path) -> Result<&Path, WsError> {
 
 impl AgentSession for RolloutTail {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::READ | self.controls
+        AgentCapabilities::READ
+            | AgentCapabilities::DIFFS
+            | AgentCapabilities::THINKING
+            | AgentCapabilities::PLANS
+            | self.controls
     }
 
     fn cursor(&self) -> TimelineCursor {
@@ -297,9 +301,20 @@ impl AgentSession for RolloutTail {
                         .text(&handle, offset, length)
                         .map(WorkspaceResponse::TimelineOutput)
                 }
-                TimelineRead::ToolDiff { .. } => Err(WsError::Unavailable(
-                    "Chat does not show Codex file changes yet. Open Terminal to see them.".into(),
-                )),
+                TimelineRead::ToolDiff { handle } => {
+                    let handle = handle
+                        .parse::<proto::OutputHandle>()
+                        .map_err(|error| WsError::Invalid(error.to_string()))?;
+                    if handle.epoch() != self.cursor.epoch {
+                        return Err(WsError::Conflict(
+                            "the Codex session changed; reopen Chat".into(),
+                        ));
+                    }
+                    reading
+                        .rollout
+                        .diff(&handle)
+                        .map(WorkspaceResponse::TimelineDiff)
+                }
             }
         });
         Box::pin(std::future::ready(response))

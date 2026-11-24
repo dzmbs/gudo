@@ -55,6 +55,115 @@ pub(super) fn recorded_diff(result: &RichResult) -> Result<Vec<FileDiff>, WsErro
     }])
 }
 
+/// One file's complete recorded change: a unified diff of an update, or a file's whole text
+/// when it was added or deleted. All files of one change share the value allowance.
+pub(crate) enum RecordedFile<'a> {
+    Added {
+        path: &'a str,
+        content: &'a str,
+    },
+    Deleted {
+        path: &'a str,
+        content: &'a str,
+    },
+    Updated {
+        path: &'a str,
+        old_path: Option<&'a str>,
+        unified: &'a str,
+    },
+}
+
+pub(crate) fn recorded_files(files: &[RecordedFile<'_>]) -> Result<Vec<FileDiff>, WsError> {
+    let mut builder = Builder::default();
+    files
+        .iter()
+        .map(|file| {
+            let (additions, deletions) = (builder.additions, builder.deletions);
+            let (path, old_path, change, hunks) = match file {
+                RecordedFile::Added { path, content } => {
+                    (*path, None, FileChange::Added, builder.created(content)?)
+                }
+                RecordedFile::Deleted { path, content } => {
+                    let mut hunks = builder.created(content)?;
+                    for hunk in &mut hunks {
+                        (hunk.old_start, hunk.new_start) = (hunk.new_start, 0);
+                        hunk.old_lines = std::mem::take(&mut hunk.new_lines);
+                        for line in &mut hunk.lines {
+                            if line.kind == LineKind::Added {
+                                line.kind = LineKind::Removed;
+                            }
+                        }
+                    }
+                    builder.deletions += builder.additions - additions;
+                    builder.additions = additions;
+                    (*path, None, FileChange::Deleted, hunks)
+                }
+                RecordedFile::Updated {
+                    path,
+                    old_path,
+                    unified,
+                } => {
+                    let hunks = patches(unified)?
+                        .iter()
+                        .map(|patch| builder.hunk(patch))
+                        .collect::<Result<_, _>>()?;
+                    let change = if old_path.is_some() {
+                        FileChange::Renamed
+                    } else {
+                        FileChange::Modified
+                    };
+                    (*path, *old_path, change, hunks)
+                }
+            };
+            builder.charge(path.len().saturating_mul(2).saturating_add(256))?;
+            Ok(FileDiff {
+                path: path.to_owned(),
+                old_path: old_path.map(str::to_owned),
+                change,
+                binary: false,
+                additions: builder.additions - additions,
+                deletions: builder.deletions - deletions,
+                hunks,
+                hunks_omitted: false,
+            })
+        })
+        .collect()
+}
+
+/// The hunks of a unified diff; file headers before the first hunk are passed over.
+fn patches(unified: &str) -> Result<Vec<Patch>, WsError> {
+    let mut patches: Vec<Patch> = Vec::new();
+    for line in unified.lines() {
+        if let Some(ranges) = line
+            .strip_prefix("@@ -")
+            .and_then(|rest| rest.split_once(" @@"))
+        {
+            let (old, new) = ranges.0.split_once(" +").ok_or_else(unavailable)?;
+            let range = |range: &str| -> Option<(u32, u32)> {
+                match range.split_once(',') {
+                    Some((start, lines)) => Some((start.parse().ok()?, lines.parse().ok()?)),
+                    None => Some((range.parse().ok()?, 1)),
+                }
+            };
+            let (old_start, old_lines) = range(old).ok_or_else(unavailable)?;
+            let (new_start, new_lines) = range(new).ok_or_else(unavailable)?;
+            patches.push(Patch {
+                lines: Vec::new(),
+                old_start,
+                old_lines,
+                new_start,
+                new_lines,
+            });
+        } else if let Some(patch) = patches.last_mut() {
+            patch.lines.push(line.to_owned());
+        }
+    }
+    if patches.is_empty() {
+        return Err(unavailable());
+    }
+    Ok(patches)
+}
+
 impl Builder {
     fn charge(&mut self, bytes: usize) -> Result<(), WsError> {
         if bytes > VALUE_BYTES_LIMIT - self.bytes {
@@ -130,11 +239,12 @@ impl Builder {
             return Ok(Vec::new());
         }
         self.begin_hunk()?;
+        let before = self.additions;
         let mut lines = content
             .split_terminator('\n')
             .map(|text| self.line(LineKind::Added, text))
             .collect::<Result<Vec<_>, _>>()?;
-        let new_lines = self.additions;
+        let new_lines = self.additions - before;
         if !content.ends_with('\n') {
             lines.push(self.line(LineKind::NoNewline, "")?);
         }

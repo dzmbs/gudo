@@ -246,13 +246,17 @@ fn context_codex_injects_is_not_a_user_row_and_status_notices_match_the_live_one
             "turn:other:status",
         ]
     );
+    assert!(
+        matches!(&page.items[0].body, TimelineBody::User { attachments, .. }
+        if attachments.len() == 1 && attachments[0].path == "/tmp/shot.png")
+    );
     assert_eq!(
         texts(&page.items),
         [
-            "What changed?\n[Attachment available in Terminal]\n".to_owned(),
+            "What changed?".to_owned(),
             "notice: Additional agent details are available in Terminal.".into(),
             "notice: Turn interrupted.".into(),
-            "notice: Turn failed. Check Terminal for details.".into(),
+            "notice: boom".into(),
         ]
     );
     assert_eq!(page.items[0].origin, proto::TimelineOrigin::Terminal);
@@ -368,6 +372,92 @@ fn tool_calls_mcp_edits_images_and_searches_are_tool_rows() {
         format!("/p/README.md\nhello\n\n/p/src/main.rs\n{diff}")
     );
     assert!(tools[3].output.is_none() && tools[4].output.is_none());
+    assert_eq!(tools[2].diff.len(), 2);
+    assert_eq!(tools[2].diff[0].change, proto::FileChange::Added);
+    let recorded = rollout
+        .diff(&tools[2].output.as_ref().unwrap().handle)
+        .unwrap();
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(
+        (recorded[0].path.as_str(), recorded[0].additions),
+        ("/p/README.md", 1)
+    );
+    assert_eq!(
+        (
+            recorded[1].change,
+            recorded[1].additions,
+            recorded[1].deletions
+        ),
+        (proto::FileChange::Modified, 1, 1)
+    );
+    assert!(
+        rollout
+            .diff(&tools[0].output.as_ref().unwrap().handle)
+            .is_err()
+    );
+    assert_eq!(
+        (tools[2].diff[1].additions, tools[2].diff[1].deletions),
+        (1, 1)
+    );
+}
+
+#[test]
+fn history_shows_plans_agents_compaction_and_turn_endings_like_the_live_stream() {
+    let fixture = Fixture::new();
+    fixture.append(&json!({
+        "timestamp": "2026-11-08T19:39:00.000Z",
+        "type": "response_item",
+        "payload": {
+            "type": "function_call", "name": "update_plan", "call_id": "call_plan",
+            "arguments": "{\"plan\":[{\"step\":\"Read\",\"status\":\"completed\"},{\"step\":\"Fix\",\"status\":\"in_progress\"}]}",
+        },
+    }));
+    fixture.item(
+        "turn",
+        json!({
+            "type": "CollabAgentToolCall", "id": "spawn", "tool": "spawn_agent",
+            "status": "completed", "sender_thread_id": THREAD,
+            "receiver_thread_ids": ["01a1bcab-6000-7000-8000-000000000001"],
+            "prompt": "Check the tests", "model": "gpt-5.5",
+            "agents_states": {"01a1bcab-6000-7000-8000-000000000001": {"completed": "All pass."}},
+        }),
+    );
+    fixture.item(
+        "turn",
+        json!({
+            "type": "WebSearch", "id": "hosted", "query": "",
+            "action": {"type": "open_page", "url": "https://example.com/notes"},
+        }),
+    );
+    fixture.item(
+        "turn",
+        json!({"type": "ContextCompaction", "id": "compact"}),
+    );
+    fixture.append(&json!({"type": "event_msg", "payload": {
+        "type": "task_complete", "turn_id": "turn", "duration_ms": 3150,
+        "error": {"message": "Usage limit reached."}, "completed_at": 1_794_166_802_i64,
+    }}));
+    let rollout = fixture.open();
+    let page = rollout.page(rollout.end().unwrap(), 100, EPOCH).unwrap();
+    assert!(matches!(&page.items[0].body, TimelineBody::Plan { entries }
+        if entries.len() == 2 && entries[1].status == proto::TimelinePlanStatus::InProgress));
+    assert!(matches!(&page.items[1].body, TimelineBody::Tool(tool)
+        if tool.kind == proto::TimelineToolKind::Task && tool.title == "Check the tests"
+            && tool.output.as_ref().is_some_and(|output| output.preview == "All pass.")));
+    assert!(matches!(&page.items[2].body, TimelineBody::Tool(tool)
+        if tool.kind == proto::TimelineToolKind::WebSearch && tool.title == "https://example.com/notes"));
+    assert_eq!(
+        texts(&page.items[3..5]),
+        ["notice: Context compacted", "notice: Usage limit reached."]
+    );
+    assert!(matches!(
+        page.items[5].body,
+        TimelineBody::TurnEnd {
+            duration_ms: 3150,
+            ..
+        }
+    ));
+    assert_eq!(page.items.len(), 6);
 }
 
 #[test]

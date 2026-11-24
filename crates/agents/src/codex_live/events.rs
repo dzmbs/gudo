@@ -6,9 +6,12 @@ use super::{CodexBinding, CodexBindingError, CodexThreadBinding, RpcId, parse, v
 
 const REMEMBERED_TURNS: usize = 500;
 const TURN_APPROVALS: usize = 256;
-const EVENT_METHODS: [&str; 8] = [
+const EVENT_METHODS: [&str; 11] = [
     "turn/started",
     "turn/completed",
+    "turn/plan/updated",
+    "thread/tokenUsage/updated",
+    "error",
     "item/agentMessage/delta",
     "item/started",
     "item/completed",
@@ -42,6 +45,22 @@ pub enum CodexLiveEvent {
     TurnCompleted {
         turn: String,
         outcome: CodexTurnOutcome,
+        error: Option<String>,
+        duration_ms: Option<u64>,
+    },
+    PlanUpdated {
+        turn: String,
+        plan: Vec<CodexPlanStep>,
+    },
+    TokenUsage {
+        turn: String,
+        usage: CodexTokenUsage,
+    },
+    /// A failure Codex reported; with `will_retry` the turn goes on.
+    Error {
+        turn: String,
+        message: String,
+        will_retry: bool,
     },
     AssistantDelta {
         turn: String,
@@ -66,6 +85,47 @@ pub enum CodexLiveEvent {
         item: String,
         kind: CodexApprovalKind,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CodexPlanStep {
+    pub step: String,
+    pub status: CodexPlanStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CodexPlanStatus {
+    Pending,
+    #[serde(alias = "in_progress")]
+    InProgress,
+    Completed,
+    #[serde(other)]
+    Unknown,
+}
+
+/// The thread's token counts: `total` since it began, `last` for the latest model request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTokenUsage {
+    pub total: CodexTokenCounts,
+    pub last: CodexTokenCounts,
+    pub model_context_window: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexTokenCounts {
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_output_tokens: u64,
 }
 
 /// Launch-owned event cursor. Start before the first turn; late joins require snapshot hydration.
@@ -207,6 +267,25 @@ impl CodexLiveEvents {
         match event {
             Event::TurnStarted { params } => self.started(params),
             Event::TurnCompleted { params } => self.completed(params),
+            Event::PlanUpdated { params } => Ok(self
+                .is_current(&params.thread_id, &params.turn_id)
+                .then_some(CodexLiveEvent::PlanUpdated {
+                    turn: params.turn_id,
+                    plan: params.plan,
+                })),
+            Event::TokenUsage { params } => Ok(self
+                .is_current(&params.thread_id, &params.turn_id)
+                .then_some(CodexLiveEvent::TokenUsage {
+                    turn: params.turn_id,
+                    usage: params.token_usage,
+                })),
+            Event::Error { params } => Ok(self
+                .is_current(&params.thread_id, &params.turn_id)
+                .then_some(CodexLiveEvent::Error {
+                    turn: params.turn_id,
+                    message: params.error.message,
+                    will_retry: params.will_retry,
+                })),
             Event::AssistantDelta { params } => self.delta(params),
             Event::ItemStarted { params } => self.item(params, false),
             Event::ItemCompleted { params } => self.item(params, true),
@@ -257,6 +336,8 @@ impl CodexLiveEvents {
         Ok(Some(CodexLiveEvent::TurnCompleted {
             turn: params.turn.id,
             outcome,
+            error: params.turn.error.map(|error| error.message),
+            duration_ms: params.turn.duration_ms,
         }))
     }
 
@@ -280,12 +361,8 @@ impl CodexLiveEvents {
         if !self.is_current(&params.thread_id, &params.turn_id) {
             return Ok(None);
         }
-        match &params.item {
-            super::CodexItem::UserMessage { id, .. }
-            | super::CodexItem::AgentMessage { id, .. }
-            | super::CodexItem::CommandExecution { id, .. }
-            | super::CodexItem::Reasoning { id, .. } => validate_id(id)?,
-            super::CodexItem::Unsupported => {}
+        if let Some(id) = params.item.id() {
+            validate_id(id)?;
         }
         Ok(Some(CodexLiveEvent::Item {
             turn: params.turn_id,
@@ -391,6 +468,12 @@ enum Event {
     TurnStarted { params: TurnParams },
     #[serde(rename = "turn/completed")]
     TurnCompleted { params: TurnParams },
+    #[serde(rename = "turn/plan/updated")]
+    PlanUpdated { params: PlanParams },
+    #[serde(rename = "thread/tokenUsage/updated")]
+    TokenUsage { params: UsageParams },
+    #[serde(rename = "error")]
+    Error { params: ErrorParams },
     #[serde(rename = "item/agentMessage/delta")]
     AssistantDelta { params: DeltaParams },
     #[serde(rename = "item/started")]
@@ -420,9 +503,43 @@ struct TurnParams {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Turn {
     id: String,
     status: TurnStatus,
+    error: Option<TurnError>,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct TurnError {
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanParams {
+    thread_id: String,
+    turn_id: String,
+    plan: Vec<CodexPlanStep>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageParams {
+    thread_id: String,
+    turn_id: String,
+    token_usage: CodexTokenUsage,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ErrorParams {
+    thread_id: String,
+    turn_id: String,
+    error: TurnError,
+    #[serde(default)]
+    will_retry: bool,
 }
 
 #[derive(Deserialize, PartialEq, Eq)]

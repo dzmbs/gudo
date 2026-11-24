@@ -80,6 +80,39 @@ pub(crate) fn unified_preview(path: &str, unified: &str) -> Vec<FileDiff> {
     }]
 }
 
+/// The bounded inline preview of a file created with `content`.
+pub(crate) fn created_preview(path: &str, content: &str) -> Vec<FileDiff> {
+    let mut preview = Preview::default();
+    let hunk = preview.created(content);
+    vec![FileDiff {
+        path: path.to_owned(),
+        old_path: None,
+        change: FileChange::Added,
+        binary: false,
+        additions: preview.additions,
+        deletions: 0,
+        hunks: vec![hunk],
+        hunks_omitted: preview.omitted,
+    }]
+}
+
+/// The bounded inline preview of a file deleted while it held `content`.
+pub(crate) fn deleted_preview(path: &str, content: &str) -> Vec<FileDiff> {
+    let mut files = created_preview(path, content);
+    for file in &mut files {
+        file.change = FileChange::Deleted;
+        file.deletions = std::mem::take(&mut file.additions);
+        for hunk in &mut file.hunks {
+            (hunk.old_start, hunk.new_start) = (hunk.new_start, 0);
+            hunk.old_lines = std::mem::take(&mut hunk.new_lines);
+            for line in &mut hunk.lines {
+                line.kind = LineKind::Removed;
+            }
+        }
+    }
+    files
+}
+
 /// `@@ -a[,b] +c[,d] @@`.
 fn hunk_header(line: &str) -> Option<Patch> {
     let ranges = line.strip_prefix("@@ -")?.split_once(" @@")?.0;

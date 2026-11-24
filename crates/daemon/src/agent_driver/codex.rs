@@ -118,7 +118,15 @@ fn skipped_item(outline: &str, thread: &str) -> Option<(String, String)> {
         Skipped::Item { params } => {
             let is_shown = matches!(
                 params.item.kind.as_str(),
-                "userMessage" | "agentMessage" | "commandExecution" | "reasoning"
+                "userMessage"
+                    | "agentMessage"
+                    | "commandExecution"
+                    | "reasoning"
+                    | "fileChange"
+                    | "mcpToolCall"
+                    | "dynamicToolCall"
+                    | "collabAgentToolCall"
+                    | "plan"
             );
             is_shown.then_some((params.thread_id, params.turn_id, params.item.id))?
         }
@@ -371,7 +379,11 @@ impl State {
 
 impl Live {
     pub(crate) fn capabilities(&self) -> AgentCapabilities {
-        let read = AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS;
+        let read = AgentCapabilities::READ
+            | AgentCapabilities::STREAMING_DELTAS
+            | AgentCapabilities::DIFFS
+            | AgentCapabilities::THINKING
+            | AgentCapabilities::PLANS;
         if lock(&self.controls).is_some()
             && lock(&self.state).is_ready()
             && !self.fault.load(std::sync::atomic::Ordering::Acquire)
@@ -683,9 +695,17 @@ impl Session {
                     .text(&handle, offset, length)
                     .map(WorkspaceResponse::TimelineOutput)
             }
-            TimelineRead::ToolDiff { .. } => Err(WsError::Unavailable(
-                "Chat does not show Codex file changes yet. Open Terminal to see them.".into(),
-            )),
+            TimelineRead::ToolDiff { handle } => {
+                let handle = handle
+                    .parse::<proto::OutputHandle>()
+                    .map_err(|error| WsError::Invalid(error.to_string()))?;
+                if handle.epoch() != cursor.epoch {
+                    return Err(WsError::Conflict(
+                        "the Codex session changed; reopen Chat".into(),
+                    ));
+                }
+                rollout?.diff(&handle).map(WorkspaceResponse::TimelineDiff)
+            }
         }
     }
 }

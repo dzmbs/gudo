@@ -2,21 +2,19 @@
 //! from it, and long text and command output read back from it in full.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use agents::{CodexInput, CodexItem, CodexTurnOutcome};
-use proto::{
-    OutputHandle, TimelineBody, TimelineItem, TimelineTool, TimelineToolKind, TimelineToolOutput,
-    TimelineToolStatus, UnixMillis, WsError,
-};
+use proto::{OutputHandle, TimelineBody, TimelineItem, TimelineToolOutput, UnixMillis, WsError};
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 
 use super::projection::{self, Location};
+use crate::timeline::complete_diff::{RecordedFile, recorded_files};
 use crate::timeline::record_stream::{RECORD_BYTES_LIMIT, RecordStream};
 
 #[cfg(test)]
@@ -51,7 +49,7 @@ pub(super) struct Appended {
 }
 
 enum Record {
-    Item(Box<TimelineItem>),
+    Items(Vec<TimelineItem>),
     RolledBack,
     Other,
 }
@@ -100,7 +98,9 @@ enum Event {
     #[serde(rename = "task_complete", alias = "turn_complete")]
     TurnComplete {
         turn_id: String,
-        error: Option<IgnoredAny>,
+        error: Option<RecordedError>,
+        duration_ms: Option<u64>,
+        completed_at: Option<i64>,
     },
     TurnAborted {
         turn_id: Option<String>,
@@ -108,6 +108,36 @@ enum Event {
     ThreadRolledBack {},
     #[serde(other)]
     Other,
+}
+
+#[derive(Deserialize)]
+struct RecordedError {
+    #[serde(default)]
+    message: String,
+}
+
+/// A model request the rollout keeps beside its items; only plan updates are read from them.
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ResponseItem {
+    FunctionCall {
+        name: String,
+        arguments: String,
+        call_id: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct ResponseLine {
+    timestamp: Option<String>,
+    payload: ResponseItem,
+}
+
+#[derive(Deserialize)]
+struct PlanArguments {
+    plan: Vec<agents::CodexPlanStep>,
 }
 
 /// An item as Codex persists it, before the app-server reshapes it for its stream.
@@ -121,6 +151,10 @@ enum RecordedItem {
     AgentMessage {
         id: String,
         content: Vec<AgentContent>,
+    },
+    Plan {
+        id: String,
+        text: String,
     },
     Reasoning {
         id: String,
@@ -144,48 +178,78 @@ enum RecordedItem {
         #[serde(default)]
         arguments: serde_json::Value,
         status: String,
-        result: Option<McpResult>,
+        result: Option<agents::CodexToolResult>,
         error: Option<serde_json::Value>,
         duration: Option<RecordedDuration>,
     },
+    DynamicToolCall {
+        id: String,
+        tool: String,
+        #[serde(default)]
+        arguments: serde_json::Value,
+        status: String,
+        content_items: Option<Vec<serde_json::Value>>,
+        error: Option<String>,
+    },
+    CollabAgentToolCall {
+        id: String,
+        tool: String,
+        status: String,
+        #[serde(default)]
+        receiver_thread_ids: Vec<String>,
+        prompt: Option<String>,
+        model: Option<String>,
+        #[serde(default)]
+        agents_states: BTreeMap<String, serde_json::Value>,
+    },
     FileChange {
         id: String,
-        changes: std::collections::BTreeMap<String, RecordedChange>,
+        changes: BTreeMap<String, RecordedChange>,
         status: String,
     },
     ImageView {
         id: String,
         path: String,
     },
+    WebSearch {
+        id: String,
+        #[serde(default)]
+        query: String,
+        action: Option<agents::CodexWebSearchAction>,
+    },
     /// Web search records its query; other extensions stay Terminal-only.
     Extension {
         id: String,
         query: Option<String>,
     },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct McpResult {
-    #[serde(default)]
-    content: Vec<McpContent>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum McpContent {
-    Text {
-        text: String,
+    ContextCompaction {
+        id: String,
+    },
+    EnteredReviewMode {
+        id: String,
+        #[serde(default)]
+        user_facing_hint: String,
+    },
+    ExitedReviewMode {
+        id: String,
     },
     #[serde(other)]
     Other,
 }
 
 #[derive(Deserialize)]
-struct RecordedChange {
-    unified_diff: Option<String>,
-    content: Option<String>,
+#[serde(tag = "type", rename_all = "snake_case")]
+enum RecordedChange {
+    Add {
+        content: String,
+    },
+    Delete {
+        content: String,
+    },
+    Update {
+        unified_diff: String,
+        move_path: Option<String>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -209,127 +273,21 @@ impl RecordedItem {
         match self {
             Self::UserMessage { id, .. }
             | Self::AgentMessage { id, .. }
+            | Self::Plan { id, .. }
             | Self::Reasoning { id, .. }
             | Self::CommandExecution { id, .. }
             | Self::McpToolCall { id, .. }
+            | Self::DynamicToolCall { id, .. }
+            | Self::CollabAgentToolCall { id, .. }
             | Self::FileChange { id, .. }
             | Self::ImageView { id, .. }
-            | Self::Extension { id, .. } => Some(id),
+            | Self::WebSearch { id, .. }
+            | Self::Extension { id, .. }
+            | Self::ContextCompaction { id }
+            | Self::EnteredReviewMode { id, .. }
+            | Self::ExitedReviewMode { id } => Some(id),
             Self::Other => None,
         }
-    }
-
-    /// The row Chat shows for the item. Tools only the rollout records are shaped here; the
-    /// rest go through the live shape, so both sources show them the same way.
-    fn into_body(self, turn: &str, location: Location) -> Option<(String, TimelineBody)> {
-        let output = self
-            .text()
-            .and_then(|text| projection::output_ref(location, turn, self.id()?, &text));
-        let (id, tool) = match &self {
-            Self::McpToolCall {
-                id,
-                server,
-                tool,
-                arguments,
-                status,
-                error,
-                duration,
-                ..
-            } => (
-                id,
-                TimelineTool {
-                    status: match status.as_str() {
-                        "completed" if error.is_none() => TimelineToolStatus::Done,
-                        "inProgress" | "in_progress" => TimelineToolStatus::Running,
-                        _ => TimelineToolStatus::Failed,
-                    },
-                    duration_ms: duration.as_ref().map(RecordedDuration::millis),
-                    output,
-                    ..projection::tool(
-                        TimelineToolKind::Mcp,
-                        format!("mcp__{server}__{tool}"),
-                        &format!("{server} {tool}"),
-                        &arguments.to_string(),
-                    )
-                },
-            ),
-            Self::FileChange {
-                id,
-                changes,
-                status,
-            } => {
-                let paths: Vec<&str> = changes.keys().map(String::as_str).collect();
-                let tool = TimelineTool {
-                    status: match status.as_str() {
-                        "completed" => TimelineToolStatus::Done,
-                        "declined" => TimelineToolStatus::Denied,
-                        "inProgress" | "in_progress" => TimelineToolStatus::Running,
-                        _ => TimelineToolStatus::Failed,
-                    },
-                    output,
-                    ..projection::tool(
-                        TimelineToolKind::Edit,
-                        "Edit".into(),
-                        &paths.join(", "),
-                        &paths.join("\n"),
-                    )
-                };
-                (id, tool)
-            }
-            Self::ImageView { id, path } => (
-                id,
-                projection::tool(TimelineToolKind::Read, "View image".into(), path, path),
-            ),
-            Self::Extension {
-                id,
-                query: Some(query),
-            } => (
-                id,
-                projection::tool(
-                    TimelineToolKind::WebSearch,
-                    "Web search".into(),
-                    query,
-                    query,
-                ),
-            ),
-            _ => return projection::body(self.into_live(), true, turn, location),
-        };
-        Some((projection::item_id(turn, id), TimelineBody::Tool(tool)))
-    }
-
-    /// The whole text behind a tool row only the rollout records: a result or the edits.
-    fn text(&self) -> Option<String> {
-        let text = match self {
-            Self::McpToolCall { result, error, .. } => {
-                let mut parts: Vec<&str> = result
-                    .iter()
-                    .flat_map(|result| &result.content)
-                    .filter_map(|content| match content {
-                        McpContent::Text { text } => Some(text.as_str()),
-                        McpContent::Other => None,
-                    })
-                    .collect();
-                let message = error.as_ref().map(|error| match error {
-                    serde_json::Value::String(message) => message.clone(),
-                    error => error
-                        .get("message")
-                        .and_then(serde_json::Value::as_str)
-                        .map_or_else(|| error.to_string(), str::to_owned),
-                });
-                parts.extend(message.as_deref());
-                parts.join("\n")
-            }
-            Self::FileChange { changes, .. } => changes
-                .iter()
-                .filter_map(|(path, change)| {
-                    let body = change.unified_diff.as_ref().or(change.content.as_ref())?;
-                    Some(format!("{path}\n{body}"))
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => return None,
-        };
-        Some(text).filter(|text| !text.is_empty())
     }
 
     /// The item as the app-server streams it, so both sources shape it the same way.
@@ -346,6 +304,7 @@ impl RecordedItem {
                     })
                     .collect(),
             },
+            Self::Plan { id, text } => CodexItem::Plan { id, text },
             Self::Reasoning {
                 id,
                 summary_text,
@@ -373,12 +332,148 @@ impl RecordedItem {
                 exit_code,
                 duration_ms: duration.as_ref().map(RecordedDuration::millis),
             },
-            Self::McpToolCall { .. }
-            | Self::FileChange { .. }
-            | Self::ImageView { .. }
-            | Self::Extension { .. }
-            | Self::Other => CodexItem::Unsupported,
+            Self::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                status,
+                result,
+                error,
+                duration,
+            } => CodexItem::McpToolCall {
+                id,
+                server,
+                tool,
+                status,
+                arguments,
+                result,
+                error: error.map(|error| agents::CodexToolError {
+                    message: match error {
+                        serde_json::Value::String(message) => message,
+                        error => error
+                            .get("message")
+                            .and_then(serde_json::Value::as_str)
+                            .map_or_else(|| error.to_string(), str::to_owned),
+                    },
+                }),
+                duration_ms: duration.as_ref().map(RecordedDuration::millis),
+            },
+            Self::DynamicToolCall {
+                id,
+                tool,
+                arguments,
+                status,
+                content_items,
+                error,
+            } => CodexItem::DynamicToolCall {
+                id,
+                tool,
+                status: if error.is_some() {
+                    "failed".into()
+                } else {
+                    status
+                },
+                arguments,
+                content_items,
+                duration_ms: None,
+            },
+            Self::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                receiver_thread_ids,
+                prompt,
+                model,
+                agents_states,
+            } => CodexItem::CollabAgentToolCall {
+                id,
+                tool,
+                status,
+                receiver_thread_ids,
+                prompt,
+                model,
+                agents_states: agents_states
+                    .into_iter()
+                    .map(|(thread, state)| (thread, agent_state(state)))
+                    .collect(),
+            },
+            Self::FileChange {
+                id,
+                changes,
+                status,
+            } => CodexItem::FileChange {
+                id,
+                changes: changes
+                    .into_iter()
+                    .map(|(path, change)| match change {
+                        RecordedChange::Add { content } => agents::CodexFileChange {
+                            path,
+                            kind: agents::CodexFileChangeKind::Add,
+                            diff: content,
+                        },
+                        RecordedChange::Delete { content } => agents::CodexFileChange {
+                            path,
+                            kind: agents::CodexFileChangeKind::Delete,
+                            diff: content,
+                        },
+                        RecordedChange::Update {
+                            unified_diff,
+                            move_path,
+                        } => agents::CodexFileChange {
+                            path,
+                            kind: agents::CodexFileChangeKind::Update { move_path },
+                            diff: unified_diff,
+                        },
+                    })
+                    .collect(),
+                status,
+            },
+            Self::ImageView { id, path } => CodexItem::ImageView { id, path },
+            Self::WebSearch { id, query, action } => CodexItem::WebSearch { id, query, action },
+            Self::Extension {
+                id,
+                query: Some(query),
+            } => CodexItem::WebSearch {
+                id,
+                query,
+                action: None,
+            },
+            Self::ContextCompaction { id } => CodexItem::ContextCompaction { id },
+            Self::EnteredReviewMode {
+                id,
+                user_facing_hint,
+            } => CodexItem::EnteredReviewMode {
+                id,
+                review: user_facing_hint,
+            },
+            Self::ExitedReviewMode { id } => CodexItem::ExitedReviewMode {
+                id,
+                review: String::new(),
+            },
+            Self::Extension { query: None, .. } | Self::Other => CodexItem::Unsupported,
         }
+    }
+}
+
+/// An agent's recorded status, `"running"` or `{"completed": "its last message"}`.
+fn agent_state(state: serde_json::Value) -> agents::CodexAgentState {
+    match state {
+        serde_json::Value::String(status) => agents::CodexAgentState {
+            status,
+            message: None,
+        },
+        serde_json::Value::Object(fields) => {
+            let (status, message) = fields.into_iter().next().unwrap_or_default();
+            agents::CodexAgentState {
+                status,
+                message: message.as_str().map(str::to_owned),
+            }
+        }
+        _ => agents::CodexAgentState {
+            status: String::new(),
+            message: None,
+        },
     }
 }
 
@@ -479,7 +574,7 @@ impl Rollout {
         };
         for (offset, record) in stream.push(&self.read(start, end)?) {
             match self.parse(offset, &record, epoch) {
-                Record::Item(item) => appended.items.push(*item),
+                Record::Items(items) => appended.items.extend(items),
                 Record::RolledBack => appended.rolled_back = true,
                 Record::Other => {}
             }
@@ -507,20 +602,25 @@ impl Rollout {
             let Window { records, start } = self.window(end)?;
             scanned += end - start;
             for (offset, record) in records.into_iter().rev() {
-                let item = match self.parse(offset, &record, epoch) {
-                    Record::Item(item) => *item,
+                let recorded = match self.parse(offset, &record, epoch) {
+                    Record::Items(recorded) => recorded,
                     Record::RolledBack => return Ok(page(items, None)),
                     Record::Other => continue,
                 };
-                let weight = crate::timeline::value_weight::item(&item);
+                let weight: usize = recorded
+                    .iter()
+                    .map(crate::timeline::value_weight::item)
+                    .sum();
                 if items.len() >= limit || (bytes + weight > PAGE_BYTES && !items.is_empty()) {
                     let oldest = items.last().map(|(offset, _)| *offset);
                     return Ok(page(items, oldest));
                 }
-                // A turn's notice for details Chat does not show stands at its first such item.
-                items.retain(|(_, newer)| newer.id != item.id);
                 bytes += weight;
-                items.push((offset, item));
+                for item in recorded.into_iter().rev() {
+                    // A turn's notice for details Chat does not show stands at its first such item.
+                    items.retain(|(_, newer)| newer.id != item.id);
+                    items.push((offset, item));
+                }
             }
             end = start;
         }
@@ -540,10 +640,13 @@ impl Rollout {
         while cursor > 0 && end - cursor < SCAN_BYTES && !found.contains_key(&ids[0]) {
             let Window { records, start } = self.window(cursor)?;
             for (offset, record) in records.into_iter().rev() {
-                if let Record::Item(item) = self.parse(offset, &record, epoch)
-                    && wanted.contains(item.id.as_str())
-                {
-                    found.insert(item.id, offset);
+                let Record::Items(items) = self.parse(offset, &record, epoch) else {
+                    continue;
+                };
+                for item in items {
+                    if wanted.contains(item.id.as_str()) {
+                        found.insert(item.id, offset);
+                    }
                 }
             }
             cursor = start;
@@ -573,11 +676,45 @@ impl Rollout {
                 )
             })?,
         };
-        let text = recorded
-            .text()
-            .or_else(|| projection::paged_text(&recorded.into_live()))
+        let text = projection::paged_text(&recorded.into_live())
             .ok_or_else(|| WsError::NotFound("text".into()))?;
         crate::timeline::output_page(&text, offset, length)
+    }
+
+    /// The complete changes of the file change behind `handle`.
+    pub fn diff(&self, handle: &OutputHandle) -> Result<Vec<proto::FileDiff>, WsError> {
+        let (turn, item) = projection::split_item_id(handle.id())
+            .ok_or_else(|| WsError::Invalid("the change handle is invalid".into()))?;
+        let recorded = match self.recorded_at(handle.offset(), turn, item)? {
+            Some(recorded) => recorded,
+            None => self.find(turn, item)?.ok_or_else(|| {
+                WsError::Unavailable(
+                    "Codex has not saved this change yet. Try again when the turn ends.".into(),
+                )
+            })?,
+        };
+        let CodexItem::FileChange { changes, .. } = recorded.into_live() else {
+            return Err(WsError::NotFound("recorded changes".into()));
+        };
+        let files: Vec<RecordedFile<'_>> = changes
+            .iter()
+            .map(|change| match &change.kind {
+                agents::CodexFileChangeKind::Add => RecordedFile::Added {
+                    path: &change.path,
+                    content: &change.diff,
+                },
+                agents::CodexFileChangeKind::Delete => RecordedFile::Deleted {
+                    path: &change.path,
+                    content: &change.diff,
+                },
+                agents::CodexFileChangeKind::Update { move_path } => RecordedFile::Updated {
+                    path: move_path.as_deref().unwrap_or(&change.path),
+                    old_path: move_path.as_ref().map(|_| change.path.as_str()),
+                    unified: &change.diff,
+                },
+            })
+            .collect();
+        recorded_files(&files)
     }
 
     fn recorded_at(
@@ -637,46 +774,13 @@ impl Rollout {
     }
 
     fn parse(&self, offset: u64, record: &[u8], epoch: u64) -> Record {
+        if let Some(plan) = plan(record) {
+            return Record::Items(vec![plan]);
+        }
         let Some(event) = event(record) else {
             return Record::Other;
         };
-        let (id, turn, body, at) = match event {
-            Event::ItemCompleted {
-                thread_id,
-                turn_id,
-                item,
-                started_at_ms,
-                completed_at_ms,
-            } => {
-                if thread_id.is_some_and(|thread| thread != self.thread) {
-                    return Record::Other;
-                }
-                let location = Location::recorded(epoch, offset);
-                let Some((id, body)) = (*item).into_body(&turn_id, location) else {
-                    return Record::Other;
-                };
-                let at = completed_at_ms.or(started_at_ms).unwrap_or(0);
-                (id, turn_id, body, at)
-            }
-            Event::TurnComplete {
-                turn_id,
-                error: Some(_),
-            } => match projection::turn_notice(CodexTurnOutcome::Failed) {
-                Some(body) => (projection::turn_notice_id(&turn_id), turn_id, body, 0),
-                None => return Record::Other,
-            },
-            Event::TurnAborted {
-                turn_id: Some(turn_id),
-            } => match projection::turn_notice(CodexTurnOutcome::Interrupted) {
-                Some(body) => (projection::turn_notice_id(&turn_id), turn_id, body, 0),
-                None => return Record::Other,
-            },
-            Event::ThreadRolledBack {} => return Record::RolledBack,
-            Event::TurnComplete { .. } | Event::TurnAborted { .. } | Event::Other => {
-                return Record::Other;
-            }
-        };
-        Record::Item(Box::new(TimelineItem {
+        let item = |id, turn: String, body: TimelineBody, at: i64| TimelineItem {
             id,
             revision: 1,
             turn: Some(turn),
@@ -684,7 +788,70 @@ impl Rollout {
             at: UnixMillis(u64::try_from(at).unwrap_or(0)),
             origin: projection::origin(&body),
             body,
-        }))
+        };
+        let items = match event {
+            Event::ItemCompleted {
+                thread_id,
+                turn_id,
+                item: recorded,
+                started_at_ms,
+                completed_at_ms,
+            } => {
+                if thread_id.is_some_and(|thread| thread != self.thread) {
+                    return Record::Other;
+                }
+                let location = Location::recorded(epoch, offset);
+                let Some((id, body)) =
+                    projection::body((*recorded).into_live(), true, &turn_id, location)
+                else {
+                    return Record::Other;
+                };
+                let at = completed_at_ms.or(started_at_ms).unwrap_or(0);
+                vec![item(id, turn_id, body, at)]
+            }
+            Event::TurnComplete {
+                turn_id,
+                error,
+                duration_ms,
+                completed_at,
+            } => {
+                let at = completed_at.unwrap_or(0).saturating_mul(1000);
+                let failure = error.and_then(|error| {
+                    projection::turn_failure(CodexTurnOutcome::Failed, Some(&error.message))
+                });
+                let end = duration_ms.map(|duration_ms| TimelineBody::TurnEnd {
+                    duration_ms,
+                    input_tokens: None,
+                    output_tokens: None,
+                });
+                let mut items = Vec::new();
+                if let Some(body) = failure {
+                    items.push(item(
+                        projection::turn_notice_id(&turn_id),
+                        turn_id.clone(),
+                        body,
+                        at,
+                    ));
+                }
+                if let Some(body) = end {
+                    items.push(item(projection::turn_end_id(&turn_id), turn_id, body, at));
+                }
+                items
+            }
+            Event::TurnAborted {
+                turn_id: Some(turn_id),
+            } => match projection::turn_failure(CodexTurnOutcome::Interrupted, None) {
+                Some(body) => vec![item(projection::turn_notice_id(&turn_id), turn_id, body, 0)],
+                None => return Record::Other,
+            },
+            Event::ThreadRolledBack {} => return Record::RolledBack,
+            Event::TurnAborted { .. } | Event::Other => return Record::Other,
+        };
+        if items.is_empty() {
+            Record::Other
+        } else {
+            Record::Items(items)
+        }
     }
 
     /// The complete records in the bounded read that ends at the record boundary `end`.
@@ -768,6 +935,43 @@ fn page(mut items: Vec<(u64, TimelineItem)>, before: Option<u64>) -> RolloutPage
         items: items.into_iter().map(|(_, item)| item).collect(),
         before,
     }
+}
+
+/// A plan the agent set with its plan tool, recorded as the model request itself.
+fn plan(record: &[u8]) -> Option<TimelineItem> {
+    memchr::memmem::find(record, b"\"update_plan\"")?;
+    let envelope = serde_json::from_slice::<Envelope<'_>>(record).ok()?;
+    if envelope.kind != "response_item" {
+        return None;
+    }
+    let line = serde_json::from_slice::<ResponseLine>(record).ok()?;
+    let ResponseItem::FunctionCall {
+        name,
+        arguments,
+        call_id,
+    } = line.payload
+    else {
+        return None;
+    };
+    if name != "update_plan" {
+        return None;
+    }
+    let arguments: PlanArguments = serde_json::from_str(&arguments).ok()?;
+    let body = projection::plan_body(arguments.plan);
+    let at = line
+        .timestamp
+        .as_deref()
+        .and_then(crate::usage::rfc3339_millis)
+        .unwrap_or(0);
+    Some(TimelineItem {
+        id: format!("plan:{call_id}"),
+        revision: 1,
+        turn: None,
+        parent: None,
+        at: UnixMillis(at),
+        origin: projection::origin(&body),
+        body,
+    })
 }
 
 fn event(record: &[u8]) -> Option<Event> {

@@ -3,7 +3,7 @@ pub(crate) mod claude_diff;
 mod claude_record;
 pub(crate) mod claude_source;
 mod commands;
-mod complete_diff;
+pub(crate) mod complete_diff;
 mod display_index;
 mod display_overlay;
 pub(crate) mod jsonl_file;

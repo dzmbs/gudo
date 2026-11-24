@@ -36,6 +36,13 @@ pub struct CodexHistoryTurn {
     pub status: CodexHistoryStatus,
     pub items: Vec<CodexItem>,
     items_view: Option<String>,
+    /// Why a failed turn failed, as Codex reported it.
+    pub error: Option<CodexTurnError>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CodexTurnError {
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -100,12 +107,8 @@ impl CodexThreadHistory {
             active += usize::from(turn.status == CodexHistoryStatus::InProgress);
             let mut items = HashSet::new();
             for item in &turn.items {
-                let id = match item {
-                    CodexItem::UserMessage { id, .. }
-                    | CodexItem::AgentMessage { id, .. }
-                    | CodexItem::CommandExecution { id, .. }
-                    | CodexItem::Reasoning { id, .. } => id,
-                    CodexItem::Unsupported => continue,
+                let Some(id) = item.id() else {
+                    continue;
                 };
                 validate_id(id)?;
                 if !items.insert(id) {

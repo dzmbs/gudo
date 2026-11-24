@@ -285,7 +285,9 @@ fn unknown_outcome_is_not_success_and_retired_bindings_never_revive() {
             .unwrap(),
         Some(CodexLiveEvent::TurnCompleted {
             turn: "turn".into(),
-            outcome: CodexTurnOutcome::Unknown
+            outcome: CodexTurnOutcome::Unknown,
+            error: None,
+            duration_ms: None,
         })
     );
     connection

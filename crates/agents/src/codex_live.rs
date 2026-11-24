@@ -12,9 +12,15 @@ mod events;
 mod history;
 pub use approval::CodexApprovalDetails;
 mod items;
-pub use events::{CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexTurnOutcome};
+pub use events::{
+    CodexApprovalKind, CodexLiveEvent, CodexLiveEvents, CodexPlanStatus, CodexPlanStep,
+    CodexTokenCounts, CodexTokenUsage, CodexTurnOutcome,
+};
 pub use history::{CodexHistoryMode, CodexHistoryStatus, CodexHistoryTurn, CodexThreadHistory};
-pub use items::{CodexInput, CodexItem};
+pub use items::{
+    CodexAgentState, CodexFileChange, CodexFileChangeKind, CodexInput, CodexItem, CodexToolError,
+    CodexToolResult, CodexWebSearchAction, content_text as codex_content_text,
+};
 
 use serde::de::{DeserializeOwned, IgnoredAny};
 use serde::{Deserialize, Serialize};

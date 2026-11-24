@@ -195,6 +195,8 @@ fn apply_turn(state: &mut State, turn: CodexHistoryTurn) -> Result<(), HistoryEr
             .apply(CodexLiveEvent::TurnCompleted {
                 turn: turn.id,
                 outcome,
+                error: turn.error.map(|error| error.message),
+                duration_ms: None,
             })
             .map_err(|_| HistoryError::Projection)?;
     }
@@ -214,6 +216,9 @@ fn event_turn(event: &CodexLiveEvent) -> &str {
     match event {
         CodexLiveEvent::TurnStarted { turn }
         | CodexLiveEvent::TurnCompleted { turn, .. }
+        | CodexLiveEvent::PlanUpdated { turn, .. }
+        | CodexLiveEvent::TokenUsage { turn, .. }
+        | CodexLiveEvent::Error { turn, .. }
         | CodexLiveEvent::AssistantDelta { turn, .. }
         | CodexLiveEvent::Item { turn, .. }
         | CodexLiveEvent::ApprovalWaiting { turn, .. }

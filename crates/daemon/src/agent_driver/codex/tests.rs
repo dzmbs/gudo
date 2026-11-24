@@ -126,11 +126,18 @@ fn recorded_deltas_materialize_once_and_finalize_without_an_observer() {
     }
     assert!(!state.closed);
     let snapshot = state.projection.snapshot(projection::SNAPSHOT_ITEMS, None);
-    assert_eq!(snapshot.items.len(), 1);
+    assert_eq!(snapshot.items.len(), 2);
     assert!(
         matches!(&snapshot.items[0].body, proto::TimelineBody::Assistant { text, streaming: false }
         if text == "A same-process live mirror.\n")
     );
+    assert!(matches!(
+        snapshot.items[1].body,
+        proto::TimelineBody::TurnEnd {
+            duration_ms: 451,
+            ..
+        }
+    ));
     let cursor = snapshot.cursor;
     state.observe(&recording["events"][2].to_string(), Direction::FromServer);
     assert_eq!(
@@ -175,7 +182,11 @@ async fn common_watch_is_read_only_and_catches_up_after_unwatch() {
     let response = raw.client.timeline_watch_capabilities(pane).await.unwrap();
     assert_eq!(
         response.capabilities,
-        AgentCapabilities::READ | AgentCapabilities::STREAMING_DELTAS
+        AgentCapabilities::READ
+            | AgentCapabilities::STREAMING_DELTAS
+            | AgentCapabilities::DIFFS
+            | AgentCapabilities::THINKING
+            | AgentCapabilities::PLANS
     );
     assert!(response.snapshot.items.is_empty());
     lock(&source.state).observe(&recording["events"][0].to_string(), Direction::FromServer);

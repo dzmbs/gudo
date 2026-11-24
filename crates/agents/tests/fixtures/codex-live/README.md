@@ -38,4 +38,9 @@ It emits bounded text deltas and typed completion outcomes without notify. Late 
 snapshot hydration. Signed decisions, complete permission metadata, native prompt receipts and actual
 daemon lifecycle/session integration are not provided by these captures or decoder tests.
 
+`pane-items.json` is written from the app-server protocol's item and notification definitions,
+in the frame shapes of the 0.166.0 captures, not captured from a run: a file change (an update and
+an added file), an MCP call, a web search, an image view, another agent started, compaction, a plan
+update, token usage, a retried error and a failed turn with its reason.
+
 Codex protocol behavior and TUI sources are covered by the repository's Codex Apache-2.0 notices.
