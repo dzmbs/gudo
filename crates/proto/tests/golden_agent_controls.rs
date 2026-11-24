@@ -7,10 +7,10 @@
 
 use proto::{
     Actor, AgentChoice, AgentConfig, AgentConfigSupport, AgentConfigTiming, AgentConfigValues,
-    AgentControls, AgentModeChoice, AgentModeRisk, AgentPlan, AgentPrompt, AgentQuestion,
-    AgentQuestionOption, AgentQuestions, ApprovalRequest, ClientCtl, Decide, DeviceId,
-    MoreDaemonFeatures, OptionId, PaneId, PrincipalId, QuestionAnswer, RequestId, ServerCtl,
-    WorkspaceRequest, WorkspaceResponse,
+    AgentContextUsage, AgentControls, AgentModeChoice, AgentModeRisk, AgentPlan, AgentPrompt,
+    AgentQuestion, AgentQuestionOption, AgentQuestions, ApprovalRequest, ClientCtl, Decide,
+    DeviceId, MoreDaemonFeatures, OptionId, PaneId, PrincipalId, QuestionAnswer, RequestId,
+    ServerCtl, WorkspaceRequest, WorkspaceResponse,
 };
 
 fn hex(bytes: &[u8]) -> String {
@@ -56,6 +56,10 @@ fn controls(prompt: Option<AgentPrompt>) -> AgentControls {
             }],
             efforts: vec![choice("high", "High")],
             timing: AgentConfigTiming::Restart,
+            context: Some(AgentContextUsage {
+                used: 1000,
+                window: 200_000,
+            }),
         },
         prompt,
     }
@@ -117,6 +121,7 @@ fn modes_and_timing_keep_their_order() {
     }
     check(&AgentConfigTiming::Restart, "00");
     check(&AgentConfigTiming::NextTurn, "01");
+    check(&AgentConfigTiming::Now, "02");
     check(&AgentConfigSupport::Unsupported("no".into()), "01026e6f");
 }
 
@@ -128,7 +133,7 @@ fn controls_reply_and_push_keep_their_bytes() {
         01 06736f6e6e6574 06536f6e6e6574 00\
         01 04706c616e 04506c616e 00 01\
         01 0468696768 0448696768 00\
-        00";
+        00 01 e807 c09a0c";
     let config: String = config.split_whitespace().collect();
     check(
         &WorkspaceResponse::AgentControls(controls(None)),

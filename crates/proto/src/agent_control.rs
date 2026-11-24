@@ -68,6 +68,8 @@ pub enum AgentConfigTiming {
     Restart,
     /// The agent takes it with the next turn started from Chat.
     NextTurn,
+    /// The agent takes it at once (pi through its bridge).
+    Now,
 }
 
 /// A model, mode and effort; `None` leaves (or reports) that one unknown or unchanged.
@@ -86,6 +88,15 @@ pub enum AgentConfigSupport {
     Unsupported(String),
 }
 
+/// How full the model's context window is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentContextUsage {
+    /// Tokens in use.
+    pub used: u64,
+    /// The model's window, in tokens.
+    pub window: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub support: AgentConfigSupport,
@@ -97,6 +108,8 @@ pub struct AgentConfig {
     pub modes: Vec<AgentModeChoice>,
     pub efforts: Vec<AgentChoice>,
     pub timing: AgentConfigTiming,
+    /// The context in use, when the agent reports it.
+    pub context: Option<AgentContextUsage>,
 }
 
 /// One option of a question.
