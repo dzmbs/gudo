@@ -902,7 +902,14 @@ answering needs Approver, a signature by the device, and the pane's approval pol
   A pi without the bridge says to change it in Terminal.
 
 `AgentConfig::context` carries the context in use and the model's window when the agent reports
-them (Codex's latest token usage, pi's usage report), for the composer's context meter.
+them (Codex's latest token usage, pi's usage report, Claude Code's status line), for the
+composer's context meter.
+
+A change that applies shows as a quiet notice in the timeline ("Switched to Sonnet 4.6", "Mode:
+Plan", "Effort: high"). Claude Code's come from its transcript (an assistant record's
+`message.model` and `effort`, a user record's `permissionMode`, each against the record before
+it), pi's from its session's `model_change` and `thinking_level_change`, and Codex's when it
+accepts the turn that carries the change.
 
 Questions (`AskUserQuestion`) and plans (`ExitPlanMode`) reach the daemon in a held `PreToolUse`
 hook (settings v5 run it as `HeldPreToolUse` with the permission timeout; older settings' short
