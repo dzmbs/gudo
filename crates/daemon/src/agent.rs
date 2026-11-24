@@ -969,6 +969,12 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         crate::upgrade::after_restart_reply(core, &call, &reply);
         return written;
     }
+    // And a launched pi's bridge extension, which keeps its connection open.
+    if let Ok(call) = serde_json::from_str::<crate::agent_driver::pi::bridge::PiBridgeCall>(&line) {
+        // The request limit bounds the first line; the bridge bounds each line after it.
+        reader.get_mut().set_limit(u64::MAX);
+        return crate::agent_driver::pi::bridge::serve(core, call, peer_uid, reader, write).await;
+    }
     if let Ok(call) = serde_json::from_str::<crate::agent_input::AgentInputCall>(&line) {
         let reply = crate::agent_input::serve(core, call).await;
         let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;

@@ -1,6 +1,6 @@
 mod claude;
 pub(crate) mod codex;
-mod pi;
+pub(crate) mod pi;
 mod terminal;
 
 use std::future::Future;

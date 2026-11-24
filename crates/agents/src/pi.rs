@@ -1,5 +1,6 @@
 //! pi: launched as itself, with no hooks. The daemon reads its session file for Chat and its
-//! own OSC 7501 reports (`app=pi`) for its state.
+//! own OSC 7501 reports (`app=pi`) for its state. A pi the daemon launches also loads the
+//! bridge extension, which streams to the daemon and takes its prompts beside the terminal UI.
 
 use std::ffi::OsString;
 
@@ -8,6 +9,18 @@ use crate::event::{AgentKind, Seq};
 use crate::launch::{LaunchContext, LaunchMode, LaunchSpec, pane_env};
 use crate::manifest::Manifest;
 use crate::signal::Signal;
+
+/// The bridge extension's file name in the daemon's state directory.
+pub const PI_BRIDGE_FILE: &str = "pi-bridge.js";
+
+/// The bridge extension's source, reading this product's pane variables.
+pub fn pi_bridge_extension() -> String {
+    include_str!("pi/bridge.js")
+        .replace("@PANE_ID@", &brand::env_var("PANE_ID"))
+        .replace("@TOKEN@", &brand::env_var("TOKEN"))
+        .replace("@SOCK@", &brand::env_var("SOCK"))
+        .replace("@ENDPOINT_FILE@", &brand::env_var("ENDPOINT_FILE"))
+}
 
 pub struct Pi {
     manifest: Manifest,
@@ -73,6 +86,51 @@ impl AgentAdapter for Pi {
 mod tests {
     use super::*;
     use crate::NativeSessionId;
+
+    #[test]
+    fn the_bridge_reads_this_products_pane_variables() {
+        let source = pi_bridge_extension();
+        assert!(
+            ["@PANE_ID@", "@TOKEN@", "@SOCK@", "@ENDPOINT_FILE@"]
+                .iter()
+                .all(|placeholder| !source.contains(placeholder))
+        );
+        assert!(source.contains(&format!("\"{}\"", brand::env_var("TOKEN"))));
+        assert!(source.contains("pi_bridge"));
+    }
+
+    #[test]
+    fn the_bridge_streams_takes_requests_and_reconnects() {
+        let node = std::process::Command::new("node").arg("--version").output();
+        if !node.is_ok_and(|output| output.status.success()) {
+            eprintln!("skipped: node is not installed");
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let bridge = directory.path().join("bridge.js");
+        std::fs::write(&bridge, pi_bridge_extension()).unwrap();
+        let socket = directory.path().join("hook.sock");
+        let harness = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/pi/bridge-harness.js"
+        );
+        let output = std::process::Command::new("node")
+            .arg(harness)
+            .arg(&bridge)
+            .arg(&socket)
+            .env(brand::env_var("PANE_ID"), "7")
+            .env(brand::env_var("TOKEN"), "pane-token")
+            .env(brand::env_var("SOCK"), &socket)
+            .env_remove(brand::env_var("ENDPOINT_FILE"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success() && output.stdout == b"ok\n",
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn pi_resumes_with_its_own_flag_and_reports_as_pi() {

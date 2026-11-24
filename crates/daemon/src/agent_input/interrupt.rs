@@ -55,9 +55,7 @@ fn stop_target(
     entry: &PaneEntry,
 ) -> Result<(&'static dyn AgentDriver, Option<String>), WsError> {
     let native_codex = lock(&entry.codex).is_some();
-    let (kind, session, working) = {
-        let runtime = lock(&entry.agent);
-        let runtime = runtime.as_ref().ok_or_else(unavailable)?;
+    let tracked = lock(&entry.agent).as_ref().map(|runtime| {
         (
             runtime.kind(),
             runtime
@@ -71,6 +69,21 @@ fn stop_target(
                     && runtime.is_blocked()
                     && native_codex),
         )
+    });
+    // A pi reports its runs through its bridge, whether or not the daemon tracks it.
+    let (kind, session, working) = match tracked {
+        Some((proto::AgentKind::Pi, _, working)) => (
+            proto::AgentKind::Pi,
+            crate::agent_driver::pi::session_of(entry),
+            working || crate::agent_driver::pi::is_running(entry),
+        ),
+        Some(tracked) => tracked,
+        None if crate::agent_driver::pi::is_running(entry) => (
+            proto::AgentKind::Pi,
+            crate::agent_driver::pi::session_of(entry),
+            true,
+        ),
+        None => return Err(unavailable()),
     };
     let driver = driver(kind);
     let stoppable = driver

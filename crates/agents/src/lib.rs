@@ -66,7 +66,7 @@ pub use manifest::{
     ENGINE_VERSION, Manifest, ManifestError, Region, ScreenInput, ScreenMatch, ScreenVerdict,
 };
 pub use notify_chain::{CODEX_NOTIFY_SUBCOMMAND, NotifyChain, NotifyChainError, is_hook_program};
-pub use pi::Pi;
+pub use pi::{PI_BRIDGE_FILE, Pi, pi_bridge_extension};
 pub use program_status::{ProgramKind, ProgramState, ProgramStatus};
 pub use signal::{Claim, SessionUpdate, Signal};
 pub use skill::{SkillFile, skill_files};

@@ -44,6 +44,8 @@ pub(super) struct Shaped {
     pub results: Vec<ToolResult>,
     pub title: Option<String>,
     pub model: Option<String>,
+    /// When each assistant message read was made, which is how a streamed one is matched.
+    pub assistant_times: Vec<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -501,6 +503,7 @@ impl Shaper<'_> {
                 timestamp,
             } => {
                 let at = timestamp.unwrap_or(0);
+                self.shaped.assistant_times.extend(timestamp);
                 if model.is_some() {
                     self.shaped.model = model;
                 }

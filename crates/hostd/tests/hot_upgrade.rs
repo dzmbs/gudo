@@ -1553,3 +1553,129 @@ async fn restart_refuses_an_older_build() {
     );
     assert_eq!(started_at(&state), first_start);
 }
+
+/// Stands in for pi: loads the `--extension` it is given, as pi does, and starts its session.
+const PI_HOST: &str = r#"
+const args = process.argv.slice(2);
+const extension = args[args.indexOf("--extension") + 1];
+const model = { provider: "anthropic", id: "claude-opus-4-5", name: "Opus", reasoning: true };
+const handlers = {};
+const pi = {
+  on: (event, handler) => (handlers[event] = handler),
+  sendUserMessage: () => {},
+  getCommands: () => [],
+  getThinkingLevel: () => "off",
+  setThinkingLevel: () => {},
+  setModel: async () => true,
+};
+require(extension)(pi);
+handlers.session_start({ reason: "startup" }, {
+  cwd: process.cwd(),
+  model,
+  scopedModels: [],
+  modelRegistry: { getAvailable: () => [model], find: () => model },
+  sessionManager: { getSessionId: () => "__ID__", getSessionFile: () => undefined, getCwd: () => process.cwd() },
+  isIdle: () => true,
+  abort: () => {},
+  getContextUsage: () => undefined,
+});
+console.log("pi-pid=" + process.pid);
+setInterval(() => {}, 1000);
+"#;
+
+const BRIDGED_PI: &str = r#"#!/bin/bash
+mkdir -p "$HOME/.pi/agent/sessions"
+exec -a pi node "__HOST__" "$@"
+"#;
+
+async fn bridged(client: &mut TestClient, pane: PaneId, log: &dyn Fn() -> String) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let watched = client.client.timeline_watch_capabilities(pane).await;
+        if watched.as_ref().is_ok_and(|watched| {
+            watched
+                .capabilities
+                .contains(client_core::proto::AgentCapabilities::STOP)
+        }) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pi's bridge never connected: {watched:?}\n{}",
+            log()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// A pi the helper launched keeps running when the app updates the helper, and its bridge
+/// extension connects to the new build, so Chat keeps streaming and stopping it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_app_update_keeps_a_launched_pi_and_its_bridge() {
+    use std::os::unix::fs::PermissionsExt;
+    if !Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("skipped: node is not installed");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let host = tools.join("pi-host.js");
+    std::fs::write(&host, PI_HOST.replace("__ID__", MATRIX_PI_ID)).unwrap();
+    let pi = tools.join("pi");
+    std::fs::write(
+        &pi,
+        BRIDGED_PI.replace("__HOST__", &host.display().to_string()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&pi, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let env = [(
+        "PATH",
+        format!(
+            "{}:{}",
+            tools.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    )];
+    let state = dir.path().join("state");
+    let hostd = run_with_env(&exe, &state, &dir.path().join("hostd.log"), &env);
+    let mut client = TestClient::connect(&ticket(&exe, &state), ClientConfig::generate_key());
+    client.attach_and_follow().await;
+    let session_id = client.layout.as_ref().unwrap().session_id;
+    let OpOutcome::TabCreated { pane_id: pane, .. } = client
+        .op(LayoutOp::NewTab {
+            session_id,
+            name: String::new(),
+            launch: PaneLaunch::Agent {
+                agent: client_core::proto::AgentKind::Pi,
+                resume: None,
+                cwd: Some(work.display().to_string()),
+            },
+        })
+        .await
+    else {
+        panic!("new tab");
+    };
+    client.follow(pane).await;
+    client.wait_text(pane, "pi-pid").await;
+    let pi_pid: u32 = printed(&client.text(pane), "pi-pid")
+        .unwrap()
+        .parse()
+        .unwrap();
+    bridged(&mut client, pane, &|| hostd.log()).await;
+
+    let connections = client.connected;
+    replace(&exe, &std::fs::read(HOSTD).unwrap());
+    let output = restart_command(&exe, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    reconnected(&mut client, connections).await;
+    assert!(alive(pi_pid));
+    bridged(&mut client, pane, &|| hostd.log()).await;
+}

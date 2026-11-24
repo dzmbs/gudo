@@ -277,6 +277,8 @@ pub(crate) struct PaneEntry {
     pub record: Mutex<PaneRecord>,
     pub agent: Mutex<Option<AgentRuntime>>,
     pub codex: Mutex<Option<Arc<crate::agent_driver::codex::Live>>>,
+    /// The pane's pi, while its bridge extension is connected.
+    pub pi: Mutex<Option<Arc<crate::agent_driver::pi::bridge::Bridge>>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Serializes policy decisions, request replacement and actual PTY resizes.
@@ -1963,6 +1965,17 @@ impl Core {
                             PathBuf::from(&cwd),
                             agents::AccountContext::system(),
                         );
+                        let resume_line =
+                            match crate::agent_driver::pi::bridge::install(&context.state_dir) {
+                                Ok(extension) => format!(
+                                    "{resume_line} --extension {}",
+                                    shell_quote(&extension.to_string_lossy())
+                                ),
+                                Err(error) => {
+                                    tracing::warn!(%error, "pi starts without its Chat bridge");
+                                    resume_line.clone()
+                                }
+                            };
                         let launch_id = crate::agent::new_uuid();
                         native_input_launch =
                             crate::agent_input::AgentInputGate::pending(launch_id.clone());
@@ -2283,6 +2296,7 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
             codex: Mutex::new(codex),
+            pi: Mutex::new(None),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
@@ -2424,6 +2438,7 @@ impl Core {
             record: Mutex::new(record),
             agent: Mutex::new(agent),
             codex: Mutex::new(None),
+            pi: Mutex::new(None),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),

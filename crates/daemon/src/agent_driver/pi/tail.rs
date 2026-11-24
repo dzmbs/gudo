@@ -1,6 +1,7 @@
 //! Chat for a pane's pi: its session file, read as pi writes it.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Weak};
 
 use proto::{
     AgentKind, PaneId, TimelineBody, TimelineCursor, TimelineItem, TimelineOp, TimelineSession,
@@ -8,6 +9,8 @@ use proto::{
 };
 use tokio::sync::mpsc;
 
+use super::bridge::{self, Bridge, LiveState};
+use super::live::{self, Overlay};
 use super::session::{self, PiSession, Shaped};
 use crate::agent_driver::{AgentCapabilities, AgentSession, ReadFuture, TimelineRead};
 use crate::core::{Core, PaneEntry, lock};
@@ -43,6 +46,8 @@ pub(super) struct SessionTail {
     session: TimelineSession,
     wake: mpsc::Sender<()>,
     controls: AgentCapabilities,
+    overlay: Overlay,
+    bridge: Weak<Bridge>,
 }
 
 pub(super) fn open(
@@ -69,9 +74,15 @@ pub(super) fn open(
         session: session(None, &Shaped::default()),
         wake,
         controls,
+        overlay: Overlay::default(),
+        bridge: Weak::new(),
     };
+    let bridge = tail.follow(&entry);
     if tail.start()? {
         tail.note_recorded(&entry, &tail.items);
+    }
+    if let Some(bridge) = bridge {
+        tail.session = live::session(tail.session.clone(), &bridge.state());
     }
     Ok(Box::new(tail))
 }
@@ -94,6 +105,12 @@ fn target(core: &Core, entry: &PaneEntry) -> Result<Target, WsError> {
         .filter(|agent| agent.program == ResumableProgram::Pi)
         .map(|agent| (agent.session_id.clone(), agent.cwd.clone()))
         .ok_or_else(|| WsError::Unavailable("Chat is available for agent panes".into()))?;
+    let session = session.or_else(|| {
+        bridge::of(entry)?
+            .state()
+            .session
+            .and_then(|session| session.session_id)
+    });
     let cwd = cwd
         .or_else(|| lock(&entry.record).cwd.clone())
         .map(PathBuf::from)
@@ -141,6 +158,16 @@ fn trim(items: &mut Vec<(u64, TimelineItem)>) {
 }
 
 impl SessionTail {
+    /// Follows the pane's connected pi, if any: what it streams wakes this tail.
+    fn follow(&mut self, entry: &PaneEntry) -> Option<Arc<Bridge>> {
+        let bridge = bridge::of(entry);
+        if let Some(bridge) = &bridge {
+            bridge.watch(&self.wake);
+        }
+        self.bridge = bridge.as_ref().map_or_else(Weak::new, Arc::downgrade);
+        bridge
+    }
+
     /// Opens the session file once pi wrote it: with the conversation's first message.
     fn start(&mut self) -> Result<bool, WsError> {
         let Some(id) = &self.target.session else {
@@ -158,6 +185,7 @@ impl SessionTail {
             file.newest(end, self.cursor.epoch)?
         };
         self.session = session::merge(session(Some(id), &shaped), &self.session);
+        self.overlay.recorded(&shaped.assistant_times);
         self.items = shaped.items;
         trim(&mut self.items);
         self.reading = Some(Reading {
@@ -178,6 +206,7 @@ impl SessionTail {
         self.reading = None;
         self.items.clear();
         self.session = session(None, &Shaped::default());
+        self.overlay.clear();
         self.cursor.epoch = crate::timeline::next_epoch();
         self.start()?;
         self.advance();
@@ -210,6 +239,67 @@ impl SessionTail {
         lock(&entry.pane.agent_input_gate).recorded_in_session(session, prompts);
     }
 
+    /// What pi wrote to its session file since the last read, as operations.
+    fn refresh_file(
+        &mut self,
+        entry: &PaneEntry,
+        core: &Core,
+        streamed: Option<&LiveState>,
+    ) -> Result<Vec<TimelineOp>, WsError> {
+        let current = target(core, entry)?;
+        if self.changed(&current) {
+            let operations = self.restart(current)?;
+            self.note_recorded(entry, &self.items);
+            return Ok(operations);
+        }
+        let Some(reading) = &mut self.reading else {
+            if self.start()? {
+                self.note_recorded(entry, &self.items);
+                self.advance();
+                return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
+            }
+            return Ok(Vec::new());
+        };
+        reading.watcher.check()?;
+        let (shaped, more) = reading
+            .session
+            .appended(&mut reading.stream, self.cursor.epoch)?;
+        if more {
+            let _ = self.wake.try_send(());
+        }
+        if !shaped.items.is_empty() || !shaped.results.is_empty() {
+            self.note_recorded(entry, &shaped.items);
+        }
+        let mut operations = Vec::new();
+        self.overlay.recorded(&shaped.assistant_times);
+        let mut renamed = session::merge(
+            session(self.target.session.as_deref(), &shaped),
+            &self.session,
+        );
+        if let Some(streamed) = streamed {
+            renamed = live::session(renamed, streamed);
+        }
+        if renamed != self.session {
+            self.session = renamed;
+            operations.push(TimelineOp::Session {
+                cursor: self.advance(),
+                session: self.session.clone(),
+            });
+        }
+        for result in &shaped.results {
+            let call = session::tool_id(result.call());
+            if let Some((offset, item)) = self.items.iter().find(|(_, item)| item.id == call) {
+                let (offset, mut item) = (*offset, item.clone());
+                session::finish(&mut item, result, self.cursor.epoch);
+                operations.push(self.upsert(offset, item));
+            }
+        }
+        for (offset, item) in shaped.items {
+            operations.push(self.upsert(offset, item));
+        }
+        Ok(operations)
+    }
+
     fn changed(&self, current: &Target) -> bool {
         current.root != self.target.root
             || current.folder != self.target.folder
@@ -219,7 +309,15 @@ impl SessionTail {
 
 impl AgentSession for SessionTail {
     fn capabilities(&self) -> AgentCapabilities {
-        AgentCapabilities::READ | self.controls
+        let connected =
+            if self.bridge.strong_count() > 0 && self.controls.contains(AgentCapabilities::SEND) {
+                AgentCapabilities::STOP
+                    | AgentCapabilities::STREAMING_DELTAS
+                    | AgentCapabilities::THINKING
+            } else {
+                AgentCapabilities(0)
+            };
+        AgentCapabilities::READ | self.controls | connected
     }
 
     fn cursor(&self) -> TimelineCursor {
@@ -245,7 +343,12 @@ impl AgentSession for SessionTail {
         if since.is_some() {
             return snapshot;
         }
-        snapshot.items = self.items.iter().map(|(_, item)| item.clone()).collect();
+        snapshot.items = self
+            .items
+            .iter()
+            .map(|(_, item)| item.clone())
+            .chain(self.overlay.shown().iter().cloned())
+            .collect();
         snapshot.before = self
             .items
             .first()
@@ -258,53 +361,16 @@ impl AgentSession for SessionTail {
         let entry = core
             .pane(pane)
             .ok_or_else(|| WsError::NotFound("agent pane".into()))?;
-        let current = target(core, &entry)?;
-        if self.changed(&current) {
-            let operations = self.restart(current)?;
-            self.note_recorded(&entry, &self.items);
-            return Ok(operations);
-        }
-        let Some(reading) = &mut self.reading else {
-            if self.start()? {
-                self.note_recorded(&entry, &self.items);
-                self.advance();
-                return Ok(vec![TimelineOp::Snapshot(self.snapshot(None))]);
-            }
-            return Ok(Vec::new());
-        };
-        reading.watcher.check()?;
-        let (shaped, more) = reading
-            .session
-            .appended(&mut reading.stream, self.cursor.epoch)?;
-        if more {
-            let _ = self.wake.try_send(());
-        }
-        if !shaped.items.is_empty() || !shaped.results.is_empty() {
-            self.note_recorded(&entry, &shaped.items);
-        }
-        let mut operations = Vec::new();
-        let renamed = session::merge(
-            session(self.target.session.as_deref(), &shaped),
-            &self.session,
-        );
-        if renamed != self.session {
-            self.session = renamed;
-            operations.push(TimelineOp::Session {
-                cursor: self.advance(),
-                session: self.session.clone(),
-            });
-        }
-        for result in &shaped.results {
-            let call = session::tool_id(result.call());
-            if let Some((offset, item)) = self.items.iter().find(|(_, item)| item.id == call) {
-                let (offset, mut item) = (*offset, item.clone());
-                session::finish(&mut item, result, self.cursor.epoch);
-                operations.push(self.upsert(offset, item));
-            }
-        }
-        for (offset, item) in shaped.items {
-            operations.push(self.upsert(offset, item));
-        }
+        let bridge = self.follow(&entry);
+        let streamed = bridge.as_deref().map(Bridge::state);
+        let mut operations = self.refresh_file(&entry, core, streamed.as_ref())?;
+        let mut cursor = self.cursor;
+        let overlay = self.overlay.update(bridge.as_deref(), || {
+            cursor.sequence = cursor.sequence.wrapping_add(1);
+            cursor
+        });
+        self.cursor = cursor;
+        operations.extend(overlay);
         Ok(operations)
     }
 
@@ -319,7 +385,6 @@ impl AgentSession for SessionTail {
         }
         Ok(())
     }
-
     fn read(&mut self, request: TimelineRead, since: Option<UnixMillis>) -> ReadFuture {
         let response = self.check_history_scope(since).and_then(|()| {
             let reading = self.reading.as_ref().ok_or_else(|| {
