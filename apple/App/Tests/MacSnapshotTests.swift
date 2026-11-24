@@ -419,6 +419,16 @@ final class MacSnapshotTests: XCTestCase {
             model.groups.toggleCollapsed("fixture-box")
         }
         try await window("sidebar-hosts-pinned", screen: "projects", size: CGSize(width: 1000, height: 420)) { model in
+            // A longer acme-app on studio, so the list scrolls with its rows under the headers.
+            if let connection = model.app.hosts.connection("fixture-studio") as? PreviewConnection,
+               let app = model.projects.first(where: { $0.name == "acme-app" }) {
+                for name in ["migrate", "bench", "docs", "release"] {
+                    connection.layout.apply(.newTab)
+                    guard let id = connection.layout.session.activeTabId else { continue }
+                    connection.layout.apply(.rename(id, name))
+                    model.move(TabRef(hostId: "fixture-studio", tab: id), toProject: app.id)
+                }
+            }
             await self.pump(1)
             guard let window = self.current, let table = Self.table(in: window.contentView), let scrollView = table.enclosingScrollView,
                   let studio = model.groups.group("fixture-studio"), let claude = studio.tabs.first(where: { $0.title == "claude" })
@@ -426,7 +436,8 @@ final class MacSnapshotTests: XCTestCase {
             let ids = model.sidebarItems(drop: nil, projectMove: nil).items.map(\.id)
             let leading = table.numberOfRows - ids.count
             let row = table.rect(ofRow: (ids.firstIndex(of: "tab/\(studio.ref(claude.id))") ?? 0) + leading)
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: row.minY - 60 - scrollView.contentInsets.top))
+            let end = table.bounds.height - scrollView.contentView.bounds.height
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(end, row.minY - 60 - scrollView.contentInsets.top)))
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
     }
