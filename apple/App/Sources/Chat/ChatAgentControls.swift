@@ -25,6 +25,7 @@ struct ChatAgentControls: View {
     let context: ChatAgentControlsContext
     let session: TimelineSession?
     @State private var failure: String?
+    @State private var confirming: AgentConfigValues?
 
     var body: some View {
         let config = context.hub.agentControls[context.pane]?.config
@@ -49,6 +50,12 @@ struct ChatAgentControls: View {
             }
         }
         .font(DS.Font.caption).foregroundStyle(DS.Palette.textSecondary)
+        .confirmationDialog(confirmationTitle(config), isPresented: isConfirming, titleVisibility: .visible, presenting: confirming) { values in
+            Button("Restart") { send(values) }
+            Button("Cancel", role: .cancel) {}
+        } message: { values in
+            if let config { Text(ChatAgentControlsText.restartInPaneConfirmation(values, in: config).message) }
+        }
         .onAppear { context.hub.watchAgentControls(pane: context.pane) }
         .onDisappear { context.hub.unwatchAgentControls(pane: context.pane) }
     }
@@ -62,7 +69,17 @@ struct ChatAgentControls: View {
         case .restart: return "Claude Code restarts on this conversation"
         case .nextTurn: return "Codex uses it from the next message"
         case .now: return "Changes at once"
+        case .restartInPane: return "Claude Code restarts in its pane on this conversation"
         }
+    }
+
+    private var isConfirming: Binding<Bool> {
+        Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } })
+    }
+
+    private func confirmationTitle(_ config: AgentConfig?) -> String {
+        guard let config, let confirming else { return "" }
+        return ChatAgentControlsText.restartInPaneConfirmation(confirming, in: config).title
     }
 
     private func modelMenu(_ config: AgentConfig) -> some View {
@@ -154,6 +171,15 @@ struct ChatAgentControls: View {
 
     private func change(_ values: AgentConfigValues) {
         guard context.canChange else { return }
+        if let config = context.hub.agentControls[context.pane]?.config, ChatAgentControlsText.confirmsChange(config) {
+            confirming = values
+        } else {
+            send(values)
+        }
+    }
+
+    private func send(_ values: AgentConfigValues) {
+        guard context.canChange else { return }
         failure = nil
         let (hub, pane) = (context.hub, context.pane)
         Task {
@@ -172,10 +198,25 @@ nonisolated enum ChatAgentControlsText {
     static func note(_ config: AgentConfig?, isWorking: Bool) -> String? {
         guard let config, config.pending != nil else { return nil }
         switch config.timing {
-        case .restart: return isWorking ? "Applies after this turn" : "Restarting with the change"
+        case .restart, .restartInPane: return isWorking ? "Applies after this turn" : "Restarting with the change"
         case .nextTurn: return "Applies next turn"
         case .now: return "Changing"
         }
+    }
+
+    /// Whether a change replaces what the user typed in the pane, so Chat asks first.
+    static func confirmsChange(_ config: AgentConfig) -> Bool {
+        config.timing == .restartInPane
+    }
+
+    /// What Chat asks before restarting a Claude Code started by hand.
+    static func restartInPaneConfirmation(_ values: AgentConfigValues, in config: AgentConfig) -> (title: String, message: String) {
+        let choice = values.model.flatMap { model in modelLabel(model, in: config.models) }
+            ?? values.mode.flatMap { mode in config.modes.first { $0.id == mode }?.choice.label }
+            ?? values.effort.flatMap { effort in config.efforts.first { $0.id == effort }?.label }
+        let title = choice.map { "Restart Claude Code with \($0)?" } ?? "Restart Claude Code?"
+        let message = "You started Claude Code in this pane. Once it is idle it stops, and claude --resume starts it again there on this conversation, in place of the command you typed."
+        return (title, message)
     }
 
     /// A model's name as its picker gives it, else read from its identifier.

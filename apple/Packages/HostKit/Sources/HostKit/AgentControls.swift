@@ -62,11 +62,13 @@ nonisolated public struct AgentModeChoice: Codable, Equatable, Sendable, Identif
 }
 
 /// When a change reaches the agent: Claude Code restarts on the same conversation once its
-/// turn ends; Codex takes it with the next turn Chat starts; pi takes it at once.
+/// turn ends; Codex takes it with the next turn Chat starts; pi takes it at once. A Claude Code
+/// started by hand restarts in its pane, in place of the command typed there, so Chat asks first.
 nonisolated public enum AgentConfigTiming: String, Codable, Equatable, Sendable {
     case restart = "Restart"
     case nextTurn = "NextTurn"
     case now = "Now"
+    case restartInPane = "RestartInPane"
 
     public init(from decoder: any Decoder) throws {
         self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .nextTurn

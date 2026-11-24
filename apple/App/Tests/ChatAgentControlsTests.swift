@@ -56,6 +56,20 @@ final class ChatAgentControlsTests: XCTestCase {
         XCTAssertEqual(ChatAgentControlsText.shield(.bypass), "exclamationmark.shield.fill")
     }
 
+    func testAClaudeStartedByHandAsksBeforeItRestartsInItsPane() throws {
+        let json = Self.controlsJSON.replacingOccurrences(of: #""timing":"Restart""#, with: #""timing":"RestartInPane""#)
+        var config = try TimelineJSON.decode(AgentControls.self, from: json).config
+        XCTAssertEqual(config.timing, .restartInPane)
+        XCTAssertTrue(ChatAgentControlsText.confirmsChange(config))
+        let confirmation = ChatAgentControlsText.restartInPaneConfirmation(AgentConfigValues(model: "sonnet"), in: config)
+        XCTAssertEqual(confirmation.title, "Restart Claude Code with Sonnet?")
+        XCTAssertTrue(confirmation.message.contains("claude --resume"), confirmation.message)
+        config.pending = AgentConfigValues(model: "sonnet")
+        XCTAssertEqual(ChatAgentControlsText.note(config, isWorking: true), "Applies after this turn")
+        config.timing = .restart
+        XCTAssertFalse(ChatAgentControlsText.confirmsChange(config))
+    }
+
     func testAnswersFollowTheOptionsOrderAndYourOwnWords() {
         let single = AgentQuestion(question: "Which framework?", options: [.init(label: "React"), .init(label: "Vue")])
         let several = AgentQuestion(question: "Which tests?", options: [.init(label: "Unit"), .init(label: "UI")], multiSelect: true)
