@@ -47,6 +47,17 @@ final class ChatToolLineTests: XCTestCase {
         XCTAssertEqual(ChatToolLine(tool(.webSearch, name: "web_search", title: "swift 6", input: "swift 6")).text, "Web search swift 6")
     }
 
+    func testALineBuiltOnceReadsRelativeToTheFolderItIsDrawnIn() {
+        let edit = tool(.edit, name: "Edit", title: "/work/app/src/a.rs, /work/app/src/b.rs",
+                        input: "/work/app/src/a.rs\n/work/app/src/b.rs")
+        XCTAssertEqual(ChatToolLine(edit).relative(to: "/work/app"), ChatToolLine(edit, workingDirectory: "/work/app"))
+        let read = tool(.read, name: "Read", input: #"{"file_path":"/work/app/src/app.ts"}"#)
+        XCTAssertEqual(ChatToolLine(read).relative(to: "/work/app/").text, "Read src/app.ts")
+        XCTAssertEqual(ChatToolLine(read).relative(to: nil).text, "Read /work/app/src/app.ts")
+        let shell = tool(.shell, name: "Bash", input: #"{"command":"cat /work/app/a"}"#)
+        XCTAssertEqual(ChatToolLine(shell).relative(to: "/work/app").text, "Shell cat /work/app/a", "a command is never rewritten")
+    }
+
     func testAGroupTakesTheGlyphOfItsMostCommonKind() {
         let tools = [tool(.read, name: "Read", input: "{}"), tool(.shell, name: "Bash", input: "{}"), tool(.read, name: "Read", input: "{}")]
         XCTAssertEqual(ChatToolGroups.symbol(tools), "eye")

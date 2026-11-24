@@ -41,6 +41,8 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
     var planPreview: TimelinePlan?
     var inlineDiff: ChatInlineDiff?
     var imagePath: String?
+    /// A tool call's line, read from its input once on the render worker.
+    var toolLine: ChatToolLine?
 
     var awaitsHighlights: Bool {
         if case .markdown(let block) = content { block.awaitsHighlights } else { false }
@@ -219,6 +221,7 @@ nonisolated final class RowBuilder {
             let row = plainRow(item)
             rows = [row]
             bytes += row.inlineDiff?.bytes ?? 0
+            bytes += 2 * (row.toolLine.map { $0.verb.utf8.count + $0.detail.utf8.count } ?? 0)
         }
         bytes += rows.count * rowOverhead + 256
         let cost = LRUCost(bytes: bytes, units: rows.count)
@@ -268,12 +271,15 @@ nonisolated final class RowBuilder {
         }
         let diff: ChatInlineDiff?
         var image: String?
+        var line: ChatToolLine?
         if case .tool(let tool) = item.body {
             diff = ChatInlineDiff(tool: tool, item: item.id)
             image = ChatImages.path(read: tool)
+            line = ChatToolLine(tool)
         } else { diff = nil }
         return ChatRow(id: ChatRowID(item: item.id, part: 0), revision: item.revision, turn: item.turn,
-                       content: .item(item), preview: preview, planPreview: planPreview, inlineDiff: diff, imagePath: image)
+                       content: .item(item), preview: preview, planPreview: planPreview, inlineDiff: diff, imagePath: image,
+                       toolLine: line)
     }
 
     private func prefix(_ text: String, bytes: Int) -> String {

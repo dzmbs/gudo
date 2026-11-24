@@ -8,6 +8,9 @@ nonisolated struct ChatContextUsage: Equatable, Sendable {
     let used: UInt64
     let limit: UInt64
     let lastOutput: UInt64?
+    /// Rows looked back through for the last turn's end: the meter is drawn with the composer,
+    /// so its cost must not grow with the timeline.
+    static let rowsSearched = 64
 
     var fraction: Double { min(1, Double(used) / Double(max(limit, 1))) }
     var percent: Int { Int((fraction * 100).rounded()) }
@@ -25,7 +28,7 @@ nonisolated struct ChatContextUsage: Equatable, Sendable {
 
     init?(rows: [ChatRow], session: TimelineSession?) {
         guard let model = session?.model, let limit = Self.window(model: model) else { return nil }
-        for row in rows.reversed() {
+        for row in rows.suffix(Self.rowsSearched).reversed() {
             let end: TimelineTurnEnd?
             switch row.content {
             case .turnFooter(let footer): end = footer.end

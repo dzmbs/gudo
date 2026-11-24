@@ -435,7 +435,7 @@ struct ChatRowView: View {
 
     private func toolContent(_ item: TimelineItem, tool: TimelineTool) -> some View {
         VStack(alignment: .leading, spacing: DS.Space.gap10) {
-            let line = ChatToolLine(tool, workingDirectory: actions.workingDirectory)
+            let line = (row.toolLine ?? ChatToolLine(tool)).relative(to: actions.workingDirectory)
             Button(action: toggle) {
                 HStack(spacing: DS.Space.s) {
                     ChatToolGlyph(symbol: line.symbol, isFailed: tool.status == .known(.failed))

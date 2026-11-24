@@ -7,6 +7,8 @@ nonisolated struct ChatToolLine: Equatable, Sendable {
     let verb: String
     let detail: String
     let symbol: String
+    /// The detail names files, which read relative to the agent's folder.
+    let namesFiles: Bool
 
     private static let detailLimit = 512
     private static let inputLimit = 16_384
@@ -14,6 +16,7 @@ nonisolated struct ChatToolLine: Equatable, Sendable {
     init(_ tool: TimelineTool, workingDirectory: String? = nil) {
         let input = Self.input(tool)
         symbol = Self.symbol(tool.kind)
+        namesFiles = [.known(.read), .known(.edit), .known(.write)].contains(tool.kind)
         switch tool.kind {
         case .known(.shell):
             verb = "Shell"
@@ -52,6 +55,20 @@ nonisolated struct ChatToolLine: Equatable, Sendable {
             verb = Self.humanized(tool.name)
             detail = Self.fallback(tool)
         }
+    }
+
+    private init(verb: String, detail: String, symbol: String, namesFiles: Bool) {
+        self.verb = verb
+        self.detail = detail
+        self.symbol = symbol
+        self.namesFiles = namesFiles
+    }
+
+    /// The line with paths inside `workingDirectory` relative to it; cheap enough to draw with.
+    func relative(to workingDirectory: String?) -> ChatToolLine {
+        guard namesFiles, let workingDirectory, !workingDirectory.isEmpty else { return self }
+        let paths = detail.components(separatedBy: ", ").map { Self.relative($0, to: workingDirectory) }
+        return ChatToolLine(verb: verb, detail: paths.joined(separator: ", "), symbol: symbol, namesFiles: true)
     }
 
     /// The whole line for accessibility and copying.
