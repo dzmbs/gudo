@@ -475,8 +475,12 @@ Each screen can be opened directly for review: `-screen <name> -mock` (see Scree
   spring. On iPhone the switcher's Select Tabs… opens a sheet with the system's multi-select
   list and the same actions.
 - Then one group per host the window shows (its loose tabs), all at once (switching hosts never
-  goes through the Hosts screen): This Mac first (macOS only), then each open daemon and plain-SSH
-  host in the order it was opened. Group header: `server.rack`
+  goes through the Hosts screen): This Mac first (macOS only), then pinned hosts, then the rest
+  by name. With more than one host, everything is grouped by host (APP-ARCHITECTURE §23): each
+  host's header, then 12 pt in its loose tabs and its part of each project, the host's name a
+  step brighter (`text`) than the project names under it; a host that is down says so beside its
+  name in `meta` words ("Offline"), its rows at 60 %. Its header pins over its section with the
+  project's under it. With one host the list stays flat, as below. Group header: `server.rack`
   (`laptopcomputer` for this Mac) in `.secondary`, the host's name in the section font, sentence case
   (`.primary` when live, `.tertiary` when not), an "SSH" outline badge for plain-SSH hosts, the
   host's most urgent agent state (its dot or pill), a state glyph **only when not live** (§3.3: reconnecting

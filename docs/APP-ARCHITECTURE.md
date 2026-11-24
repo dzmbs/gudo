@@ -1246,6 +1246,20 @@ name the project) and the tab strip (a project's tabs carry its colour along the
 this order (`HostGroups.tabs`). Project colours are the theme's own ANSI hues softened like the
 state colours (`ProjectColor`), so they sit in any theme.
 
+**Grouped by host.** With more than one host in the window (`HostGroups.groupsByHost`) the
+sidebar groups everything by host instead: each host's header (This Mac first, then pinned
+hosts, then the rest by name), then a level in its loose tabs, a suggestion for them, and its
+part of each project (`ProjectPlace`: a project with tabs on two hosts is two groups, one under
+each, each folding on its own, `ProjectPlace.foldKey`), then its repositories. Only projects
+holding tabs on no host (an empty one, window tabs) stay above the hosts. A host's fold hides
+its whole section and is kept with the window, This Mac's too. A host that is down keeps its
+section and its last known projects, dimmed, its state in words beside its name ("Offline",
+"Reconnecting…"). The host's header pins over its section with the project's under it, each
+pushed up by the end of its rows. Under one host a project's + opens on that host, and Ungroup
+and Close All Tabs act on that host's part (`SidebarContainer.hostProject`); a tab dropped on a
+project's header from another host joins it under its own host. The order, the keys and the
+compact switcher follow the grouped rows. With one host nothing changes.
+
 **Gestures.** Drag a tab's row:
 - onto the middle of another row: that row lights in the project's colour (the accent for a loose
   row; "will group", unlike the insertion gap) with a quiet label saying what the drop does
