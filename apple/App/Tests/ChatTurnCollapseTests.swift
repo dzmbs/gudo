@@ -72,16 +72,26 @@ final class ChatTurnCollapseTests: XCTestCase {
     func testTheContextMeterReadsTheLastFinishedTurn() throws {
         let rows = fold(finishedTurn)
         let session = try TimelineJSON.decode(TimelineSession.self, from: #"{"agent":"Claude","native_session":"s","title":null,"model":"claude-opus-4-5-20251101","permission_mode":null,"commands":[]}"#)
-        let usage = try XCTUnwrap(ChatContextUsage(rows: rows, session: session))
+        let usage = try XCTUnwrap(ChatContextUsage(reported: nil, rows: rows, session: session))
         XCTAssertEqual(usage.used, 48_000)
         XCTAssertEqual(usage.limit, 200_000)
         XCTAssertEqual(usage.percent, 24)
         XCTAssertEqual(usage.amount, "48K of 200K")
         XCTAssertEqual(usage.lastOutput, 3_100)
-        XCTAssertNil(ChatContextUsage(rows: [F.turnEnd("end", turn: "t", input: nil)], session: session))
+        XCTAssertNil(ChatContextUsage(reported: nil, rows: [F.turnEnd("end", turn: "t", input: nil)], session: session))
         XCTAssertEqual(ChatContextUsage.window(model: "claude-sonnet-4-5[1m]"), 1_000_000)
-        XCTAssertEqual(ChatContextUsage.window(model: "gpt-5-codex"), 272_000)
+        XCTAssertNil(ChatContextUsage.window(model: "gpt-5-codex"))
         XCTAssertNil(ChatContextUsage.window(model: "fixture-model"))
+    }
+
+    func testTheContextMeterPrefersWhatTheAgentReports() throws {
+        let session = try TimelineJSON.decode(TimelineSession.self, from: #"{"agent":"Codex","native_session":"s","title":null,"model":"gpt-5-codex","permission_mode":null,"commands":[]}"#)
+        XCTAssertNil(ChatContextUsage(reported: nil, rows: fold(finishedTurn), session: session))
+        let usage = try XCTUnwrap(ChatContextUsage(reported: AgentContextUsage(used: 136_000, window: 272_000),
+                                                   rows: fold(finishedTurn), session: session))
+        XCTAssertEqual(usage.percent, 50)
+        XCTAssertEqual(usage.source, .agent)
+        XCTAssertNil(ChatContextUsage(reported: AgentContextUsage(used: 1, window: 0), rows: [], session: session))
     }
 
     #if os(iOS)

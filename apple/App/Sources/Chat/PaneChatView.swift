@@ -262,7 +262,7 @@ struct PaneChatView<Terminal: View>: View {
     }
 
     /// One rounded box: pills for attachments, the field, and under it the row with attach,
-    /// the agent's controls, the context ring, dictation and Send.
+    /// the agent's controls, the context meter, dictation and Send.
     private var composerBox: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !state.photos.attachments.isEmpty || state.photos.pendingName != nil {
@@ -312,7 +312,8 @@ struct PaneChatView<Terminal: View>: View {
             #endif
             ChatAgentControls(context: agentControls, session: state.model?.frame.session)
             Spacer(minLength: 0)
-            if let usage = ChatContextUsage(rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
+            if let usage = ChatContextUsage(reported: hub.agentControls[pane.id.rawValue]?.config.context,
+                                            rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
                 ChatContextMeter(usage: usage)
             }
             dictationButton

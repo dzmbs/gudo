@@ -1,30 +1,33 @@
 import DesignSystem
 import SwiftUI
 
-/// How full the agent's context is, as a small ring in the composer's row. Tapping it says how
-/// much, in words.
+/// How full the agent's context is, as a small percentage in the composer's row, so it reads as
+/// a number and never as progress. Tapping it says how much, in words.
 struct ChatContextMeter: View {
     let usage: ChatContextUsage
     @State private var showsDetails = false
 
-    private var ring: ChromeStyle {
-        usage.fraction >= 0.9 ? DS.Palette.error : usage.fraction >= 0.75 ? DS.Palette.attention : DS.Palette.textSecondary
+    static let attentionFraction = 0.75
+    static let errorFraction = 0.9
+
+    private var tint: ChromeStyle {
+        usage.fraction >= Self.errorFraction ? DS.Palette.error
+            : usage.fraction >= Self.attentionFraction ? DS.Palette.attention : DS.Palette.textTertiary
     }
 
     var body: some View {
         Button { showsDetails.toggle() } label: {
-            ZStack {
-                Circle().stroke(DS.Palette.hairline, lineWidth: 2.5)
-                Circle().trim(from: 0, to: usage.fraction)
-                    .stroke(ring, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: DS.Space.l, height: DS.Space.l)
-            .frame(width: DS.Size.touchTarget, height: DS.Size.touchTarget)
-            .contentShape(.rect)
-            .animation(DS.Motion.standard, value: usage.fraction)
+            Text(verbatim: "\(usage.percent)%")
+                .font(DS.Font.caption).monospacedDigit()
+                .foregroundStyle(tint)
+                .contentTransition(.numericText(value: Double(usage.percent)))
+                .padding(.horizontal, DS.Space.xs)
+                .frame(minWidth: DS.Size.touchTarget, minHeight: DS.Size.touchTarget)
+                .contentShape(.rect)
+                .animation(DS.Motion.standard, value: usage.percent)
         }
         .buttonStyle(.plain)
+        .help("Context \(usage.percent)% full, \(usage.amount) tokens")
         .accessibilityLabel("Context")
         .accessibilityValue("\(usage.percent) percent used, \(usage.amount) tokens")
         .accessibilityIdentifier("chat-context-meter")
@@ -39,7 +42,9 @@ struct ChatContextMeter: View {
                 Text(verbatim: "Last turn wrote " + ChatContextUsage.compact(output) + " tokens")
                     .font(ChatFont.subtitle).foregroundStyle(DS.Palette.textSecondary)
             }
-            Text("As of the last finished turn.").font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
+            if usage.source == .lastTurn {
+                Text("As of the last finished turn.").font(ChatFont.caption).foregroundStyle(DS.Palette.textTertiary)
+            }
         }
         .foregroundStyle(DS.Palette.text)
         .padding(DS.Space.l)
