@@ -64,6 +64,13 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   one agent may have 32 panes of its own open, and the agents of a session 128 together.
 - **Audit.** Every answer (allow once, for this pane, deny) is a signed `Approval` record in
   the hash-chained audit log.
+- **Questions and plans.** Answers and plan feedback ride on a signed decision for the request's
+  own option, need Approver and pass the pane's approval policy; they are audited with what was
+  said. A plain decision cannot allow a question without its answers, and no rule answers a
+  question or a plan. Typing in the terminal returns the question to the terminal.
+- **Restarting Claude Code.** Only the paired owner changes an agent's settings. The restart loop
+  asks with the pane's token and the launch's own id, and gets only arguments the daemon built
+  from choices the installed CLI listed; nothing restarts mid-turn.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
   A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.

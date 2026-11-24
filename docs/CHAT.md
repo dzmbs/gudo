@@ -1,8 +1,9 @@
 # Agent timelines
 
 A timeline mirrors the agent in a pane. The Claude adapter reads that process's transcript;
-it never starts a second agent, restarts the TUI or writes to its session files. Prompts,
-interrupts and approvals use the existing input and signed-decision paths.
+it never starts a second agent or writes to its session files, and restarts the TUI only when
+the owner changes its model, mode or effort (Agent controls below). Prompts, interrupts and
+approvals use the existing input and signed-decision paths.
 
 ## Protocol
 
@@ -219,8 +220,11 @@ scene for system permission dialogs, but host controls remain unavailable during
 
 The composer is one rounded surface and, empty, one 44 pt row: the Add menu, the field and one trailing button that swaps in place between Send (a draft is typed), Stop (the agent is working and the draft is empty) and Dictate. Send is a disc in the prominent accent with its glyph in `onProminent`, Stop the same disc in the ink, both inside a 44 pt target, so the swap never moves the row. The field grows upward to six lines with the buttons held at the bottom; a status or the command hint takes a line above the field. Hide Keyboard sits at the leading end of the row under the composer. Terminal is reached from the header's Chat/Terminal switch, not the composer.
 
+With a helper that offers `MoreDaemonFeatures::AGENT_CONTROLS`, the chips under the composer are
+`ChatAgentControls` (see Agent controls below). With an older helper they stay as follows.
 Under the composer sit the session's model and permission mode, as the transcript records them
 (`ChatSessionChips`), each a small menu with a trailing up-down chevron and the shared press fill.
+Only Claude Code is offered its aliases; Codex and pi show their model without a menu.
 The model menu opens on the running model, checked, then the aliases with its own family first.
 Choosing one puts Claude Code's own `/model <alias>` in an empty draft for Send to apply; nothing
 is sent by the menu, and with a draft typed the aliases are disabled. The mode menu lists every
@@ -854,6 +858,47 @@ Codex turn does (nothing typed since, or the last key Enter). A launch starts cl
 launch id until pi names its session, so the first send needs no confirmation either; text typed in
 Terminal since still does. There is no Stop, approval or since-join Chat on this path. Images a user
 pasted into pi show as a note, since the session keeps no file for them.
+
+## Agent controls
+
+`MoreDaemonFeatures::AGENT_CONTROLS` (bit 5) says the helper answers
+`WorkspaceRequest::AgentControlsWatch`, `AgentControlsUnwatch` and `SetAgentConfig`, pushes
+`ServerCtl::AgentControls` to connections that watch a pane, and accepts
+`ApprovalRequest::AnswerQuestion` and `Refuse`. Every new wire item is appended and pinned in
+`crates/proto/tests/golden_agent_controls.rs`; client-core refuses them locally on an older helper.
+
+`AgentControls` is a pane's `AgentConfig` (what the agent runs with, a change waiting for it, the
+models, modes and efforts it offers, each mode with its risk, and when a change applies) and the
+question or plan it waits on. Watching needs View on the pane; changing needs the paired owner;
+answering needs Approver, a signature by the device, and the pane's approval policy.
+
+- **Claude Code.** Models are the aliases its `--help` names plus opus, sonnet and haiku; modes
+  and efforts are the `--permission-mode` and `--effort` choices the installed CLI lists (read once
+  with `claude --help` on the terminal's `PATH`). What it runs with comes from its hooks
+  (`permission_mode`) and status line (`model.id`, `effort.level`), else from how it was started.
+  A change restarts it on the same conversation: a launch the daemon makes runs Claude in a loop
+  (`while gudo-hook claude-relaunch-pending <launch>; do gudo-hook claude-relaunch <launch>; done`),
+  so once the agent is idle the daemon arms the next arguments (`--resume <session>`, or
+  `--session-id` before the first turn, with `--model`, `--permission-mode`, `--effort`), sends
+  Claude SIGTERM, and the shim starts it again in the same pane, under the same exit fence. Its
+  SessionEnd and exit during the restart are not the agent's end. A change asked for mid-turn
+  waits for the turn's Stop and the app says "Applies after this turn". A Claude started by hand,
+  restored after a daemon restart or adopted from another helper reports why Chat cannot change it.
+- **Codex.** Models come from the app-server's `model/list` (hidden ones left out); efforts are
+  the current model's; modes are Read only, Auto and Full access (approval policy plus sandbox).
+  A change rides on the next `turn/start` Chat sends and counts as applied once Codex accepts
+  that turn; the app says "Applies next turn". Only a native Codex pane offers this.
+- **pi** reports that Chat cannot change it yet; a pi channel slots in behind the same request.
+
+Questions (`AskUserQuestion`) and plans (`ExitPlanMode`) reach the daemon in a held `PreToolUse`
+hook (settings v5 run it as `HeldPreToolUse` with the permission timeout; older settings' short
+hook is never held). The daemon holds it only while a connection that may answer watches the pane;
+otherwise Claude asks in its terminal as before. Typing in the pane's terminal lets it go, so
+Claude shows its own dialog there. A question's options are hidden from plain decisions (older apps
+see it as before); Chat's question card answers with `AnswerQuestion`, and the hook allows the
+tool with `updatedInput.answers` keyed by each question's text, which the terminal then shows as
+answered. A plan's Approve is an ordinary signed `Decide`; Keep planning is `Refuse` with what to
+change, which reaches Claude as the denial's reason. No rule answers a question or a plan.
 
 ## Native composer safety prerequisites
 

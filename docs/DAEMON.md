@@ -472,7 +472,10 @@ changing their policy requires a helper update.
   manifests (every 500 ms after output), timers, process exit. Events go to clients as
   `AgentEvent{pane, json}` and as `PaneMeta.agent`.
 - A Claude `PermissionRequest` hook is held open; the first client `Decide` answers it with the
-  hook decision JSON (single-flight; later deciders get `AlreadyDecided`).
+  hook decision JSON (single-flight; later deciders get `AlreadyDecided`). So is the `PreToolUse`
+  hook of a question or plan while Chat watches the pane (docs/CHAT.md "Agent controls").
+- A launched Claude Code runs in a restart loop, so Chat can change its model, mode or effort by
+  restarting it on the same conversation in the same pane (docs/CHAT.md "Agent controls").
 - Claude session ids are pinned at launch and persisted; on restart agent panes resume with
   `claude --resume <id>`.
 - Codex cannot be given an id and does not report one without hooks, so the daemon learns it
