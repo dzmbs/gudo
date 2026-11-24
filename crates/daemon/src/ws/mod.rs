@@ -273,6 +273,12 @@ pub(crate) async fn handle(
                 .await
                 .map(Response::GitStatus)
         }
+        // Each connection watches and changes agent controls itself (`conn`).
+        Request::AgentControlsWatch { .. }
+        | Request::AgentControlsUnwatch { .. }
+        | Request::SetAgentConfig { .. } => Err(WsError::Invalid(
+            "agent controls are a connection's own".into(),
+        )),
         Request::RepoRoot { path } => {
             let dir = existing_dir(&policy, &path)?;
             blocking(move || Ok(repo_root(&dir)))

@@ -322,6 +322,7 @@ async fn run(
         subscription.task.abort();
     }
     core.detach(client.id);
+    core.agent_controls.forget_conn(client.id);
     core.mp.leave(&core, client.id);
     core.client_connected(false);
     core.device_disconnected(device, client.id);
@@ -345,6 +346,7 @@ pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
         | proto::MoreDaemonFeatures::SPLIT_RATIOS
         | proto::MoreDaemonFeatures::PI_AGENT
         | proto::MoreDaemonFeatures::CHAT_IMAGES
+        | proto::MoreDaemonFeatures::AGENT_CONTROLS
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
@@ -995,7 +997,12 @@ async fn read_input(client: &Arc<Client>, mut stream: RecvStream) -> Result<(), 
                 .core
                 .apply_client_size(&entry, client.id, &client.authz, size, true);
         }
-        let written = if records_typing && !is_focus_report && !is_pointer_input {
+        let is_typing = records_typing && !is_focus_report && !is_pointer_input;
+        // Someone answers in the terminal: a question or plan held for Chat goes back to it.
+        if is_typing && client.core.hooks.release_to_terminal(input.pane_id) {
+            crate::agent_config::changed(&client.core, input.pane_id);
+        }
+        let written = if is_typing {
             entry.pane.write(bytes).await
         } else {
             entry.pane.write_generated(bytes).await
@@ -1367,6 +1374,14 @@ impl Client {
                     self.send(ServerCtl::Repos(snapshot));
                 }
             }
+            Event::AgentControls(pane) => {
+                if self.core.agent_controls.watching(self.id, pane)
+                    && self.pane_allowed(pane)
+                    && let Ok(controls) = crate::agent_config::controls(&self.core, pane)
+                {
+                    self.send(ServerCtl::AgentControls(controls));
+                }
+            }
             Event::RunAgain => {
                 if lock(&self.state).watches_run_again && is_owner(&self.core, &self.authz) {
                     self.send(ServerCtl::RunAgainOffers(self.core.run_again_offers()));
@@ -1637,7 +1652,7 @@ impl Client {
                 match self.core.decide_authorized(
                     self.actor,
                     &decide,
-                    Some(input),
+                    crate::agent_driver::DecisionInput::Edited(input),
                     Some(crate::agent_driver::ApprovalEvidence::Device(&self.authz)),
                     record,
                 ) {
@@ -1682,6 +1697,113 @@ impl Client {
                 crate::approve::revoke(&self.core, rule_id, self.actor, &name)?;
                 Ok(proto::ApprovalResponse::Done)
             }
+            proto::ApprovalRequest::AnswerQuestion { decide, answers } => {
+                crate::agent_config::check_answers(&answers).map_err(E::Invalid)?;
+                let said = answers
+                    .iter()
+                    .map(|answer| format!("{}: {}", answer.question, answer.answer))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                self.answer_with(
+                    &decide,
+                    crate::agent_driver::DecisionInput::Answers(&answers),
+                    &said,
+                )
+            }
+            proto::ApprovalRequest::Refuse { decide, message } => {
+                let message = message.trim();
+                if message.len() > proto::MAX_AGENT_ANSWER {
+                    return Err(E::Invalid("the message is too long".into()));
+                }
+                self.answer_with(
+                    &decide,
+                    crate::agent_driver::DecisionInput::Refusal(message),
+                    message,
+                )
+            }
+        }
+    }
+
+    /// Answers an open request with more than its option (a question's answers, a refusal's
+    /// message): Approver on the pane, signed by this device, under the pane's approval policy,
+    /// and in the audit log with what was said.
+    fn answer_with(
+        &self,
+        decide: &proto::Decide,
+        input: crate::agent_driver::DecisionInput<'_>,
+        said: &str,
+    ) -> Result<proto::ApprovalResponse, proto::ApprovalError> {
+        use proto::ApprovalError as E;
+        if decide.actor != self.actor {
+            return Err(E::Forbidden(
+                "the decision's actor is not this connection".into(),
+            ));
+        }
+        let pane = self
+            .core
+            .request_pane(decide.request_id)
+            .ok_or(E::NotFound)?;
+        self.allow(Need::Approve, Target::Pane(pane))
+            .map_err(|error| E::Forbidden(error.to_string()))?;
+        let daemon = self.core.identity.daemon_id();
+        if !grants::verify_approval(daemon, decide) {
+            return Err(E::Forbidden(
+                "the decision is not signed by this device".into(),
+            ));
+        }
+        let name = self.core.mp.name_of(self.id);
+        let signed_bytes = || {
+            proto::approval_signing_bytes(daemon, decide.request_id, decide.option_id, decide.actor)
+        };
+        match crate::mp::gate_decision(
+            &self.core,
+            self.ballot(&name),
+            decide.request_id,
+            decide.option_id,
+            (signed_bytes(), decide.sig.clone()),
+        ) {
+            Ok(crate::mp::Gate::Proceed) => {}
+            Ok(crate::mp::Gate::Held) => {
+                return Err(E::Forbidden(
+                    "another approver must agree; answer in Terminal".into(),
+                ));
+            }
+            Err(error) => return Err(E::Forbidden(error.to_string())),
+        }
+        let record = |decided: &proto::Decided, details: &crate::agent::DecidedRequest| {
+            self.answered(decided.pane_id, &details.option, said);
+            self.core.mp.audit.append(
+                AuditKind::Approval,
+                crate::mp::AuditEntry {
+                    pane_id: Some(decided.pane_id),
+                    detail: format!("{name} chose {:?} and said {said:?}", details.option),
+                    approval: Some(proto::ApprovalAudit {
+                        request_id: decide.request_id,
+                        agent_request: details.request.to_string(),
+                        option_id: decide.option_id,
+                        option: details.option.clone(),
+                        tool: details.tool.clone(),
+                        summary: details.summary.clone(),
+                        signed: signed_bytes(),
+                        sig: decide.sig.clone(),
+                    }),
+                    ..self.authz.audit()
+                },
+            );
+        };
+        match self.core.decide_authorized(
+            self.actor,
+            decide,
+            input,
+            Some(crate::agent_driver::ApprovalEvidence::Device(&self.authz)),
+            record,
+        ) {
+            Ok(_) => {
+                self.core.mp.approvals.forget(decide.request_id);
+                Ok(proto::ApprovalResponse::Done)
+            }
+            Err(Some(_)) => Err(E::AlreadyDecided),
+            Err(None) => Err(E::NotFound),
         }
     }
 
@@ -2901,7 +3023,7 @@ impl Client {
         match self.core.decide_authorized(
             self.actor,
             &decide,
-            None,
+            crate::agent_driver::DecisionInput::Plain,
             Some(crate::agent_driver::ApprovalEvidence::Device(&self.authz)),
             record,
         ) {
@@ -2919,6 +3041,28 @@ impl Client {
         let (need, target) = policy::workspace(&request);
         self.allow(need, target)
             .map_err(|error| WsError::Denied(error.to_string()))?;
+        match &request {
+            WorkspaceRequest::AgentControlsWatch { pane_id } => {
+                let answers = self.allow(Need::Approve, Target::Pane(*pane_id)).is_ok();
+                return crate::agent_config::watch(&self.core, self.id, *pane_id, answers)
+                    .await
+                    .map(WorkspaceResponse::AgentControls);
+            }
+            WorkspaceRequest::AgentControlsUnwatch { pane_id } => {
+                self.core.agent_controls.unwatch(self.id, *pane_id);
+                return Ok(WorkspaceResponse::Done);
+            }
+            WorkspaceRequest::SetAgentConfig { pane_id, change } => {
+                if !self.ws.owner {
+                    return Err(WsError::Denied(
+                        "only the host's owner changes an agent's settings".into(),
+                    ));
+                }
+                return crate::agent_config::set(&self.core, *pane_id, change)
+                    .map(WorkspaceResponse::AgentControls);
+            }
+            _ => {}
+        }
         if matches!(request, WorkspaceRequest::SendReview(_)) {
             self.core
                 .mp

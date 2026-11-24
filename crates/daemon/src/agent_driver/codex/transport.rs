@@ -3,7 +3,7 @@ pub(super) mod control;
 mod frames;
 mod history;
 mod peer;
-mod rpc;
+pub(super) mod rpc;
 #[cfg(test)]
 mod tests;
 
@@ -92,6 +92,7 @@ fn prepare(
         codex_home: Mutex::new(None),
         observations: Mutex::new(Some(observations.clone())),
         directory: directory.to_owned(),
+        config: Mutex::default(),
     });
     let weak = Arc::downgrade(&source);
     let control = tokio::spawn(control::run(weak.clone(), commands));

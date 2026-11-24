@@ -114,6 +114,17 @@ pub(crate) fn shown_summary(kind: AgentKind, blocker: &agents::Blocker) -> Strin
     }
 }
 
+/// The options a blocker shows to clients that answer with a plain decision. A question's
+/// options carry its answers, which only Chat's question card gives, so the others answer it in
+/// the terminal as before.
+fn offered_options(blocker: &agents::Blocker) -> &[agents::ApprovalOption] {
+    if blocker.tool.as_deref() == Some(agents::CLAUDE_QUESTION_TOOL) {
+        &[]
+    } else {
+        &blocker.options
+    }
+}
+
 /// Longest blocked summary, in characters (the adapters cut tool calls at 200 already).
 const SUMMARY_CHARS: usize = 512;
 
@@ -349,9 +360,7 @@ impl AgentRuntime {
                 AgentState::Blocked(Blocker {
                     request_id,
                     summary: shown_summary(self.kind, &blocked.blocker),
-                    options: blocked
-                        .blocker
-                        .options
+                    options: offered_options(&blocked.blocker)
                         .iter()
                         .enumerate()
                         .map(|(i, option)| DecisionOption {
@@ -514,13 +523,12 @@ impl AgentRuntime {
             .status()
             .blocked()
             .filter(|blocked| blocked.request_id == request)?;
+        let options = offered_options(&blocked.blocker);
         let find = |choice: ApprovalChoice| {
-            blocked
-                .blocker
-                .options
+            options
                 .iter()
                 .position(|option| option.id == choice)
-                .map(|i| (OptionId(i as u32), blocked.blocker.options[i].label.clone()))
+                .map(|i| (OptionId(i as u32), options[i].label.clone()))
         };
         Some(ApprovalButtons {
             approve: find(ApprovalChoice::AllowOnce),
@@ -535,9 +543,7 @@ impl AgentRuntime {
         Some(BlockedDetail {
             wire,
             summary: shown_summary(self.kind, &blocked.blocker),
-            options: blocked
-                .blocker
-                .options
+            options: offered_options(&blocked.blocker)
                 .iter()
                 .map(|option| (option.label.clone(), option.id))
                 .collect(),
@@ -567,6 +573,19 @@ impl AgentRuntime {
             summary: shown_summary(self.kind, &blocked.blocker),
             request,
         })
+    }
+
+    /// The wire id of the open request, its tool and the option of each choice, in order.
+    pub fn open_options(&mut self) -> Option<(RequestId, Option<String>, Vec<ApprovalChoice>)> {
+        let blocked = self.arbiter.status().blocked()?.clone();
+        let wire = self.wire_request(&blocked.request_id);
+        let choices = blocked
+            .blocker
+            .options
+            .iter()
+            .map(|option| option.id)
+            .collect();
+        Some((wire, blocked.blocker.tool, choices))
     }
 
     /// The wire id of the request the agent is blocked on now, if it asked through a hook.
@@ -691,6 +710,7 @@ pub(crate) struct DecidedRequest {
 
 struct Pending {
     request: agents::RequestId,
+    event: HeldEvent,
     suggestions: Vec<Value>,
     /// The agent asking, the tool and its input (for edited approvals and rules).
     agent: Option<AgentKind>,
@@ -699,13 +719,35 @@ struct Pending {
     reply: oneshot::Sender<HookResponse>,
 }
 
+/// Which hook holds a request open, which decides how it is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HeldEvent {
+    /// Claude Code's or Codex's `PermissionRequest`.
+    Permission,
+    /// Claude Code's `PreToolUse` for a question or a plan, held for Chat.
+    PreToolUse,
+}
+
 /// A hook-held permission request: what the tool wants to do.
 #[derive(Debug, Clone)]
 pub(crate) struct HeldRequest {
     pub request: agents::RequestId,
+    pub event: HeldEvent,
     pub agent: Option<AgentKind>,
     pub tool: String,
     pub input: Value,
+}
+
+impl Pending {
+    fn as_request(&self) -> HeldRequest {
+        HeldRequest {
+            request: self.request.clone(),
+            event: self.event,
+            agent: self.agent,
+            tool: self.tool.clone(),
+            input: self.input.clone(),
+        }
+    }
 }
 
 impl HeldRequest {
@@ -843,21 +885,22 @@ impl HookServer {
         }))
     }
 
+    /// Answers the request a hook holds on `pane` with what `encode` makes of it. `encode`
+    /// returning `None` (an answer that does not fit the request) leaves it waiting.
     pub(crate) fn resolve_with(
         &self,
         pane: PaneId,
         request: &agents::RequestId,
-        encode: impl FnOnce(&[Value], &Value) -> String,
+        encode: impl FnOnce(&HeldRequest, &[Value]) -> Option<String>,
     ) -> bool {
         let mut pending = lock(&self.pending);
-        if !pending
-            .get(&pane)
-            .is_some_and(|held| &held.request == request)
-        {
+        let Some(held) = pending.get(&pane).filter(|held| &held.request == request) else {
             return false;
-        }
+        };
+        let Some(stdout) = encode(&held.as_request(), &held.suggestions) else {
+            return false;
+        };
         let held = pending.remove(&pane).expect("checked above");
-        let stdout = encode(&held.suggestions, &held.input);
         held.reply
             .send(HookResponse {
                 stdout: Some(stdout),
@@ -865,14 +908,24 @@ impl HookServer {
             .is_ok()
     }
 
+    /// Lets go of a held question or plan without an answer, so the agent asks in its terminal
+    /// instead: someone typed there. Returns whether one was held.
+    pub(crate) fn release_to_terminal(&self, pane: PaneId) -> bool {
+        let mut pending = lock(&self.pending);
+        if !pending
+            .get(&pane)
+            .is_some_and(|held| held.event == HeldEvent::PreToolUse)
+        {
+            return false;
+        }
+        let held = pending.remove(&pane).expect("checked above");
+        let _ = held.reply.send(HookResponse::default());
+        true
+    }
+
     /// The request a hook holds open on `pane`, if any.
     pub fn held(&self, pane: PaneId) -> Option<HeldRequest> {
-        lock(&self.pending).get(&pane).map(|held| HeldRequest {
-            request: held.request.clone(),
-            agent: held.agent,
-            tool: held.tool.clone(),
-            input: held.input.clone(),
-        })
+        lock(&self.pending).get(&pane).map(Pending::as_request)
     }
 
     /// Whether a hook holds request `request` of `pane` open, so a decision reaches the agent.
@@ -975,6 +1028,13 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         reader.get_mut().set_limit(u64::MAX);
         return crate::agent_driver::pi::bridge::serve(core, call, peer_uid, reader, write).await;
     }
+    if let Ok(call) = serde_json::from_str::<crate::agent_config::RelaunchCall>(&line) {
+        let reply = crate::agent_config::serve_relaunch(core, call);
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
+        return write.shutdown().await;
+    }
     if let Ok(call) = serde_json::from_str::<crate::agent_input::AgentInputCall>(&line) {
         let reply = crate::agent_input::serve(core, call).await;
         let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
@@ -1012,6 +1072,7 @@ async fn handle_hook(
         return HookResponse::default();
     };
     if request.event == STATUS_LINE_EVENT {
+        crate::agent_config::note_status_line(core, pane_id, &request.payload);
         // It counts for the account of the pane that sent it.
         let account = core
             .pane_account(pane_id)
@@ -1045,6 +1106,21 @@ async fn handle_hook(
     let Some(entry) = core.pane(pane_id) else {
         return HookResponse::default();
     };
+    // The Claude Code being restarted with new settings ends its session; the one it restarts
+    // into continues it.
+    if request.event == "SessionEnd" && crate::agent_config::is_relaunching(&entry) {
+        return HookResponse::default();
+    }
+    if request.agent == "claude" {
+        crate::agent_config::note_hook(core, pane_id, &request.payload);
+    }
+    // Without Chat to answer it, a plan stays Claude Code's own dialog, as before it was hooked.
+    if request.event == agents::CLAUDE_HELD_TOOL_EVENT
+        && request.payload["tool_name"].as_str() == Some(agents::CLAUDE_PLAN_TOOL)
+        && !core.agent_controls.answerable(pane_id)
+    {
+        return HookResponse::default();
+    }
     let payload = serde_json::to_vec(&request.payload).unwrap_or_default();
     let mut attached = None;
     let (event, blocked) = {
@@ -1083,9 +1159,17 @@ async fn handle_hook(
         crate::core::record_agent_started_by_hand(core, &entry, kind, None);
     }
     core.agent_event(pane_id, event);
-    if request.event != "PermissionRequest" {
+    let held_event = if request.event == "PermissionRequest" {
+        HeldEvent::Permission
+    } else if request.event == agents::CLAUDE_HELD_TOOL_EVENT
+        && request.agent == "claude"
+        && ClaudeCode::holds_tool(request.payload["tool_name"].as_str().unwrap_or_default())
+        && core.agent_controls.answerable(pane_id)
+    {
+        HeldEvent::PreToolUse
+    } else {
         return HookResponse::default();
-    }
+    };
     let Some(request_id) = blocked else {
         return HookResponse::default();
     };
@@ -1100,6 +1184,7 @@ async fn handle_hook(
         pane_id,
         Pending {
             request: request_id.clone(),
+            event: held_event,
             suggestions,
             agent: agent_kind(&request.agent),
             tool: request
@@ -1118,11 +1203,17 @@ async fn handle_hook(
     );
     // An auto-approve rule may answer at once; otherwise clients learn what they may do.
     crate::approve::request_held(core, pane_id);
+    crate::agent_config::changed(core, pane_id);
     let decided = tokio::select! {
         waited = tokio::time::timeout(PERMISSION_WAIT, rx) => waited.ok().and_then(Result::ok),
         () = hook_gone => None,
     };
+    crate::agent_config::changed(core, pane_id);
     if let Some(response) = decided {
+        if response.stdout.is_none() {
+            core.approvals.clear_request(pane_id);
+            core.emit(crate::core::Event::PaneMeta(pane_id));
+        }
         return response;
     }
     // No decision: the agent falls back to its own prompt in the terminal, so an answer
@@ -1359,6 +1450,7 @@ mod tests {
             pane,
             Pending {
                 request: request.clone(),
+                event: HeldEvent::Permission,
                 suggestions: Vec::new(),
                 agent: Some(AgentKind::Claude),
                 tool: "Bash".into(),
@@ -1366,6 +1458,6 @@ mod tests {
                 reply,
             },
         );
-        assert!(!hooks.resolve_with(pane, &request, |_, _| String::new()));
+        assert!(!hooks.resolve_with(pane, &request, |_, _| Some(String::new())));
     }
 }

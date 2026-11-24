@@ -50,6 +50,8 @@ pub(in crate::agent_driver::codex) struct Command {
     policy: Option<proto::ApprovalPolicy>,
     signers: Vec<crate::mp::Authz>,
     rule: Option<proto::AutoApproveRule>,
+    /// Chat's settings for the turn this starts.
+    config: Option<proto::AgentConfigValues>,
 }
 
 enum Action {
@@ -113,7 +115,7 @@ impl Live {
         images: &[std::path::PathBuf],
         acknowledgement: SendAcknowledgement,
     ) -> Result<UnconfirmedSend, WsError> {
-        let command = self.command(
+        let mut command = self.command(
             session,
             acknowledgement.revision,
             acknowledgement.actor,
@@ -123,6 +125,9 @@ impl Live {
             },
             Some(acknowledgement),
         )?;
+        if command.turn.is_none() {
+            command.config = self.pending_config();
+        }
         self.enqueue(command)?;
         Ok(UnconfirmedSend::NotConfirmed)
     }
@@ -241,6 +246,7 @@ impl Live {
             policy: None,
             signers: Vec::new(),
             rule: None,
+            config: None,
         })
     }
 
@@ -283,6 +289,12 @@ async fn handle(source: &Weak<Live>, mut command: Command) {
 }
 
 pub(in crate::agent_driver::codex) fn accepted(source: &Weak<Live>, command: &mut Command) {
+    if let (Some(config), Some(source)) = (&command.config, source.upgrade()) {
+        source.config_applied(config);
+        if let Some((core, entry)) = source.target() {
+            crate::agent_config::changed(&core, entry.pane.id);
+        }
+    }
     let Some(acknowledgement) = command.acknowledgement.take() else {
         return;
     };
@@ -405,7 +417,14 @@ fn serialize(source: &Weak<Live>, command: &Command) -> Result<String, ControlEr
             if let Some(turn) = &command.turn {
                 json!({"id":rpc::REQUEST_ID,"method":"turn/steer","params":{"threadId":thread,"expectedTurnId":turn,"input":input}})
             } else {
-                json!({"id":rpc::REQUEST_ID,"method":"turn/start","params":{"threadId":thread,"input":input}})
+                let mut params = command
+                    .config
+                    .as_ref()
+                    .map(super::super::config::turn_overrides)
+                    .unwrap_or_default();
+                params.insert("threadId".into(), thread.into());
+                params.insert("input".into(), input.into());
+                json!({"id":rpc::REQUEST_ID,"method":"turn/start","params":params})
             }
         }
         Action::Stop => {

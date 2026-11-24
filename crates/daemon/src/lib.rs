@@ -26,6 +26,7 @@
 
 mod accounts;
 mod agent;
+pub mod agent_config;
 mod agent_driver;
 pub mod agent_input;
 mod agent_integration;

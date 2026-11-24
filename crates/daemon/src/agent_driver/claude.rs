@@ -100,10 +100,9 @@ impl AgentDriver for ClaudeDriver {
         decision: ApprovalDecision<'_>,
         _: super::ApprovalAuthority,
     ) -> bool {
-        core.hooks
-            .resolve_with(pane, request, |suggestions, input| {
-                approval_response(suggestions, input, decision)
-            })
+        core.hooks.resolve_with(pane, request, |held, suggestions| {
+            approval_response(held, suggestions, decision)
+        })
     }
 }
 
@@ -134,27 +133,66 @@ pub(super) fn prompt_hook(request: &crate::HookRequest) -> Option<(&str, &str)> 
     ))
 }
 
+/// The hook's answer for `decision`, or `None` when it does not fit the held request (a
+/// question allowed without its answers, answers to a permission request).
 pub(super) fn approval_response(
+    held: &crate::agent::HeldRequest,
     suggestions: &[serde_json::Value],
-    input: &serde_json::Value,
     decision: ApprovalDecision<'_>,
-) -> String {
-    match decision {
-        ApprovalDecision::Choice(choice) => {
-            agents::ClaudeCode::permission_response(choice, suggestions).to_string()
-        }
-        ApprovalDecision::Edited(command) => {
-            let mut input = input.clone();
-            if let Some(fields) = input.as_object_mut() {
-                fields.insert("command".into(), command.into());
+) -> Option<String> {
+    use agents::{ApprovalChoice, ClaudeCode, ClaudePlanAnswer};
+    let response = match held.event {
+        crate::agent::HeldEvent::Permission => match decision {
+            ApprovalDecision::Choice(choice) => {
+                ClaudeCode::permission_response(choice, suggestions)
             }
-            serde_json::json!({
+            ApprovalDecision::Edited(command) => {
+                let mut input = held.input.clone();
+                if let Some(fields) = input.as_object_mut() {
+                    fields.insert("command".into(), command.into());
+                }
+                serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": { "behavior": "allow", "updatedInput": input },
+                    }
+                })
+            }
+            ApprovalDecision::Refusal(message) => serde_json::json!({
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
-                    "decision": { "behavior": "allow", "updatedInput": input },
+                    "decision": { "behavior": "deny", "message": message },
                 }
-            })
-            .to_string()
+            }),
+            ApprovalDecision::Answers(_) => return None,
+        },
+        crate::agent::HeldEvent::PreToolUse if held.tool == agents::CLAUDE_QUESTION_TOOL => {
+            match decision {
+                ApprovalDecision::Answers(answers) => {
+                    ClaudeCode::question_response(&held.input, answers)
+                }
+                ApprovalDecision::Choice(ApprovalChoice::Deny) => {
+                    ClaudeCode::refusal_response("The user chose not to answer.")
+                }
+                ApprovalDecision::Refusal(message) => ClaudeCode::refusal_response(message),
+                ApprovalDecision::Choice(_) | ApprovalDecision::Edited(_) => return None,
+            }
         }
-    }
+        crate::agent::HeldEvent::PreToolUse => {
+            let answer = match decision {
+                ApprovalDecision::Choice(ApprovalChoice::AllowOnce) => ClaudePlanAnswer::Approve,
+                ApprovalDecision::Choice(ApprovalChoice::Deny) => {
+                    ClaudePlanAnswer::KeepPlanning(String::new())
+                }
+                ApprovalDecision::Refusal(message) => {
+                    ClaudePlanAnswer::KeepPlanning(message.to_owned())
+                }
+                ApprovalDecision::Choice(ApprovalChoice::AllowSession)
+                | ApprovalDecision::Edited(_)
+                | ApprovalDecision::Answers(_) => return None,
+            };
+            ClaudeCode::plan_response(&held.input, &answer)
+        }
+    };
+    Some(response.to_string())
 }

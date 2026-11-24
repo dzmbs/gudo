@@ -336,10 +336,13 @@ impl Fixture {
             actor,
             sig: Vec::new(),
         };
-        self.raw
-            .daemon
-            .core
-            .decide_authorized(actor, &decide, None, None, |_, _| {})
+        self.raw.daemon.core.decide_authorized(
+            actor,
+            &decide,
+            crate::agent_driver::DecisionInput::Plain,
+            None,
+            |_, _| {},
+        )
     }
 }
 
@@ -440,4 +443,55 @@ async fn an_answer_that_never_left_is_offered_again_without_failing_chat() {
     assert!(lock(&fixture.source.state).is_chat_ready());
     assert!(!lock(&fixture.source.runtime).pending[0].admitted);
     fixture.raw.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_turn_carries_chat_settings_which_apply_once_codex_accepts_it() {
+    let fixture = Fixture::new().await;
+    let source = Arc::downgrade(&fixture.source);
+    let (sender, mut queued) = mpsc::channel(1);
+    *lock(&fixture.source.controls) = Some(sender);
+    let wanted = proto::AgentConfigValues {
+        model: Some("gpt-5.4".into()),
+        mode: Some("read-only".into()),
+        effort: Some("high".into()),
+    };
+    fixture.source.set_config(&wanted);
+    let revision = lock(&fixture.raw.entry.pane.agent_input_gate)
+        .control_revision()
+        .unwrap();
+    let (receipt, _) = tokio::sync::watch::channel(crate::agent_input::Receipt::Waiting);
+    fixture
+        .source
+        .send_prompt(
+            None,
+            "fixture",
+            SendAcknowledgement {
+                revision,
+                actor: fixture.actor,
+                receipt,
+            },
+        )
+        .unwrap();
+    let mut command = queued.recv().await.unwrap();
+    let request: Value = serde_json::from_str(&serialize(&source, &command).unwrap()).unwrap();
+    assert_eq!(request["method"], "turn/start");
+    assert_eq!(request["params"]["input"][0]["text"], "fixture");
+    assert_eq!(request["params"]["model"], "gpt-5.4");
+    assert_eq!(request["params"]["effort"], "high");
+    assert_eq!(request["params"]["approvalPolicy"], "on-request");
+    assert_eq!(request["params"]["sandboxPolicy"]["type"], "readOnly");
+    assert_eq!(fixture.source.config().pending, Some(wanted.clone()));
+
+    accepted(&source, &mut command);
+    let config = fixture.source.config();
+    assert_eq!(config.pending, None);
+    assert_eq!(config.current.model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(config.current.mode.as_deref(), Some("read-only"));
+    let plain: Value =
+        serde_json::from_str(&serialize(&source, &fixture.prompt("again")).unwrap()).unwrap();
+    assert!(
+        plain["params"].get("model").is_none(),
+        "a plain command carries nothing new"
+    );
 }

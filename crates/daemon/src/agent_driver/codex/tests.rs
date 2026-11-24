@@ -16,6 +16,7 @@ pub(crate) fn source() -> Arc<Live> {
         codex_home: Mutex::new(None),
         observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-fixture").unwrap(),
+        config: Mutex::default(),
     })
 }
 

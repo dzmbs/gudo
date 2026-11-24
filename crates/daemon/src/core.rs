@@ -126,6 +126,8 @@ pub(crate) enum Event {
     },
     /// The commands restored panes offer to run again changed (`Core::run_again_offers`).
     RunAgain,
+    /// A pane agent's Chat controls changed (`agent_config`).
+    AgentControls(PaneId),
 }
 
 /// What restoring a pane after a daemon restart needs.
@@ -279,6 +281,8 @@ pub(crate) struct PaneEntry {
     pub codex: Mutex<Option<Arc<crate::agent_driver::codex::Live>>>,
     /// The pane's pi, while its bridge extension is connected.
     pub pi: Mutex<Option<Arc<crate::agent_driver::pi::bridge::Bridge>>>,
+    /// The Claude Code the daemon launched here, which Chat can restart with new settings.
+    pub claude_launch: Mutex<Option<crate::agent_config::ClaudeLaunch>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Serializes policy decisions, request replacement and actual PTY resizes.
@@ -398,6 +402,8 @@ pub(crate) struct Core {
     pub themes: crate::theme::Themes,
     /// Auto-approve rules and the open requests' extras (`approve`).
     pub approvals: crate::approve::Approvals,
+    /// Chat's agent controls: who watches them and what agents report (`agent_config`).
+    pub agent_controls: crate::agent_config::AgentControlsHub,
     connected: AtomicUsize,
     /// Each device's open connections, oldest first (`MAX_CONNS_PER_DEVICE`).
     device_conns: Mutex<
@@ -455,6 +461,7 @@ impl Core {
                 &config.hook_bin(),
             ),
             approvals: crate::approve::Approvals::default(),
+            agent_controls: crate::agent_config::AgentControlsHub::default(),
             browser: crate::browser::Browser::install(&config.state_dir, &config.hook_bin()),
             themes: crate::theme::Themes::default(),
             power: crate::power::Power::load(&config.state_dir),
@@ -887,6 +894,11 @@ impl Core {
                 core.apply_op(LayoutOp::ClosePane { pane_id: pane });
             }
         });
+    }
+
+    /// This core, for work that outlives the call scheduling it.
+    pub(crate) fn weak(&self) -> std::sync::Weak<Core> {
+        self.weak_self.clone()
     }
 
     /// The pane whose agent asked approval request `id`.
@@ -1580,6 +1592,7 @@ impl Core {
                 }
                 self.hooks.cancel_pending(*id);
                 self.approvals.forget_pane(*id);
+                self.agent_controls.forget_pane(*id);
                 self.ws.forget_pane(*id);
                 self.mp.forget_pane(*id);
                 if !self.shutting_down.load(Ordering::Acquire) {
@@ -1905,6 +1918,7 @@ impl Core {
         }
         let mut agent = None;
         let mut codex = None;
+        let mut claude_launch = None;
         let mut native_input_launch = crate::agent_input::AgentInputGate::default();
         let injection = self
             .shell
@@ -2165,13 +2179,31 @@ impl Core {
                 native_input_launch =
                     crate::agent_input::AgentInputGate::pending(launch_id.clone());
                 let shim = shell_quote(&context.hook_bin.to_string_lossy());
+                // Chat restarts Claude Code with new settings on the same conversation: each
+                // time it exits, the shim asks whether to start it again.
+                let relaunch = match (&session_id, *kind) {
+                    (Some(session), AgentKind::Claude) => {
+                        claude_launch = Some(crate::agent_config::ClaudeLaunch::new(
+                            launch_id.clone(),
+                            context.clone(),
+                            session.clone(),
+                            resume.is_some(),
+                            spec.program != "claude",
+                        ));
+                        let launch_id = shell_quote(&launch_id);
+                        format!(
+                            "; while {shim} claude-relaunch-pending {launch_id} </dev/null; do {shim} claude-relaunch {launch_id}; done"
+                        )
+                    }
+                    _ => String::new(),
+                };
                 let launch_id = shell_quote(&launch_id);
                 command.args([
                     "-i",
                     "-l",
                     "-c",
                     &format!(
-                        "{agent_wait}{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {line}; {shim} agent-exit-fence {launch_id} && {}",
+                        "{agent_wait}{pre_command}{shim} agent-input-arm {launch_id} </dev/null; {line}{relaunch}; {shim} agent-exit-fence {launch_id} && {}",
                         then_shell()
                     ),
                 ]);
@@ -2297,6 +2329,7 @@ impl Core {
             agent: Mutex::new(agent.map(|(_, _, _, runtime)| runtime)),
             codex: Mutex::new(codex),
             pi: Mutex::new(None),
+            claude_launch: Mutex::new(claude_launch),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
@@ -2439,6 +2472,7 @@ impl Core {
             agent: Mutex::new(agent),
             codex: Mutex::new(None),
             pi: Mutex::new(None),
+            claude_launch: Mutex::new(None),
             agent_attached: Notify::new(),
             sizing: Mutex::new(Sizing::default()),
             pending_resize: Mutex::new(None),
@@ -2594,6 +2628,8 @@ impl Core {
                     .record(crate::ws::turns::Boundary::End { pane: id });
                 if event.kind == EventKind::SessionEnded {
                     crate::approve::session_over(self, id);
+                } else {
+                    crate::agent_config::turn_ended(self, id);
                 }
             }
             _ => {}
@@ -2843,20 +2879,24 @@ impl Core {
         edited: Option<&str>,
         record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
     ) -> Result<Decided, Option<Actor>> {
-        self.decide_authorized(actor, decide, edited, None, record)
+        let input = edited.map_or(
+            crate::agent_driver::DecisionInput::Plain,
+            crate::agent_driver::DecisionInput::Edited,
+        );
+        self.decide_authorized(actor, decide, input, None, record)
     }
 
     pub(crate) fn decide_authorized(
         &self,
         actor: Actor,
         decide: &Decide,
-        edited: Option<&str>,
+        input: crate::agent_driver::DecisionInput<'_>,
         authorization: Option<crate::agent_driver::ApprovalEvidence<'_>>,
         record: impl FnOnce(&Decided, &crate::agent::DecidedRequest),
     ) -> Result<Decided, Option<Actor>> {
         if self.term.asks.caller_of(decide.request_id).is_some() {
-            // A drive request runs exactly the action asked; it has no edited form.
-            if edited.is_some() {
+            // A drive request runs exactly the action asked; it has no other form.
+            if input != crate::agent_driver::DecisionInput::Plain {
                 return Err(None);
             }
             return self
@@ -2874,6 +2914,14 @@ impl Core {
                 continue;
             }
             let driver = crate::agent_driver::driver(runtime.kind());
+            let allows = runtime
+                .request_facts(decide.request_id, Some(decide.option_id))
+                .and_then(|facts| facts.allows);
+            if !allows
+                .is_some_and(|allows| crate::agent_driver::decision_fits(self, id, input, allows))
+            {
+                return Err(None);
+            }
             let outcome = runtime.decide(decide.request_id, decide.option_id, actor);
             drop(agent);
             return match outcome {
@@ -2886,10 +2934,7 @@ impl Core {
                         at: proto::UnixMillis(crate::identity::now_millis()),
                     };
                     record(&decided, &details);
-                    let decision = edited.map_or(
-                        crate::agent_driver::ApprovalDecision::Choice(details.choice),
-                        crate::agent_driver::ApprovalDecision::Edited,
-                    );
+                    let decision = input.decision(details.choice);
                     let authority = crate::agent_driver::ApprovalAuthority::for_decision(
                         self,
                         id,
@@ -3641,6 +3686,9 @@ pub(crate) fn record_agent_started_by_hand(
 /// Ends the pane's agent once its process exited and the pane is back at its shell: the
 /// pane is a shell again, on every client and after a restore.
 fn end_exited_agent(core: &Core, entry: &PaneEntry) {
+    if crate::agent_config::is_relaunching(entry) {
+        return;
+    }
     let foreground = entry.pane.pty().foreground_process();
     let launched = matches!(lock(&entry.record).launch, PaneLaunch::Agent { .. });
     let at_shell = launched && is_own_shell(entry, foreground.as_ref());

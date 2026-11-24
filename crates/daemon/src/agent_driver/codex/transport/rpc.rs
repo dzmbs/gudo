@@ -8,10 +8,13 @@ pub(super) type Connection = WebSocketStream<tokio::net::UnixStream>;
 
 const INITIALIZE_ID: i64 = 1;
 /// The one request each control or history connection makes after initializing.
-pub(super) const REQUEST_ID: i64 = 2;
+pub(in crate::agent_driver::codex) const REQUEST_ID: i64 = 2;
 const REPLY_ALLOWANCE: usize = 256;
 
-pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> {
+pub(in crate::agent_driver::codex) async fn connect(
+    path: &Path,
+    server: u32,
+) -> io::Result<Connection> {
     let stream = tokio::net::UnixStream::connect(path).await?;
     if !peer::in_tree(peer::pid(&stream)?, server).await {
         return Err(io::Error::other("wrong Codex RPC peer"));
@@ -32,7 +35,10 @@ pub(super) async fn connect(path: &Path, server: u32) -> io::Result<Connection> 
     Ok(connection)
 }
 
-pub(super) async fn reply(connection: &mut Connection, expected: i64) -> io::Result<String> {
+pub(in crate::agent_driver::codex) async fn reply(
+    connection: &mut Connection,
+    expected: i64,
+) -> io::Result<String> {
     for _ in 0..REPLY_ALLOWANCE {
         let message = connection
             .next()

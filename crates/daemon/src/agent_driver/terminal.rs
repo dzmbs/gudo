@@ -138,10 +138,9 @@ impl AgentDriver for TerminalDriver {
             return source.approve(request, decision, authority);
         }
         // The terminal hook lane retains its held PermissionRequest reply format, not RPC approvals.
-        core.hooks
-            .resolve_with(pane, request, |suggestions, input| {
-                super::claude::approval_response(suggestions, input, decision)
-            })
+        core.hooks.resolve_with(pane, request, |held, suggestions| {
+            super::claude::approval_response(held, suggestions, decision)
+        })
     }
 }
 

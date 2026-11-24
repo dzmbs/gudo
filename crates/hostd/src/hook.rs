@@ -15,6 +15,10 @@
 //! daemon means the agent falls back to its own prompts. The agent input arm/exit fence is
 //! different: failure exits nonzero and the launch script must not start its fallback shell.
 //!
+//! `gudo-hook claude-relaunch-pending <launch>` and `claude-relaunch <launch>` are the steps of
+//! the loop a launched Claude Code runs in, so Chat can restart it with new settings (see
+//! `claude_relaunch.rs`).
+//!
 //! `gudo-hook askpass <prompt>` is the askpass helper instead (see `askpass.rs`), and
 //! `gudo-hook mcp [--state <dir>] [--pane <id>]` the MCP server through which agents read the
 //! session's drawings and use the app's browser (see `mcp.rs`), and `gudo-hook open-url <url>…`
@@ -27,6 +31,7 @@ mod browser;
 mod browser_tools;
 mod browser_upload;
 mod claude_display;
+mod claude_relaunch;
 mod cli_version;
 mod codex_remote;
 mod launch_failure;
@@ -46,6 +51,10 @@ pub fn run_hook(arguments: &[String]) {
     match arguments.first().map(String::as_str) {
         Some("codex-remote") => std::process::exit(codex_remote::main(&arguments[1..])),
         Some("claude-display") => std::process::exit(claude_display::main(&arguments[1..])),
+        Some("claude-relaunch-pending") => {
+            std::process::exit(claude_relaunch::pending(&arguments[1..]))
+        }
+        Some("claude-relaunch") => std::process::exit(claude_relaunch::relaunch(&arguments[1..])),
         Some("agent-input-arm") => std::process::exit(agent_exit_fence::main(
             &arguments[1..],
             agent_exit_fence::FenceAction::Arm,
@@ -133,7 +142,7 @@ fn relay(args: &[String], raw: &[u8], status_line: bool) -> Result<(), Box<dyn s
         event: event.clone(),
     };
     let mut stream = UnixStream::connect(socket)?;
-    let wait = if event == "PermissionRequest" {
+    let wait = if event == "PermissionRequest" || event == agents::CLAUDE_HELD_TOOL_EVENT {
         daemon::PERMISSION_WAIT + Duration::from_secs(2)
     } else if status_line {
         // The status line redraws often; never hold it up.

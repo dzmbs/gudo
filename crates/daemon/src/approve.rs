@@ -113,6 +113,12 @@ pub(crate) fn request_held(core: &Core, pane: PaneId) {
         return;
     };
     let input = held.command().unwrap_or_default().to_owned();
+    // A question or a plan is the user's to answer; no rule answers it.
+    let allow = allow.filter(|_| {
+        core.hooks
+            .held(pane)
+            .is_none_or(|held| held.event == crate::agent::HeldEvent::Permission)
+    });
     if let Some(allow) = allow
         && auto_approve(core, pane, wire, allow, &held.tool, &input)
     {
@@ -247,7 +253,7 @@ fn decide_by_rule(core: &Core, rule: &ActiveRule, wire: RequestId, allow: proto:
         .decide_authorized(
             actor,
             &decide,
-            None,
+            crate::agent_driver::DecisionInput::Plain,
             Some(crate::agent_driver::ApprovalEvidence::Rule(rule)),
             record,
         )

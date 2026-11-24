@@ -76,9 +76,61 @@ pub(crate) struct SendAcknowledgement {
     pub receipt: tokio::sync::watch::Sender<crate::agent_input::Receipt>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum ApprovalDecision<'a> {
     Choice(ApprovalChoice),
     Edited(&'a str),
+    /// Allows a question with these answers.
+    Answers(&'a [proto::QuestionAnswer]),
+    /// Refuses with a message for the agent.
+    Refusal(&'a str),
+}
+
+/// What comes with a decision beyond its option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DecisionInput<'a> {
+    Plain,
+    /// The command to run instead.
+    Edited(&'a str),
+    /// A question's answers.
+    Answers(&'a [proto::QuestionAnswer]),
+    /// A refusal's message for the agent.
+    Refusal(&'a str),
+}
+
+impl<'a> DecisionInput<'a> {
+    pub fn decision(self, choice: ApprovalChoice) -> ApprovalDecision<'a> {
+        match self {
+            Self::Plain => ApprovalDecision::Choice(choice),
+            Self::Edited(command) => ApprovalDecision::Edited(command),
+            Self::Answers(answers) => ApprovalDecision::Answers(answers),
+            Self::Refusal(message) => ApprovalDecision::Refusal(message),
+        }
+    }
+}
+
+/// Whether `input` with an option that `allows` (or refuses) answers the request open on
+/// `pane` in a form its agent takes: a question needs its answers to be allowed, a refusal
+/// message needs a refusing option and a hook to carry it.
+pub(crate) fn decision_fits(
+    core: &Core,
+    pane: PaneId,
+    input: DecisionInput<'_>,
+    allows: bool,
+) -> bool {
+    let choice = if allows {
+        ApprovalChoice::AllowOnce
+    } else {
+        ApprovalChoice::Deny
+    };
+    match core.hooks.held(pane) {
+        Some(held) => match input {
+            DecisionInput::Answers(_) | DecisionInput::Edited(_) if !allows => false,
+            DecisionInput::Refusal(_) if allows => false,
+            input => claude::approval_response(&held, &[], input.decision(choice)).is_some(),
+        },
+        None => matches!(input, DecisionInput::Plain | DecisionInput::Edited(_)),
+    }
 }
 
 pub(crate) enum InputEvent<'a> {

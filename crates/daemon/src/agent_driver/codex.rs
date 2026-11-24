@@ -1,3 +1,4 @@
+pub(crate) mod config;
 mod history;
 #[cfg(test)]
 mod live_probe;
@@ -46,6 +47,7 @@ pub(crate) struct Live {
     codex_home: Mutex<Option<std::path::PathBuf>>,
     observations: Mutex<Option<ObservationSender>>,
     directory: std::path::PathBuf,
+    config: Mutex<config::CodexConfig>,
 }
 
 struct State {

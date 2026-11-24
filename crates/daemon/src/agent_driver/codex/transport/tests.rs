@@ -16,6 +16,7 @@ async fn failed_native_queue_never_truncates_official_terminal_bytes() {
         codex_home: Mutex::new(None),
         observations: Mutex::new(None),
         directory: crate::fsutil::create_private_temp_dir("gudo-codex-forward").unwrap(),
+        config: Mutex::default(),
     });
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     drop(receiver);

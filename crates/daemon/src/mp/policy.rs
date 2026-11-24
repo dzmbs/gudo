@@ -210,6 +210,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         R::ListPorts | R::AttentionList | R::AttentionSeen(_) => (Need::View, Target::Any),
         R::TimelineWatch { pane_id }
         | R::TimelineWatchVersioned { pane_id, .. }
+        | R::AgentControlsWatch { pane_id }
+        | R::AgentControlsUnwatch { pane_id }
         | R::TimelineUnwatch { pane_id }
         | R::TimelineItemsBefore { pane_id, .. }
         | R::TimelineWatchCapabilities { pane_id, .. } => (Need::View, Target::Pane(*pane_id)),
@@ -219,6 +221,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
         | R::TurnDiff { pane_id, .. }
         | R::TimelineToolOutput { pane_id, .. }
         | R::TimelineToolDiff { pane_id, .. } => (Need::Prompt, Target::Pane(*pane_id)),
+        // The owner alone may change the agent; the caller checks that too.
+        R::SetAgentConfig { pane_id, .. } => (Need::Prompt, Target::Pane(*pane_id)),
         R::ChatPrepare { pane_id }
         | R::ChatSend { pane_id, .. }
         | R::ChatSendImages { pane_id, .. }
