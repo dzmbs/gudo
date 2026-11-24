@@ -66,22 +66,24 @@ final class PaneChatViewTests: XCTestCase {
                     fixture.window.isHidden = true
                     fixture.window.rootViewController = nil
                 }
-                try await wait { fixture.state.controller?.collection.visibleCells.isEmpty == false }
-                let codes = fixture.state.model?.frame.rows.compactMap { row -> ChatCodeSnippet? in
-                    guard case .markdown(let block) = row.content else { return nil }
-                    return block.code
-                } ?? []
-                XCTAssertEqual(codes.count, 2)
+                let snippets = {
+                    fixture.state.model?.frame.rows.compactMap { row -> ChatCodeSnippet? in
+                        guard case .markdown(let block) = row.content else { return nil }
+                        return block.code
+                    } ?? []
+                }
+                try await wait {
+                    fixture.state.controller?.collection.visibleCells.isEmpty == false
+                        && snippets().count == 2 && !snippets().contains(where: \.awaitsHighlights)
+                }
+                let codes = snippets()
                 XCTAssertTrue(codes.allSatisfy { !$0.highlights.isEmpty })
                 fixture.events.deliver(.timeline(paneId: 7, updateJson: try TimelineFixtureJSON.append("code-colours", text: "\n\nStreaming stays readable.", sequence: 1)))
                 try await wait { fixture.state.model?.frame.rows.contains { row in
                     if case .markdown(let block) = row.content { return String(block.text.characters).contains("Streaming stays readable.") }
                     return false
                 } == true }
-                XCTAssertEqual(fixture.state.model?.frame.rows.compactMap { row -> ChatCodeSnippet? in
-                    guard case .markdown(let block) = row.content else { return nil }
-                    return block.code
-                }, codes)
+                XCTAssertEqual(snippets(), codes)
                 try await Task.sleep(for: .milliseconds(180))
                 try capture(fixture.window, name: "code-colours-\(agent.lowercased())-\(theme.contains("Light") ? "light" : "dark")")
             }
