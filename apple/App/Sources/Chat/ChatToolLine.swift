@@ -20,13 +20,13 @@ nonisolated struct ChatToolLine: Equatable, Sendable {
             detail = Self.command(input?["command"]) ?? Self.fallback(tool)
         case .known(.read):
             verb = "Read"
-            detail = Self.path(input, in: workingDirectory) ?? Self.fallback(tool)
+            detail = Self.path(input, in: workingDirectory) ?? Self.paths(tool, in: workingDirectory)
         case .known(.edit):
             verb = "Edit"
-            detail = Self.path(input, in: workingDirectory) ?? Self.fallback(tool)
+            detail = Self.path(input, in: workingDirectory) ?? Self.paths(tool, in: workingDirectory)
         case .known(.write):
             verb = "Write"
-            detail = Self.path(input, in: workingDirectory) ?? Self.fallback(tool)
+            detail = Self.path(input, in: workingDirectory) ?? Self.paths(tool, in: workingDirectory)
         case .known(.search):
             verb = "Search"
             detail = Self.text(input, keys: ["pattern", "query", "glob"]) ?? Self.fallback(tool)
@@ -87,7 +87,18 @@ nonisolated struct ChatToolLine: Equatable, Sendable {
     }
 
     private static func path(_ input: [String: Any]?, in workingDirectory: String?) -> String? {
-        guard let path = text(input, keys: ["file_path", "path", "notebook_path"]) else { return nil }
+        text(input, keys: ["file_path", "path", "notebook_path"]).map { relative($0, to: workingDirectory) }
+    }
+
+    /// Codex records the files a change touched one per line, not as JSON.
+    private static func paths(_ tool: TimelineTool, in workingDirectory: String?) -> String {
+        let paths = tool.input.prefix(detailLimit * 8).split(whereSeparator: \.isNewline)
+            .map { relative(String($0).trimmingCharacters(in: .whitespaces), to: workingDirectory) }
+            .filter { $0.hasPrefix("/") || $0.contains("/") || $0.contains(".") }
+        return paths.isEmpty ? fallback(tool) : line(paths.joined(separator: ", ")) ?? ""
+    }
+
+    private static func relative(_ path: String, to workingDirectory: String?) -> String {
         guard let directory = workingDirectory, !directory.isEmpty else { return path }
         let prefix = directory.hasSuffix("/") ? directory : directory + "/"
         return path.hasPrefix(prefix) && path.count > prefix.count ? String(path.dropFirst(prefix.count)) : path

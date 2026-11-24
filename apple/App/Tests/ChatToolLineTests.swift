@@ -35,6 +35,18 @@ final class ChatToolLineTests: XCTestCase {
         XCTAssertEqual(bare.text, "Shell")
     }
 
+    func testCodexRowsReadTheSameWay() {
+        let edit = ChatToolLine(tool(.edit, name: "Edit", title: "/work/app/src/a.rs, /work/app/src/b.rs",
+                                     input: "/work/app/src/a.rs\n/work/app/src/b.rs"), workingDirectory: "/work/app")
+        XCTAssertEqual(edit.text, "Edit src/a.rs, src/b.rs")
+        let image = ChatToolLine(tool(.read, name: "View image", title: "/work/app/shot.png", input: "/work/app/shot.png"),
+                                 workingDirectory: "/work/app")
+        XCTAssertEqual(image.text, "Read shot.png")
+        let shell = ChatToolLine(tool(.shell, name: "shell", title: "cargo test -p proto", input: "cargo test -p proto"))
+        XCTAssertEqual(shell.text, "Shell cargo test -p proto")
+        XCTAssertEqual(ChatToolLine(tool(.webSearch, name: "web_search", title: "swift 6", input: "swift 6")).text, "Web search swift 6")
+    }
+
     func testAGroupTakesTheGlyphOfItsMostCommonKind() {
         let tools = [tool(.read, name: "Read", input: "{}"), tool(.shell, name: "Bash", input: "{}"), tool(.read, name: "Read", input: "{}")]
         XCTAssertEqual(ChatToolGroups.symbol(tools), "eye")
