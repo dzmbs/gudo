@@ -147,9 +147,19 @@ local to the screen; drafts do not cross hosts.
 ## Touch presentation
 
 On iOS, tracked Claude, Codex and pi panes have a title-bar Chat/Terminal control. New iPhone panes
-prefer Chat; iPad panes prefer Terminal. Explicit choices persist by host and pane, not native
-session, and temporary availability fallbacks do not overwrite them. Other agents and the Mac
-remain Terminal-only.
+prefer Chat; iPad and Mac panes prefer Terminal. Explicit choices persist by host and pane, not
+native session, and temporary availability fallbacks do not overwrite them. Other agents remain
+Terminal-only.
+
+On the Mac the switch is a Chat glyph: in the pane header of a split, and in the title bar's pane
+controls (and its overflow menu) when the tab has the one agent pane. Choosing Chat gives the
+composer the keyboard; Terminal takes it back with the PTY size. The Mac transcript
+(`ChatTranscriptController`) is an AppKit collection with the same `ChatRowView` rows, measured
+into one `NativeListLayout` document, so the row being read holds still while older pages arrive
+and the latest row stays in view while the reader is at the bottom. The reader's own wheel,
+trackpad and scroller moves decide following; Chat's own moves never do. Chat text on the Mac
+reads at 15 pt (`ChatFont`), a step above the chrome's 13 pt body; the chrome keeps its scale.
+The model and effort chips are touch-only until the shared agent controls land.
 
 `PaneChatState` owns the draft independently of the evictable render model. Visible panes lease
 a bounded model and route the same workspace/pane's `TimelineChannel` into it. Both presentation
@@ -388,7 +398,7 @@ retained token ranges are also charged to row/page budgets. Theme/contrast chang
 code or change its geometry. See `apple/Packages/ChatSyntax/README.md` for parser/query limits and
 pinned dependency details. Large user, thinking and notice text have
 4-KiB UTF-8-safe previews; full values remain available for detail and copy actions. Plans and tables
-also bound the number of views constructed in one cell. The Mac has no Chat presentation.
+also bound the number of views constructed in one cell.
 
 `ChatCollectionTests` exercises native reading anchors, bottom following, frozen visible rows,
 coalescing, reused connection IDs, cached opening, streaming apply, two-pass memory and teardown.
@@ -398,6 +408,12 @@ is an opt-in timing check (`TEST_RUNNER_GUDO_CHAT_PERFORMANCE=1` with xcodebuild
 repeated and varied paragraphs, with worker time separate from actor scheduling. Its 2ms median
 assertion remains strict. An ordinary functional test run skips it rather than implying performance
 acceptance. Optimized Debug measurements are still Debug simulator evidence, not Release or hardware.
+
+`MacChatTests` covers the Mac transcript, sending and queueing, folding and the switch;
+`MacSnapshotTests.testChat` draws a folded turn, the composer and suggestions. A 2,100-item
+session runs with `TEST_RUNNER_GUDO_CHAT_PERF=1`: in a Debug build its 1,400 rows reach the screen
+in about 1.2 s folded (0.3 s warm), scrolling never holds the main thread over 50 ms, and a
+streamed append applies in about 10 ms (worst 33 ms).
 
 ## Claude adapter
 
