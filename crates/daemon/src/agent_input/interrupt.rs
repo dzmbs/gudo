@@ -54,6 +54,7 @@ fn stop_target(
     core: &Core,
     entry: &PaneEntry,
 ) -> Result<(&'static dyn AgentDriver, Option<String>), WsError> {
+    let native_codex = lock(&entry.codex).is_some();
     let (kind, session, working) = {
         let runtime = lock(&entry.agent);
         let runtime = runtime.as_ref().ok_or_else(unavailable)?;
@@ -64,7 +65,11 @@ fn stop_target(
                 .native_id
                 .as_ref()
                 .map(|id| id.as_str().to_owned()),
-            runtime.state() == agents::AgentState::Working,
+            runtime.state() == agents::AgentState::Working
+                // Codex interrupts a turn that waits on an approval through its own request.
+                || (runtime.kind() == proto::AgentKind::Codex
+                    && runtime.is_blocked()
+                    && native_codex),
         )
     };
     let driver = driver(kind);

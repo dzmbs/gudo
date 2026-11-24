@@ -110,6 +110,29 @@ impl Fixture {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stop_interrupts_a_turn_that_waits_for_an_approval() {
+    let fixture = Fixture::new().await;
+    let source = Arc::downgrade(&fixture.source);
+    fixture.approval();
+    let stop = fixture
+        .source
+        .command(
+            None,
+            lock(&fixture.raw.entry.pane.agent_input_gate)
+                .control_revision()
+                .unwrap(),
+            fixture.actor,
+            Action::Stop,
+            None,
+        )
+        .unwrap();
+    let request: Value = serde_json::from_str(&serialize(&source, &stop).unwrap()).unwrap();
+    assert_eq!(request["method"], "turn/interrupt");
+    assert_eq!(request["params"]["turnId"], "active");
+    fixture.raw.daemon.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn serialization_rechecks_the_input_fence_source_and_encoded_budget() {
     let fixture = Fixture::new().await;
     let source = Arc::downgrade(&fixture.source);

@@ -395,8 +395,8 @@ fn serialize(source: &Weak<Live>, command: &Command) -> Result<String, ControlEr
             }
         }
         Action::Stop => {
-            if !core.identity.is_owner_device(command.actor.device) || events.has_pending_approval()
-            {
+            // A turn waiting on an approval is still a running turn Codex can interrupt.
+            if !core.identity.is_owner_device(command.actor.device) {
                 return Err(ControlError::Obsolete);
             }
             json!({"id":rpc::REQUEST_ID,"method":"turn/interrupt","params":{"threadId":thread,"turnId":command.turn}})
