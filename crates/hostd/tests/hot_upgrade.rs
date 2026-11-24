@@ -970,7 +970,9 @@ dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$dir"
 transcript="$dir/$id.jsonl"
 sed "s/__FIXTURE_ID__/$id/g" "__TRANSCRIPT__" > "$transcript"
-for event in SessionStart UserPromptSubmit; do
+# The launched one waits idle, so a change from Chat applies at once.
+case "$(basename "$PWD")" in launched) events=SessionStart ;; *) events="SessionStart UserPromptSubmit" ;; esac
+for event in $events; do
   printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup","prompt":"hi"}' \
     "$event" "$id" "$transcript" "$PWD" | "$GUDO_HOOK" claude "$event"
 done
