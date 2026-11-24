@@ -243,6 +243,55 @@ impl Client {
             .map(|_| ())
     }
 
+    fn signed_decide(&self, request_id: RequestId, option_id: proto::OptionId) -> Decide {
+        let mut decide = Decide {
+            request_id,
+            option_id,
+            actor: self.actor(),
+            sig: Vec::new(),
+        };
+        if let Ok(key) = grants::DeviceKey::from_seed(&self.inner.config.secret_key) {
+            grants::sign_approval(&key, self.inner.ticket.daemon_id, &mut decide);
+        }
+        decide
+    }
+
+    /// Answers an agent's questions ([`proto::AgentQuestions`]) with its answer option,
+    /// signed like [`Client::decide`].
+    ///
+    /// # Errors
+    ///
+    /// As [`approval`](Self::approval); an older helper cannot take answers.
+    pub async fn answer_question(
+        &self,
+        request_id: RequestId,
+        option_id: proto::OptionId,
+        answers: Vec<proto::QuestionAnswer>,
+    ) -> Result<(), ApprovalError> {
+        let decide = self.signed_decide(request_id, option_id);
+        self.approval(ApprovalRequest::AnswerQuestion { decide, answers })
+            .await
+            .map(|_| ())
+    }
+
+    /// Refuses `request_id` with its refusing option `option_id` and a message for the agent
+    /// (what to change in a plan), signed like [`Client::decide`].
+    ///
+    /// # Errors
+    ///
+    /// As [`approval`](Self::approval).
+    pub async fn refuse(
+        &self,
+        request_id: RequestId,
+        option_id: proto::OptionId,
+        message: String,
+    ) -> Result<(), ApprovalError> {
+        let decide = self.signed_decide(request_id, option_id);
+        self.approval(ApprovalRequest::Refuse { decide, message })
+            .await
+            .map(|_| ())
+    }
+
     /// Adds a rule approving requests on `pane_id` that `matcher` covers, for `ttl` and at most
     /// `max_turns` agent turns (the current one included), signed with this device's key.
     /// With `request_id`, that open request is approved too. Returns the rule's id.

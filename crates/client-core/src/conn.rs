@@ -1051,6 +1051,18 @@ fn control_supported(
                 && more_features.contains(proto::MoreDaemonFeatures::CHAT_IMAGES)
         }
         ClientCtl::Workspace {
+            req:
+                proto::WorkspaceRequest::AgentControlsWatch { .. }
+                | proto::WorkspaceRequest::AgentControlsUnwatch { .. }
+                | proto::WorkspaceRequest::SetAgentConfig { .. },
+            ..
+        }
+        | ClientCtl::Approval {
+            req:
+                proto::ApprovalRequest::AnswerQuestion { .. } | proto::ApprovalRequest::Refuse { .. },
+            ..
+        } => more_features.contains(proto::MoreDaemonFeatures::AGENT_CONTROLS),
+        ClientCtl::Workspace {
             req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
             ..
         } => features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES),

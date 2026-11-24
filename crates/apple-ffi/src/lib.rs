@@ -15,6 +15,7 @@
 //! `Vec<u8>` converter), no serialization format. Input (`send_input`) is borrowed from Swift.
 
 mod accounts;
+mod agent_control;
 mod approvals;
 mod art_types;
 mod artifacts;

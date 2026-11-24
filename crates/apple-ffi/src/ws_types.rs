@@ -1354,6 +1354,11 @@ pub enum WorkspaceEvent {
         pane_id: u64,
         update_json: String,
     },
+    /// A watched pane's agent controls changed (`DaemonClient::agent_controls_watch`).
+    AgentControls {
+        pane_id: u64,
+        controls_json: String,
+    },
 }
 
 impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
@@ -1392,6 +1397,10 @@ impl From<client_core::WorkspaceEvent> for WorkspaceEvent {
             E::Timeline { update } => Self::Timeline {
                 pane_id: update.pane_id.0,
                 update_json: crate::timeline::encode_update(&update),
+            },
+            E::AgentControls { controls } => Self::AgentControls {
+                pane_id: controls.pane_id.0,
+                controls_json: crate::agent_control::encode_controls(&controls),
             },
         }
     }

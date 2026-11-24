@@ -87,6 +87,10 @@ pub enum WorkspaceEvent {
     Timeline {
         update: proto::TimelineUpdate,
     },
+    /// A watched pane's agent controls changed ([`Client::agent_controls_watch`]).
+    AgentControls {
+        controls: proto::AgentControls,
+    },
 }
 
 /// Receives [`WorkspaceEvent`]s. Must return quickly; it runs on the network threads.
@@ -166,6 +170,7 @@ impl WsState {
             }
             ServerCtl::WorkflowsChanged { rev } => WorkspaceEvent::WorkflowsChanged { rev },
             ServerCtl::Timeline(update) => WorkspaceEvent::Timeline { update },
+            ServerCtl::AgentControls(controls) => WorkspaceEvent::AgentControls { controls },
             other => return Some(other),
         };
         let listener = lock(&self.listener).clone();
@@ -590,6 +595,31 @@ impl Client {
     pub async fn git_status(&self, path: String) -> Result<GitStatus, WsError> {
         expect!(self.workspace(WorkspaceRequest::GitStatus { path }).await?,
             WorkspaceResponse::GitStatus(status) => status)
+    }
+
+    /// The agent controls of `pane_id` (model, mode, effort, its question or plan); changes
+    /// arrive as [`WorkspaceEvent::AgentControls`] until [`Client::agent_controls_unwatch`].
+    pub async fn agent_controls_watch(
+        &self,
+        pane_id: PaneId,
+    ) -> Result<proto::AgentControls, WsError> {
+        expect!(self.workspace(WorkspaceRequest::AgentControlsWatch { pane_id }).await?,
+            WorkspaceResponse::AgentControls(controls) => controls)
+    }
+
+    pub async fn agent_controls_unwatch(&self, pane_id: PaneId) -> Result<(), WsError> {
+        expect!(self.workspace(WorkspaceRequest::AgentControlsUnwatch { pane_id }).await?,
+            WorkspaceResponse::Done => ())
+    }
+
+    /// Changes the running agent's model, mode or effort (the fields set). Owner only.
+    pub async fn set_agent_config(
+        &self,
+        pane_id: PaneId,
+        change: proto::AgentConfigValues,
+    ) -> Result<proto::AgentControls, WsError> {
+        expect!(self.workspace(WorkspaceRequest::SetAgentConfig { pane_id, change }).await?,
+            WorkspaceResponse::AgentControls(controls) => controls)
     }
 
     /// The repository root holding `path` (`None` outside one), without running git.
