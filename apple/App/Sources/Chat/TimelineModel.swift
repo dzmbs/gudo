@@ -55,7 +55,9 @@ actor TimelineRenderWorker {
     private var capabilities: AgentCapabilities = []
     private var capabilityGeneration = UUID()
     private var orderRevision = 0
-    private var identifiers: [ChatRowID] = []
+    private var fold = ChatTimelineFold()
+    private var identifierCount = 0
+    private var rowIDs: Set<ChatRowID> = []
     private var groupRows: [ChatRowID: ChatRow] = [:]
     private let pane: UInt64
 
@@ -127,31 +129,37 @@ actor TimelineRenderWorker {
         let parentRevision = revision
         revision += 1
         let items = window.items
-        let turns = ChatTurnCollapse.fold(window.order.flatMap { rowsByItem[$0]?.rows ?? [] }, expanded: expanded,
-                                          collapses: collapsesTurns, reply: { identifier in
+        let rowsByItem = rowsByItem
+        let change = fold.update(order: window.order, rowsOf: { rowsByItem[$0]?.rows ?? [] },
+                                 changed: changed, removed: removed, resets: didReset || prepared == nil,
+                                 expanded: expanded, collapses: collapsesTurns, reply: { identifier in
             guard case .assistant(let assistant) = items[identifier]?.body else { return nil }
             return assistant.text
         }, previous: groupRows)
-        let rows = ChatToolGroups.fold(turns, expanded: expanded, previous: groupRows)
-        let identifiers = rows.map(\.id)
+        let rows = fold.rows
+        let tail = rows[change.from...]
         // A group's line and the calls it uncovers are rows no item changed.
-        let shown = Set(self.identifiers)
+        let shown = Set(change.replaced.lazy.map(\.id))
         var listed = Set(changedRows.lazy.map(\.id))
-        var groups: [ChatRowID: ChatRow] = [:]
-        for row in rows {
-            if row.content.isDerived { groups[row.id] = row }
-            let isNew = groupRows[row.id].map { $0 != row } ?? !shown.contains(row.id)
+        var replacedGroups: [ChatRowID: ChatRow] = [:]
+        for row in change.replaced where row.content.isDerived { replacedGroups[row.id] = groupRows.removeValue(forKey: row.id) }
+        for row in tail {
+            let isNew = replacedGroups[row.id].map { $0 != row } ?? !shown.contains(row.id)
+            if row.content.isDerived { groupRows[row.id] = row }
             if isNew, listed.insert(row.id).inserted { changedRows.append(row) }
         }
-        groupRows = groups
-        let keptOrder = zip(self.identifiers, identifiers).prefix { $0 == $1 }.count
-        if keptOrder != identifiers.count || keptOrder != self.identifiers.count {
+        for row in change.replaced { rowIDs.remove(row.id) }
+        for row in tail { rowIDs.insert(row.id) }
+        let keptTail = zip(change.replaced, tail).prefix { $0.id == $1.id }.count
+        let keptOrder = change.from + keptTail
+        if keptOrder != rows.count || keptOrder != identifierCount {
             orderRevision += 1
-            self.identifiers = identifiers
         }
+        identifierCount = rows.count
+        assert(rowIDs.count == rows.count, "row identifiers are not unique")
         let frame = TimelineFrame(
             capabilities: capabilities, capabilityGeneration: capabilityGeneration,
-            rows: rows, rowIDs: Set(identifiers), session: window.session,
+            rows: rows, rowIDs: rowIDs, session: window.session,
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
             note: window.note, revision: revision, generation: generation,
             parentRevision: parentRevision, orderRevision: orderRevision, keptOrder: keptOrder, changedRows: changedRows)
