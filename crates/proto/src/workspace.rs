@@ -438,6 +438,15 @@ pub enum WorkspaceRequest {
         /// Most matches wanted; the daemon returns at most [`CHAT_FILE_MATCHES_MAX`].
         limit: u16,
     },
+    /// A picture pasted or dropped on an agent pane: the host keeps a copy without its
+    /// metadata in the pane's image store and pastes its path into the agent's input, without
+    /// Enter → [`WorkspaceResponse::ImagePasted`]. Only daemons offering
+    /// [`MoreDaemonFeatures::PANE_IMAGES`](crate::MoreDaemonFeatures::PANE_IMAGES) understand it.
+    PasteImage {
+        pane_id: PaneId,
+        /// PNG or JPEG; an artifact is refused.
+        image: crate::PngSource,
+    },
 }
 
 /// Longest query a [`WorkspaceRequest::ChatFileSearch`] may carry.
@@ -527,6 +536,7 @@ pub enum WorkspaceResponse {
     RepoRoot(Option<String>),
     AgentControls(crate::AgentControls),
     ChatFiles(crate::FileMatches),
+    ImagePasted(PastedImage),
 }
 
 /// A snapshot and the features of the adapter that produced it.
@@ -1476,4 +1486,13 @@ pub struct PushActionRequest {
     /// `sign_decision`).
     #[serde(with = "crate::serde_bytes")]
     pub sig: Vec<u8>,
+}
+
+/// Where a [`WorkspaceRequest::PasteImage`] went.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PastedImage {
+    /// The copy on the host whose path the agent was given.
+    pub path: String,
+    /// The agent it was pasted into.
+    pub agent: AgentKind,
 }

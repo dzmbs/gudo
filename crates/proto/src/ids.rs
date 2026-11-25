@@ -475,5 +475,7 @@ bitset! {
         AGENT_CONTROLS = 6;
         /// Answers `WorkspaceRequest::ChatFileSearch`.
         CHAT_FILE_SEARCH = 7;
+        /// Answers `WorkspaceRequest::PasteImage`.
+        PANE_IMAGES = 8;
     }
 }
