@@ -408,6 +408,58 @@ final class TimelineModelTests: XCTestCase {
         model.stop()
     }
 
+    func testALongPageShowsItsNewestTurnsFirstThenTheRest() async throws {
+        let page = try ChatScenes.snapshot(ChatScenes.session(turns: 60))
+        let whole = try await TimelineRenderWorker(pane: 7).apply([.snapshot(page)], resetsSnapshot: true, protectsHistory: false,
+                                                                  collapsesTurns: true)
+        let worker = TimelineRenderWorker(pane: 7)
+        let newest = try await worker.apply([.snapshot(page)], resetsSnapshot: true, protectsHistory: false,
+                                            collapsesTurns: true, newestFirst: true)
+        XCTAssertTrue(newest.holdsOlderRows)
+        XCTAssertLessThan(newest.frame.rows.count, whole.frame.rows.count)
+        // Highlighting is bounded per render, so code blocks may differ only in their highlights.
+        func plain(_ rows: some Collection<ChatRow>) -> [ChatRow] {
+            rows.filter { row in
+                guard case .markdown(let block) = row.content else { return true }
+                return block.code == nil
+            }
+        }
+        XCTAssertEqual(newest.frame.rows.map(\.id), whole.frame.rows.suffix(newest.frame.rows.count).map(\.id))
+        XCTAssertEqual(plain(newest.frame.rows), plain(whole.frame.rows.suffix(newest.frame.rows.count)))
+        guard case .item(let first) = newest.frame.rows.first?.content, case .user = first.body else {
+            return XCTFail("The newest turns start at a prompt")
+        }
+        let rest = try await worker.apply([.olderRows], resetsSnapshot: false, protectsHistory: false, collapsesTurns: true,
+                                          newestFirst: true)
+        XCTAssertFalse(rest.holdsOlderRows)
+        XCTAssertEqual(rest.frame.rows.map(\.id), whole.frame.rows.map(\.id))
+        XCTAssertEqual(plain(rest.frame.rows), plain(whole.frame.rows))
+        XCTAssertEqual(rest.frame.rowIDs, whole.frame.rowIDs)
+        XCTAssertEqual(rest.frame.generation, newest.frame.generation)
+        XCTAssertEqual(rest.frame.parentRevision, newest.frame.revision)
+        XCTAssertTrue(Set(rest.frame.changedRows?.map(\.id) ?? []).isSuperset(of: whole.frame.rowIDs.subtracting(newest.frame.rowIDs)))
+    }
+
+    func testAShortPageAndAPageWithoutTurnsRenderWhole() async throws {
+        for page in [try ChatScenes.snapshot(ChatScenes.session(turns: 10)), try TimelineFixtureJSON.snapshot(0..<700)] {
+            let result = try await TimelineRenderWorker(pane: 7).apply([.snapshot(page)], resetsSnapshot: true,
+                                                                       protectsHistory: false, newestFirst: true)
+            XCTAssertFalse(result.holdsOlderRows)
+        }
+    }
+
+    func testTheModelRendersTheRowsItHeldBack() async throws {
+        try XCTSkipUnless(TimelineModel.showsNewestFirst, "the Mac renders a page whole")
+        let model = TimelineModel(pane: 7)
+        var published: [Int] = []
+        model.onFrame = { published.append($0.rows.count) }
+        model.receive(.snapshot(try ChatScenes.snapshot(ChatScenes.session(turns: 60))))
+        try await wait { model.frame.rows.count > (published.first ?? .max) }
+        XCTAssertLessThan(published[0], model.frame.rows.count)
+        XCTAssertEqual(model.frame.rows.first?.id.item, "s0-prompt")
+        model.stop()
+    }
+
     private func codePage(_ count: Int, name: String = "block") throws -> String {
         let items: [[String: Any]] = (0..<count).map { index in
             let lines = (0..<30).map { "    let \(name)_\(index)_\($0) = compute(\"\($0)\", \(index));" }.joined(separator: "\n")

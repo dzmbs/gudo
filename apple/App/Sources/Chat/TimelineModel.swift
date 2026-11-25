@@ -67,11 +67,13 @@ nonisolated enum TimelineJob: Sendable {
     case older(String)
     case highlights
     case regroup
+    /// Renders the rows a newest-first page held back.
+    case olderRows
 
     var bytes: Int {
         switch self {
         case .snapshot(let json), .update(let json), .older(let json): json.utf8.count
-        case .highlights, .regroup: 0
+        case .highlights, .regroup, .olderRows: 0
         }
     }
 }
@@ -83,9 +85,16 @@ nonisolated struct TimelineRenderResult: Sendable {
     let consumedHistory: Bool
     let hasLiveChanges: Bool
     let awaitsHighlights: Bool
+    /// The frame holds only the newest turns; the next apply renders the rest.
+    var holdsOlderRows = false
 }
 
 actor TimelineRenderWorker {
+    /// A page longer than this many items shows its newest turns first.
+    static let newestFirstItems = 96
+    /// How far before those items a turn's start is looked for; past it the page renders whole.
+    static let turnStartSearch = 512
+
     private var window: TimelineWindow
     private let builder: RowBuilder
     private var rowsByItem: [String: RenderedChatRows] = [:]
@@ -99,6 +108,8 @@ actor TimelineRenderWorker {
     private var identifierCount = 0
     private var rowIDs: Set<ChatRowID> = []
     private var groupRows: [ChatRowID: ChatRow] = [:]
+    /// Items before the newest turns of a page shown newest first, rendered by the next apply.
+    private var heldBack: [String] = []
     private let pane: UInt64
 
     init(pane: UInt64, valueByteLimit: Int = TimelineWindow.defaultByteLimit,
@@ -108,8 +119,10 @@ actor TimelineRenderWorker {
         window = TimelineWindow(byteLimit: valueByteLimit)
     }
 
+    /// `newestFirst`: a reset page longer than `newestFirstItems` renders its newest turns alone
+    /// and says so in its result, so they show while the rest renders.
     func apply(_ jobs: [TimelineJob], resetsSnapshot: Bool, protectsHistory: Bool, historyAnchor: String? = nil,
-               expanded: Set<ChatRowID> = [], collapsesTurns: Bool = false) throws -> TimelineRenderResult {
+               expanded: Set<ChatRowID> = [], collapsesTurns: Bool = false, newestFirst: Bool = false) throws -> TimelineRenderResult {
         var next = window
         var changed: Set<String> = []
         var removed: Set<String> = []
@@ -137,7 +150,7 @@ actor TimelineRenderWorker {
                 let snapshot = try TimelineJSON.decode(TimelineSnapshot.self, from: json)
                 changes = try next.prepend(snapshot, protecting: historyAnchor)
                 consumedHistory = true
-            case .highlights, .regroup:
+            case .highlights, .regroup, .olderRows:
                 continue
             }
             changed.formUnion(changes.changed)
@@ -146,7 +159,12 @@ actor TimelineRenderWorker {
         }
         removed.subtract(next.items.keys)
         changed.formUnion(builder.itemsAwaitingHighlights.subtracting(removed))
-        let prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset)
+        let newestStart = newestFirst && didReset ? Self.newestTurnsStart(in: next) : nil
+        let renderedHeldBack = !didReset && !heldBack.isEmpty
+        if renderedHeldBack { changed.formUnion(heldBack.lazy.filter { next.items[$0] != nil }) }
+        heldBack.removeAll()
+        let prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset,
+                                       from: newestStart ?? 0)
         var changedRows: [ChatRow]
         if let prepared {
             window = next
@@ -166,12 +184,15 @@ actor TimelineRenderWorker {
             builder.clear()
             changedRows = []
         }
+        let foldStart = prepared == nil ? 0 : newestStart ?? 0
+        if foldStart > 0 { heldBack = Array(window.order[..<foldStart]) }
         let parentRevision = revision
         revision += 1
         let items = window.items
         let rowsByItem = rowsByItem
-        let change = fold.update(order: window.order, rowsOf: { rowsByItem[$0]?.rows ?? [] },
-                                 changed: changed, removed: removed, resets: didReset || prepared == nil,
+        let change = fold.update(order: foldStart > 0 ? Array(window.order[foldStart...]) : window.order,
+                                 rowsOf: { rowsByItem[$0]?.rows ?? [] }, changed: changed, removed: removed,
+                                 resets: didReset || prepared == nil || renderedHeldBack,
                                  expanded: expanded, collapses: collapsesTurns, reply: { identifier in
             guard case .assistant(let assistant) = items[identifier]?.body else { return nil }
             return assistant.text
@@ -211,18 +232,41 @@ actor TimelineRenderWorker {
             streamingReply: streamingReply)
         return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot,
                                     consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges,
-                                    awaitsHighlights: !builder.itemsAwaitingHighlights.isEmpty)
+                                    awaitsHighlights: !builder.itemsAwaitingHighlights.isEmpty, holdsOlderRows: !heldBack.isEmpty)
     }
 
+    /// Where the newest turns of a long page start: the first prompt of a turn at least
+    /// `newestFirstItems` from the end, so they fold exactly as in the whole page.
+    private static func newestTurnsStart(in window: TimelineWindow) -> Int? {
+        let order = window.order
+        guard order.count > newestFirstItems else { return nil }
+        let isPrompt = { (index: Int) -> Bool in
+            switch window.items[order[index]]?.body {
+            case .user: true
+            case .longText(let longText): longText.role == .known(.user)
+            default: false
+            }
+        }
+        let latest = order.count - newestFirstItems
+        let earliest = max(1, latest - turnStartSearch)
+        var index = latest
+        while index >= earliest {
+            if isPrompt(index), !isPrompt(index - 1) { return index }
+            index -= 1
+        }
+        return nil
+    }
+
+    /// A reset renders the items from `start` on; the rest wait for the next apply.
     private func prepareRows(in next: TimelineWindow, changed: Set<String>, removed: Set<String>,
-                             resetting: Bool) throws -> RenderedPage? {
+                             resetting: Bool, from start: Int) throws -> RenderedPage? {
         if resetting { builder.clear() }
         builder.beginPage()
         defer { builder.endPage() }
         var prepared = resetting ? RenderedPage() : RenderedPage(items: rowsByItem, cost: renderCost)
         for identifier in removed { prepared.remove(identifier) }
         builder.remove(removed)
-        let identifiers = resetting ? Set(next.order) : changed
+        let identifiers = resetting ? Set(next.order[start...]) : changed
         for identifier in identifiers {
             try Task.checkCancellation()
             guard let item = next.items[identifier] else { continue }
@@ -244,6 +288,15 @@ actor TimelineRenderWorker {
 @MainActor
 @Observable
 final class TimelineModel {
+    /// A long page shows its newest turns first on iOS, whose first rows missed their budget
+    /// laying out the whole page. The Mac lays a whole page out within it, and rendering in two
+    /// steps cost it 3 MB more at open.
+    #if os(iOS)
+    static let showsNewestFirst = true
+    #else
+    static let showsNewestFirst = false
+    #endif
+
     let pane: UInt64
     let valueByteLimit: Int
     /// The latest frame. Views read `outline`; the transcript takes each frame from `onFrame`
@@ -433,7 +486,7 @@ final class TimelineModel {
                 do {
                     let result = try await worker.apply(jobs, resetsSnapshot: resetsSnapshot, protectsHistory: !followsBottom,
                                                         historyAnchor: readingItem, expanded: expanded,
-                                                        collapsesTurns: collapsesTurns)
+                                                        collapsesTurns: collapsesTurns, newestFirst: Self.showsNewestFirst)
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
                     if !followsBottom, result.hasLiveChanges, !hasNewItems { hasNewItems = true }
                     frame = result.frame
@@ -443,6 +496,7 @@ final class TimelineModel {
                     if result.consumedHistory { isLoadingHistory = false; historyError = nil }
                     if !expanded.isEmpty, !expanded.isSubset(of: frame.rowIDs) { expanded.formIntersection(frame.rowIDs) }
                     if result.needsHistoryCursor { channel?.requestSnapshot() }
+                    if result.holdsOlderRows, pending.isEmpty { pending.append(.olderRows) }
                     if result.awaitsHighlights, pending.isEmpty { pending.append(.highlights) }
                 } catch TimelineWindowError.valueTooLarge, TimelineWindowError.historyBudget {
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }

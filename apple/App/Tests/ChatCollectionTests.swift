@@ -241,6 +241,15 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: 199, section: 0)))
     }
 
+    func testTheFirstRowsShowWithoutWaitingForADisplayRefresh() async throws {
+        let (window, controller) = try open(TimelineFrame())
+        defer { close(window) }
+        try await settle()
+        update(controller, preparedFrame(40))
+        XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), 40)
+        XCTAssertTrue(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: 39, section: 0)))
+    }
+
     func testBottomFollowingAndReadingProtection() async throws {
         var frame = preparedFrame(200)
         let (window, controller) = try open(frame)

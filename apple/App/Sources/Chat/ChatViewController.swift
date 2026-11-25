@@ -300,6 +300,9 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         topFade.color = view.backgroundColor
         bottomFade.color = view.backgroundColor
         offer(frame)
+        // The first rows show at once, with the actions their frame brought, rather than on the
+        // next display refresh.
+        if current.rows.isEmpty, pending?.rows.isEmpty == false, view.window != nil { applyPending() }
     }
 
     /// A frame from the model, committed on the next display refresh.
