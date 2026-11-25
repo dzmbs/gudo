@@ -2649,6 +2649,9 @@ impl Core {
             }
             EventKind::SessionStarted | EventKind::SessionIdChanged => {
                 crate::approve::session_over(self, id);
+                if event.kind == EventKind::SessionStarted && event.source == agents::Source::Hook {
+                    crate::agent_config::session_started(self, id);
+                }
             }
             EventKind::TurnEnded
             | EventKind::Interrupted

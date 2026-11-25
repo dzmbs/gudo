@@ -56,6 +56,9 @@ pub(crate) struct ClaudeLaunch {
     relaunched_at: Option<Instant>,
     /// It stopped, and the line that starts it again waits for its shell's prompt.
     awaits_prompt: bool,
+    /// Its pane started it and it has not reported its session yet: until then the pane may
+    /// still be waiting to start it, so a change waits too.
+    starting: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +80,8 @@ pub(crate) struct CarriedClaudeLaunch {
     pending: Option<AgentConfigValues>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relaunch: Option<Relaunch>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    starting: bool,
 }
 
 impl ClaudeLaunch {
@@ -100,6 +105,7 @@ impl ClaudeLaunch {
             relaunch: None,
             relaunched_at: None,
             awaits_prompt: false,
+            starting: true,
         }
     }
 
@@ -113,6 +119,7 @@ impl ClaudeLaunch {
             started: self.started.clone(),
             pending: self.pending.clone(),
             relaunch: self.relaunch.clone(),
+            starting: self.starting,
         })
     }
 
@@ -129,6 +136,7 @@ impl ClaudeLaunch {
             relaunched_at: carried.relaunch.as_ref().map(|_| Instant::now()),
             awaits_prompt: false,
             relaunch: carried.relaunch,
+            starting: carried.starting,
         }
     }
 }
@@ -215,6 +223,7 @@ fn launch_at_prompt(
         },
     );
     launch.restarts = restarts;
+    launch.starting = false;
     Ok(launch)
 }
 
@@ -433,19 +442,37 @@ pub(super) fn set(
         }
         super::merge_values(launch.pending.get_or_insert_with(Default::default), change);
     }
-    if is_idle(entry) {
+    if is_idle(entry) && !is_starting(entry) {
         restart(core, entry)?;
     }
     Ok(())
 }
 
 fn waits_for_restart(entry: &PaneEntry) -> bool {
+    lock(&entry.claude_launch).as_ref().is_some_and(|launch| {
+        launch.pending.is_some() && launch.relaunch.is_none() && !launch.starting
+    })
+}
+
+fn is_starting(entry: &PaneEntry) -> bool {
     lock(&entry.claude_launch)
         .as_ref()
-        .is_some_and(|launch| launch.pending.is_some() && launch.relaunch.is_none())
+        .is_some_and(|launch| launch.starting)
+}
+
+/// Claude Code reported its session: a change made while it was starting applies now.
+pub(super) fn session_started(core: &Core, entry: &PaneEntry) {
+    if let Some(launch) = lock(&entry.claude_launch).as_mut() {
+        launch.starting = false;
+    }
+    apply_when_settled(core, entry);
 }
 
 pub(super) fn turn_ended(core: &Core, entry: &PaneEntry) {
+    apply_when_settled(core, entry);
+}
+
+fn apply_when_settled(core: &Core, entry: &PaneEntry) {
     if !waits_for_restart(entry) {
         return;
     }
@@ -718,6 +745,7 @@ pub(super) fn serve_relaunch(core: &Core, call: RelaunchCall) -> RelaunchReply {
             (RelaunchStep::Take, Some(_)) => {
                 let relaunch = launch.relaunch.take().expect("matched above");
                 launch.relaunched_at = Some(Instant::now());
+                launch.starting = true;
                 RelaunchReply::Launch {
                     args: relaunch.args,
                     display: relaunch.display,

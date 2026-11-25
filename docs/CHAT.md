@@ -904,7 +904,10 @@ answering needs Approver, a signature by the device, and the pane's approval pol
   `--session-id` before the first turn, with `--model`, `--permission-mode`, `--effort`), sends
   Claude SIGTERM, and the shim starts it again in the same pane, under the same exit fence. Its
   SessionEnd and exit during the restart are not the agent's end. A change asked for mid-turn
-  waits for the turn's Stop and the app says "Applies after this turn". The pane's record keeps
+  waits for the turn's Stop and the app says "Applies after this turn". One asked for before a
+  launch has reported its session (a restored pane still waits its turn to start, or the shim
+  is starting it again) waits for its SessionStart, so SIGTERM never lands on what runs
+  before Claude and leaves the launch line to start it with its old flags. The pane's record keeps
   what Chat last started it with (`AgentRecord.config`), so a restored launch comes back in the
   loop with the same flags, and a hot hand-off carries the loop (`CarriedClaudeLaunch`: launch
   id, session, settings, a waiting change or restart). A Claude without the loop is changed at

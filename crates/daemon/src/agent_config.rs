@@ -363,6 +363,13 @@ pub(crate) fn turn_ended(core: &Core, pane: PaneId) {
     }
 }
 
+/// The pane's agent reported its session.
+pub(crate) fn session_started(core: &Core, pane: PaneId) {
+    if let Some(entry) = core.pane(pane) {
+        claude::session_started(core, &entry);
+    }
+}
+
 /// Whether the pane's Claude Code is restarting with new settings, so its exit is not the
 /// agent's.
 pub(crate) fn is_relaunching(entry: &PaneEntry) -> bool {

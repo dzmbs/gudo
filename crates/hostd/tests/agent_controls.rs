@@ -478,6 +478,57 @@ async fn a_claude_restored_after_a_restart_keeps_its_settings_and_changes_from_c
     daemon.shutdown().await;
 }
 
+/// Restored agents start one after another; a change made before a Claude Code is back
+/// applies once it is, never to the wait before it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_before_a_restored_claude_is_back_applies_once_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut fixture = launch(dir.path()).await;
+    let home = dir.path().join("home").to_string_lossy().into_owned();
+    let mut panes = vec![fixture.pane];
+    for _ in 0..2 {
+        let OpOutcome::PaneCreated { pane_id } = fixture
+            .owner
+            .op(LayoutOp::Split {
+                pane_id: fixture.pane,
+                axis: Axis::Vertical,
+                launch: PaneLaunch::Agent {
+                    agent: AgentKind::Claude,
+                    cwd: Some(home.clone()),
+                    resume: None,
+                },
+            })
+            .await
+        else {
+            panic!("agent launch")
+        };
+        fixture.owner.follow(pane_id).await;
+        fixture.owner.wait_flat(pane_id, "AGENT-UP").await;
+        panes.push(pane_id);
+    }
+    for &pane in &panes {
+        watch_when_tracked(&fixture.owner, pane).await;
+    }
+    fixture.daemon.shutdown().await;
+
+    let daemon = start_daemon(dir.path()).await;
+    let (mut owner, _events, _) = connect_owner(&daemon).await;
+    for &pane in &panes {
+        owner.follow(pane).await;
+        watch_when_tracked(&owner, pane).await;
+        owner
+            .client
+            .set_agent_config(pane, change(Some("sonnet"), None))
+            .await
+            .unwrap_or_else(|error| panic!("pane {pane}: {error}"));
+    }
+    for &pane in &panes {
+        let line = started_with(&mut owner, pane, "--model sonnet").await;
+        assert!(line.contains("--resume "), "{line}");
+    }
+    daemon.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_claude_started_by_hand_restarts_in_its_shell() {
     let dir = tempfile::tempdir().unwrap();
