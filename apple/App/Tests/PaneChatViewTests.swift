@@ -461,7 +461,7 @@ final class PaneChatViewTests: XCTestCase {
         }
         try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
         fixture.state.draft = "Keep typing"
-        try await Task.sleep(for: .milliseconds(30))
+        try await wait { input(in: fixture.window) != nil }
         let editor = try XCTUnwrap(input(in: fixture.window))
         XCTAssertTrue(editor.becomeFirstResponder())
         PaneChatView(pane: fixture.pane, state: fixture.state, hub: fixture.hub,
@@ -521,7 +521,8 @@ final class PaneChatViewTests: XCTestCase {
         }
         owner.confirmAction()
         owner.confirmAction()
-        try await Task.sleep(for: .milliseconds(30))
+        try await wait { fixture.state.composer.confirmationRevision == 2 }
+        await Task.yield()
         XCTAssertEqual(writes, 1)
         XCTAssertTrue(fixture.state.composer.needsConfirmation)
         XCTAssertEqual(fixture.state.composer.confirmationRevision, 2)
@@ -549,7 +550,8 @@ final class PaneChatViewTests: XCTestCase {
         try await wait { fixture.state.controller != nil && fixture.state.model?.frame.rows.count == 60 }
         fixture.state.draft = "Draft in progress"
         fixture.window.makeKeyAndVisible()
-        try await Task.sleep(for: .milliseconds(30))
+        // The field shows the draft once SwiftUI has laid the composer out again.
+        try await wait { input(in: fixture.window) != nil }
         let editor = try XCTUnwrap(input(in: fixture.window))
         XCTAssertTrue(editor.becomeFirstResponder())
         editor.setMarkedText("候補", selectedRange: NSRange(location: 2, length: 0))

@@ -204,10 +204,11 @@ final class ChatPaneSwitchTests: XCTestCase {
         try await fixture.wait { !fixture.visibleRows(0).isEmpty }
         fixture.state(1).prewarm(in: fixture.hub)
         try await fixture.wait { fixture.state(1).model?.frame.rows.isEmpty == false }
+        let prewarmed = try XCTUnwrap(fixture.state(1).model)
         fixture.show(1)
-        let shown = try await fixture.wait { !fixture.visibleRows(1).isEmpty }
-        XCTAssertLessThan(shown, .milliseconds(80), "the rows were there before the pane showed")
-        XCTAssertEqual(fixture.client.calls.filter { $0 == "watch 8" }.count, 1)
+        try await fixture.wait { !fixture.visibleRows(1).isEmpty }
+        XCTAssertTrue(fixture.state(1).model === prewarmed, "the pane shows the model started ahead")
+        XCTAssertEqual(fixture.client.calls.filter { $0 == "watch 8" }.count, 1, "showing it asked for nothing again")
     }
 
     func testAPaneStartedAheadButNotShownLetsGoAndTakesNoOtherPanesModel() async throws {
