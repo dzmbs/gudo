@@ -97,7 +97,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     private var userScrollGeneration = 0
     private var lastWidth: CGFloat = 0
     private var lastHeight: CGFloat = 0
-    private var sizingHost = UIHostingController(rootView: AnyView(EmptyView()))
+    /// One per kind of row, so measuring a row updates the views the last row of its kind built.
+    private var sizingHosts: [ChatCellKind: UIHostingController<AnyView>] = [:]
     private(set) var footer = UIHostingController(rootView: AnyView(EmptyView()))
     private var latest = UIHostingController(rootView: AnyView(EmptyView()))
     /// The working dots float over the transcript just above the composer, so the agent starting
@@ -160,7 +161,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         collection.dataSource = self
         collection.delegate = self
         collection.prefetchDataSource = self
-        collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: "chat-block")
+        for kind in ChatCellKind.allCases { collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: kind.rawValue) }
         collection.accessibilityIdentifier = "chat-timeline"
         view.addSubview(collection)
         collection.translatesAutoresizingMaskIntoConstraints = false
@@ -388,8 +389,10 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { itemCount }
 
     func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "chat-block", for: indexPath)
-        if current.rows.indices.contains(indexPath.item) { configure(cell, row: current.rows[indexPath.item]) }
+        let row = current.rows.indices.contains(indexPath.item) ? current.rows[indexPath.item] : nil
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: (row.map(ChatCellKind.init) ?? .paragraph).rawValue,
+                                                      for: indexPath)
+        if let row { configure(cell, row: row) }
         return cell
     }
 
@@ -726,6 +729,9 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
 
     private func nativeFittingHeight(_ row: ChatRow) -> CGFloat? {
         // Reused cells can report the previous hosting configuration's fitting size.
+        let kind = ChatCellKind(row)
+        let sizingHost = sizingHosts[kind] ?? UIHostingController(rootView: AnyView(EmptyView()))
+        sizingHosts[kind] = sizingHost
         sizingHost.rootView = AnyView(rowContent(row))
         return sizingHost.sizeThatFits(in: CGSize(width: collection.bounds.width, height: .greatestFiniteMagnitude)).height
     }
@@ -840,7 +846,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     @objc private func memoryWarning() {
         heights.removeAll()
         paragraphMetrics.clear()
-        sizingHost.rootView = AnyView(EmptyView())
+        sizingHosts.removeAll()
         model.releaseRenderCaches()
     }
 }
@@ -884,6 +890,45 @@ private final class ChatFrameClock: NSObject {
     weak var owner: ChatViewController?
     init(owner: ChatViewController) { self.owner = owner }
     @objc func step() { owner?.tick() }
+}
+
+/// Rows of one kind share their cells, so a reused cell's SwiftUI view updates in place instead
+/// of building another kind's views.
+private enum ChatCellKind: String, CaseIterable {
+    case paragraph, heading, quote, list, code, table, separator, image, prompt, reply, thinking, tool, plan, notice
+    case turnEnd, longText, showAll, omitted, toolGroup, turnSummary, turnFooter
+
+    init(_ row: ChatRow) {
+        switch row.content {
+        case .markdown(let block):
+            switch block.kind {
+            case .paragraph, .plain: self = .paragraph
+            case .heading: self = .heading
+            case .quote: self = .quote
+            case .list: self = .list
+            case .code: self = .code
+            case .table: self = .table
+            case .separator: self = .separator
+            case .image: self = .image
+            }
+        case .item(let item):
+            switch item.body {
+            case .user: self = .prompt
+            case .assistant: self = .reply
+            case .thinking: self = .thinking
+            case .tool: self = .tool
+            case .plan: self = .plan
+            case .notice: self = .notice
+            case .turnEnd: self = .turnEnd
+            case .longText: self = .longText
+            }
+        case .showAll: self = .showAll
+        case .omitted: self = .omitted
+        case .toolGroup: self = .toolGroup
+        case .turnSummary: self = .turnSummary
+        case .turnFooter: self = .turnFooter
+        }
+    }
 }
 
 private final class ChatCollectionCell: UICollectionViewCell {

@@ -250,6 +250,35 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertTrue(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: 39, section: 0)))
     }
 
+    func testRowsOfOneKindShareTheirCells() async throws {
+        let frame = try await ChatTestFixtures.conversation()
+        let (window, controller) = try open(frame, following: false)
+        defer { close(window) }
+        try await settle()
+        var kinds: Set<String> = []
+        for path in controller.collection.indexPathsForVisibleItems {
+            let cell = try XCTUnwrap(controller.collection.cellForItem(at: path))
+            let row = frame.rows[path.item]
+            let expected: String
+            switch row.content {
+            case .markdown(let block):
+                switch block.kind {
+                case .paragraph, .plain: expected = "paragraph"
+                case .heading: expected = "heading"
+                case .list: expected = "list"
+                default: continue
+                }
+            case .item(let item):
+                guard case .user = item.body else { continue }
+                expected = "prompt"
+            default: continue
+            }
+            XCTAssertEqual(cell.reuseIdentifier, expected)
+            kinds.insert(expected)
+        }
+        XCTAssertGreaterThan(kinds.count, 1)
+    }
+
     func testBottomFollowingAndReadingProtection() async throws {
         var frame = preparedFrame(200)
         let (window, controller) = try open(frame)
