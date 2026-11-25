@@ -237,6 +237,18 @@ impl Sizing {
             };
             (order, Reverse(**conn))
         })?;
+        let grid = request.size.map(|size| (size.cols, size.rows));
+        // A client asking for the grid the pane already has changes nothing: whoever sizes it
+        // goes on doing so, and no client is told another one took the pane over.
+        let keeps_sizer = self
+            .desired
+            .and_then(|desired| desired.owner)
+            .and_then(|(sizer, _)| {
+                candidates().find(|(conn, sizer_request)| {
+                    **conn == sizer && sizer_request.size.map(|size| (size.cols, size.rows)) == grid
+                })
+            });
+        let (conn, request) = keeps_sizer.unwrap_or((conn, request));
         Some(SizeChoice {
             owner: Some((*conn, request.authz.actor.principal)),
             size: request.size?,
@@ -300,6 +312,41 @@ mod tests {
         assert_eq!(sizing.choose(|_| true).unwrap().size, size(160, 40));
         sizing.explicit_activity(2, &authz(2), PaneActivity::Active);
         assert_eq!(sizing.choose(|_| true).unwrap().size, size(60, 25));
+    }
+
+    /// Two windows of one size: activating the other changes neither the grid nor who sizes
+    /// it, so no client is told another sized the pane. Once their grids differ the latest
+    /// active one sizes it, as always.
+    #[test]
+    fn activating_a_client_with_the_same_grid_keeps_the_sizer() {
+        let mut sizing = Sizing::default();
+        for conn in [1, 2] {
+            sizing
+                .set_size(
+                    conn,
+                    &authz(conn as u8),
+                    size(120, 40),
+                    PaneActivity::Active,
+                )
+                .unwrap();
+            sizing.view_activity(conn, &authz(conn as u8), PaneActivity::Active);
+        }
+        sizing.explicit_activity(1, &authz(1), PaneActivity::Active);
+        let first = sizing.choose(|_| true);
+        sizing.update_choice(first);
+        assert_eq!(first.unwrap().owner.unwrap().0, 1);
+
+        sizing.explicit_activity(2, &authz(2), PaneActivity::Active);
+        sizing.input(2);
+        let after = sizing.choose(|_| true);
+        assert!(!sizing.update_choice(after), "nothing changed: {after:?}");
+
+        sizing
+            .set_size(1, &authz(1), size(100, 40), PaneActivity::Active)
+            .unwrap();
+        let resized = sizing.choose(|_| true).unwrap();
+        assert_eq!(resized.owner.unwrap().0, 2);
+        assert_eq!(resized.size, size(120, 40));
     }
 
     #[test]

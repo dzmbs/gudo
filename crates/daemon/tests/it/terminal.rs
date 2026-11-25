@@ -236,7 +236,7 @@ async fn backgrounding_the_sizing_client_hands_the_grid_to_the_remaining_view() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sizing_identity_distinguishes_devices_with_the_same_principal_and_grid() {
+async fn sizing_identity_distinguishes_devices_with_the_same_principal() {
     let directory = tempfile::tempdir().unwrap();
     let daemon = start(directory.path()).await;
     let mut desktop = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
@@ -253,8 +253,17 @@ async fn sizing_identity_distinguishes_devices_with_the_same_principal_and_grid(
     let principal = desktop.metas[&pane].sized_by;
     let mut phone = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     phone.attach_and_follow().await;
+    phone.client.resize(
+        pane,
+        PaneSize {
+            cols: 45,
+            rows: 30,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
     desktop
-        .until("other device owns the same grid", |client| {
+        .until("other device owns the pane", |client| {
             client
                 .sizing
                 .get(&pane)
@@ -546,6 +555,65 @@ async fn a_long_drag_resizes_the_terminal_while_it_lasts() {
                 .metas
                 .get(&pane)
                 .is_some_and(|meta| meta.size.cols == 170)
+        })
+        .await;
+}
+
+/// Two Macs with windows of one size share a pane: activating and typing in the other one
+/// leaves the pane sized as it was, by the same client, so neither is told another device
+/// sized it. Once the grids differ, the latest active one sizes it.
+#[tokio::test(flavor = "multi_thread")]
+async fn same_size_clients_do_not_take_the_pane_from_each_other() {
+    let directory = tempfile::tempdir().unwrap();
+    let daemon = start(directory.path()).await;
+    let mut first = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let pane = first.attach_and_follow().await;
+    first.client.claim_pane_size(pane);
+    first
+        .until("the first Mac sizes the pane", |client| {
+            client
+                .sizing
+                .get(&pane)
+                .is_some_and(|state| state.peer.is_some())
+        })
+        .await;
+    let sizer = first.sizing[&pane].peer;
+    let mut second = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    second.attach_and_follow().await;
+    second.client.claim_pane_size(pane);
+    second.op(LayoutOp::Focus { pane_id: pane }).await;
+    second
+        .client
+        .send_input(pane, b"echo typed-$((6*7))\r".to_vec());
+    first.wait_text(pane, "typed-42").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    first.until("pending events", |_| true).await;
+    assert_eq!(
+        first.sizing[&pane].peer, sizer,
+        "the same grid changed hands"
+    );
+    assert_eq!(first.metas[&pane].size.cols, 100);
+
+    second.client.resize(
+        pane,
+        PaneSize {
+            cols: 90,
+            rows: 30,
+            width_px: 0,
+            height_px: 0,
+        },
+    );
+    second.client.claim_pane_size(pane);
+    first
+        .until("the other Mac's own grid", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.size.cols == 90)
+                && client
+                    .sizing
+                    .get(&pane)
+                    .is_some_and(|state| state.peer != sizer)
         })
         .await;
 }
