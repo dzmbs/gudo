@@ -1,7 +1,24 @@
 import Foundation
 import UniformTypeIdentifiers
 
+/// A picture pasted or dropped on a terminal.
+public enum PastedImage: Sendable, Equatable {
+    /// Image bytes from the clipboard or a drop (PNG, JPEG, HEIC, GIF, WebP or TIFF).
+    case data(Data)
+    /// An image file.
+    case file(URL)
+}
+
 extension TerminalView {
+    /// Clipboard image types, best first. The Mac puts a TIFF beside most pictures, so it comes
+    /// last.
+    static let pastedImageTypes: [UTType] = [.png, .jpeg, .heic, .heif, .gif, .webP, .tiff]
+
+    static func isImageFile(_ url: URL) -> Bool {
+        guard url.isFileURL, let type = UTType(filenameExtension: url.pathExtension) else { return false }
+        return [UTType.png, .jpeg, .heic, .heif, .gif, .webP].contains { type.conforms(to: $0) }
+    }
+
     /// File URLs become shell-escaped paths; ordinary URLs keep their textual representation.
     public func pasteURLs(_ urls: [URL]) {
         guard !urls.isEmpty else { return }

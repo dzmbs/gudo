@@ -626,7 +626,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         switch item.action {
         case #selector(copy(_:)): surface.terminal.selection != nil
         case #selector(paste(_:)):
-            Self.hasDroppableText(NSPasteboard.general)
+            Self.hasDroppableText(NSPasteboard.general) || (acceptsImages?() == true && Self.hasPastedImage(.general))
         case #selector(placeClipboardAttachment(_:)): onPasteAttachment != nil && Self.hasAttachment(.general)
         case #selector(selectAll(_:)): true
         default: true
@@ -642,8 +642,40 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
     @objc public func paste(_ sender: Any?) { paste(from: .general) }
 
     func paste(from board: NSPasteboard) {
+        if takeImages(from: board) { return }
         guard let text = Self.droppedText(board) else { return }
         pasteText(text)
+    }
+
+    // MARK: Pictures for the program (an agent)
+
+    /// Takes pictures pasted or dropped on the terminal instead of typing them: image files only,
+    /// or an image with no text beside it. Only while `acceptsImages` says so; otherwise they
+    /// paste as before. Text never comes here.
+    public var onImages: (([PastedImage]) -> Void)?
+    public var acceptsImages: (() -> Bool)?
+
+    private func takeImages(from board: NSPasteboard) -> Bool {
+        guard let onImages, acceptsImages?() == true, let images = Self.pastedImages(board) else { return false }
+        onImages(images)
+        return true
+    }
+
+    static func pastedImages(_ board: NSPasteboard) -> [PastedImage]? {
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            return urls.allSatisfy(isImageFile) ? urls.map(PastedImage.file) : nil
+        }
+        guard board.availableType(from: [.string]) == nil else { return nil }
+        for type in pastedImageTypes {
+            if let data = board.data(forType: NSPasteboard.PasteboardType(type.identifier)) { return [.data(data)] }
+        }
+        return nil
+    }
+
+    /// Looks at the types only: asked on every move of a drag and each time a menu opens.
+    static func hasPastedImage(_ board: NSPasteboard) -> Bool {
+        board.availableType(from: [.string]) == nil
+            && board.availableType(from: pastedImageTypes.map { NSPasteboard.PasteboardType($0.identifier) }) != nil
     }
 
     @objc public func placeClipboardAttachment(_ sender: Any?) { _ = onPasteAttachment?(.general) }
@@ -689,6 +721,7 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
         if sender.draggingSource as? TerminalView === self { return [] }
         let board = sender.draggingPasteboard
         if onDropAttachment != nil, acceptsAttachmentDrop(board, modifiers: NSEvent.modifierFlags) { return .copy }
+        if acceptsImages?() == true, Self.hasPastedImage(board) { return .copy }
         // Asked on every move of the drag: look at the types, never read the text itself.
         return Self.hasDroppableText(board) ? .copy : []
     }
@@ -709,6 +742,10 @@ public final class TerminalView: NSView, @MainActor NSTextInputClient, @MainActo
 
     func drop(from board: NSPasteboard, at point: CGPoint, modifiers: NSEvent.ModifierFlags) -> Bool {
         if let onDropAttachment, acceptsAttachmentDrop(board, modifiers: modifiers), onDropAttachment(board, point) {
+            return true
+        }
+        if takeImages(from: board) {
+            window?.makeFirstResponder(self)
             return true
         }
         guard let text = Self.droppedText(board) else { return false }

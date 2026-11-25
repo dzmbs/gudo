@@ -892,7 +892,9 @@ public final class TerminalView: UIView {
     override public func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(copy(_:)): surface.terminal.selection != nil
-        case #selector(paste(_:)): UIPasteboard.general.hasStrings || UIPasteboard.general.hasURLs
+        case #selector(paste(_:)):
+            UIPasteboard.general.hasStrings || UIPasteboard.general.hasURLs
+                || (acceptsImages?() == true && UIPasteboard.general.hasImages)
         case #selector(selectAll(_:)): true
         case #selector(find(_:)): onFind != nil
         default: super.canPerformAction(action, withSender: sender)
@@ -933,8 +935,28 @@ public final class TerminalView: UIView {
     }
 
     func paste(from board: UIPasteboard) {
+        if let onImages, acceptsImages?() == true, let images = Self.pastedImages(board) {
+            onImages(images)
+            return
+        }
         guard let text = Self.pastedText(board) else { return }
         pasteText(text)
+    }
+
+    /// Takes pictures pasted on the terminal instead of typing them: image files only, or an
+    /// image with no text beside it. Only while `acceptsImages` says so; otherwise they paste as
+    /// before. Text never comes here.
+    public var onImages: (([PastedImage]) -> Void)?
+    public var acceptsImages: (() -> Bool)?
+
+    static func pastedImages(_ board: UIPasteboard) -> [PastedImage]? {
+        let files = (board.urls ?? []).filter(\.isFileURL)
+        if !files.isEmpty { return files.allSatisfy(isImageFile) ? files.map(PastedImage.file) : nil }
+        guard !board.hasStrings, !board.hasURLs, board.hasImages else { return nil }
+        for type in pastedImageTypes {
+            if let data = board.data(forPasteboardType: type.identifier) { return [.data(data)] }
+        }
+        return board.image?.pngData().map { [.data($0)] }
     }
 
     static func pastedText(_ board: UIPasteboard) -> String? {

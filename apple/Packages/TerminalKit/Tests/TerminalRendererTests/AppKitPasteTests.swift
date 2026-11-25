@@ -50,6 +50,57 @@ import Testing
         withExtendedLifetime(window) {}
     }
 
+    /// A pane that takes pictures (an agent's) gets an image alone, or image files, instead of a
+    /// paste; text, other files and panes that take none paste as before.
+    @Test func picturesGoToAPaneThatTakesThemAndTextStillPastes() throws {
+        let (view, window, written) = try makeView()
+        let board = NSPasteboard(name: .init("terminal-picture-paste-\(UUID())"))
+        defer { board.releaseGlobally() }
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jAj0AAAAASUVORK5CYII=")!
+        var takes = false
+        var received: [[PastedImage]] = []
+        view.acceptsImages = { takes }
+        view.onImages = { received.append($0) }
+
+        board.setData(png, forType: .png)
+        view.paste(from: board)
+        #expect(received.isEmpty, "a shell takes no pictures")
+        takes = true
+        view.paste(from: board)
+        #expect(received == [[.data(png)]])
+
+        board.clearContents()
+        board.setString("echo one", forType: .string)
+        board.setData(png, forType: .png)
+        view.paste(from: board)
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/notes.txt") as NSURL, URL(fileURLWithPath: "/tmp/shot.png") as NSURL])
+        view.paste(from: board)
+        #expect(received.count == 1)
+        #expect(String(decoding: written.bytes.withLock { $0 }, as: UTF8.self) == "echo one/tmp/notes.txt /tmp/shot.png")
+
+        board.clearContents()
+        board.writeObjects([URL(fileURLWithPath: "/tmp/a b/shot.png") as NSURL, URL(fileURLWithPath: "/tmp/photo.HEIC") as NSURL])
+        #expect(view.drop(from: board, at: .zero, modifiers: []))
+        #expect(received.last == [.file(URL(fileURLWithPath: "/tmp/a b/shot.png")), .file(URL(fileURLWithPath: "/tmp/photo.HEIC"))])
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func pasteIsOfferedForAnImageAloneOnlyWhereItIsTaken() throws {
+        let (view, window, _) = try makeView()
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setData(Data([0x89, 0x50, 0x4e, 0x47]), forType: .png)
+        let item = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        #expect(!view.validateMenuItem(item))
+        view.acceptsImages = { true }
+        #expect(view.validateMenuItem(item))
+        let drag = FakeDrag(NSPasteboard.general)
+        #expect(view.draggingEntered(drag) == .copy)
+        view.acceptsImages = { false }
+        #expect(view.draggingEntered(drag) == [])
+        withExtendedLifetime(window) {}
+    }
+
     @Test func fileClipboardPastesTheEscapedPathNotTheFinderNameOrAnImage() throws {
         let (view, window, written) = try makeView()
         let board = NSPasteboard(name: .init("terminal-file-paste-\(UUID())"))
