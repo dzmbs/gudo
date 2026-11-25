@@ -23,6 +23,28 @@ final class WindowSizingTests: XCTestCase {
         XCTAssertEqual(PaneSizingSource.resolve(composite, myPeer: 7, policy: .smallest, isLocalDriver: true, othersConnected: true), .shared)
     }
 
+    /// Another client sizing the pane to the grid this view would choose changes nothing here:
+    /// no strip offers its size.
+    func testAnotherClientAtThisViewsGridIsNotShown() {
+        let other = PaneSizing(paneId: 1, peer: 8)
+        let mine = PaneSizing(paneId: 1, peer: 7)
+        XCTAssertNil(PaneSizingSource.resolve(other, myPeer: 7, policy: .lastActive, isLocalDriver: true,
+                                              othersConnected: true, matchesOwnGrid: true))
+        XCTAssertNil(PaneSizingSource.resolve(mine, myPeer: 7, policy: .lastActive, isLocalDriver: false,
+                                              othersConnected: true, matchesOwnGrid: true))
+        XCTAssertEqual(PaneSizingSource.resolve(other, myPeer: 7, policy: .lastActive, isLocalDriver: true,
+                                                othersConnected: true, matchesOwnGrid: false), .peer(8))
+    }
+
+    /// The strip names the other device as it introduced itself; two Macs are told apart.
+    func testThePeerSizingThePaneIsNamed() {
+        XCTAssertEqual(PaneSizingSource.peerLabel(name: "Studio", device: .desktop, myDevice: .desktop), "Sized for Studio")
+        XCTAssertEqual(PaneSizingSource.peerLabel(name: "", device: .desktop, myDevice: .desktop), "Sized for another Mac")
+        XCTAssertEqual(PaneSizingSource.peerLabel(name: "", device: .phone, myDevice: .desktop), "Sized for iPhone")
+        XCTAssertEqual(PaneSizingSource.peerLabel(name: "  ", device: .tablet, myDevice: nil), "Sized for iPad")
+        XCTAssertEqual(PaneSizingSource.peerLabel(name: "", device: .unknown, myDevice: .desktop), "Sized for another device")
+    }
+
     /// Nobody claiming the size yet (this client's own size on its way, or every window in the
     /// background) is not someone else deciding it; nor is a lone client's smallest grid.
     func testOnlyAnotherClientDecidingTheSizeIsShown() {

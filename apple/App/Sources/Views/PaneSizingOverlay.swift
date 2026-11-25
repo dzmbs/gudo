@@ -33,10 +33,12 @@ struct PaneSizingOverlay: View {
     private func source(in daemon: DaemonConnection) -> PaneSizingSource? {
         _ = pane.resizesSent
         guard daemon.status.isLive, let state = daemon.sizing[pane.id],
-              let metadata = daemon.meta[pane.id], pane.view.surface.grid != nil else { return nil }
+              let metadata = daemon.meta[pane.id], let grid = pane.view.surface.grid else { return nil }
         let session = daemon.multiplayer
+        let matchesOwnGrid = grid.cols == metadata.size.cols && grid.rows == metadata.size.rows
         return PaneSizingSource.resolve(state, myPeer: session.myPeer, policy: metadata.sizePolicy, isLocalDriver: pane.isSizingTap,
-                                        othersConnected: session.peers.keys.contains { $0 != session.myPeer })
+                                        othersConnected: session.peers.keys.contains { $0 != session.myPeer },
+                                        matchesOwnGrid: matchesOwnGrid)
     }
 
     private func canUseSize(in daemon: DaemonConnection) -> Bool {
@@ -52,15 +54,12 @@ struct PaneSizingOverlay: View {
         case .fixed: return "Fixed size"
         case .shared: return "Shared size"
         case .peer(let id):
-            guard let peer = daemon.multiplayer.peers[id] else { return "Sized for another device" }
-            let name: String
-            switch peer.device {
-            case .phone: name = "iPhone"
-            case .tablet: name = "iPad"
-            case .desktop: name = "Mac"
-            case .terminal, .unknown: name = peer.name.isEmpty ? "another device" : peer.name
-            }
-            return "Sized for \(name)"
+            let session = daemon.multiplayer
+            guard let peer = session.peers[id] else { return "Sized for another device" }
+            // The name the owner gave the device in its list, else the one it gave itself.
+            let listed = session.devices.first { $0.device == peer.actor.device }?.name
+            let myDevice = session.myPeer.flatMap { session.peers[$0]?.device }
+            return PaneSizingSource.peerLabel(name: listed ?? peer.name, device: peer.device, myDevice: myDevice)
         }
     }
 }
