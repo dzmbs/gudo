@@ -144,6 +144,42 @@ bottom is not the live bottom. Connection resets clear rendered values before an
 publish, including screens that were stopped during a reconnect. Expansion and drafts stay
 local to the screen; drafts do not cross hosts.
 
+## Streaming pace
+
+Streamed text reaches the screen in three paced steps, so a reply grows evenly however lumpy
+the agent's output is.
+
+- **Helper.** Each pane's timeline refreshes at once after a quiet window, then at most once
+  per `STREAM_WINDOW` (60 ms) while its pushes are only streamed text (appended reply or
+  thinking text, a reply or thinking row still streaming), and once per 35 ms otherwise. The
+  deltas wait in the session's own row text (Claude display overlay, Codex projection, pi
+  live rows), which their producers already bound; the pace holds no buffer and allocates
+  nothing per delta. An agent event for the pane (a turn ending, a tool starting) refreshes at
+  once, so the final text always precedes the turn's end. The wire is unchanged.
+- **App commits.** `TimelineModel` publishes each worker frame to its transcript through
+  `onFrame`; SwiftUI views read only `outline` (capabilities, session, whether there are rows,
+  the last turn end), which changes far less often, so a streamed row redraws the transcript
+  alone. The transcript commits the latest frame once per display refresh; when refreshes stop
+  (a locked screen, a parked view) a timer commits after 100 ms and then at 60 Hz.
+- **Reveal.** `ChatReplyReveal` paces the latest item while it is a streaming reply. The frame
+  keeps the full text; only what is drawn is paced, so copying, selecting and the turn's footer
+  read all of it. Arrival sets the target and `ChatTextReveal.step` releases a share of the
+  backlog each 60 Hz frame (backlog × elapsed / 150 ms, at least one character), so a burst
+  catches up faster instead of jumping. A reply seen for the first time (history, a reopened
+  pane, a remounted row) shows whole; a reply that stops streaming, or a transcript that is not
+  painting, shows whole at once. Blocks after the one being written wait at no height, so the
+  bottom follows what is shown. Each frame measures and redraws only the reply's rows it
+  changed.
+- **Markdown.** `RowBuilder` keeps the closed blocks of a growing reply and parses only from the
+  last stable block; the reference check reads only the appended bytes, the prefix check is a
+  byte comparison, and retained rows are reused without comparing them. Debug builds parse the
+  whole text as well and assert both agree. A single long block still costs its full length.
+
+`MacChatTests.testAStreamingReplyGrowsSmoothly` and
+`PaneChatViewTests.testAStreamingReplyGrowsSmoothly` (with `TEST_RUNNER_GUDO_CHAT_PERF=1`) drive
+a seeded bursty stream (1 to 40 words every 90 ms) and require a chars-per-frame coefficient of
+variation of at most 2.0 and a p95 gap between visible updates of at most 34 ms.
+
 ## Touch presentation
 
 On iOS, tracked Claude, Codex and pi panes have a title-bar Chat/Terminal control. New iPhone panes

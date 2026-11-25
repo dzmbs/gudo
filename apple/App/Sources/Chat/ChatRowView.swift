@@ -25,6 +25,15 @@ struct ChatRowActions {
     }
 }
 
+extension ChatRow {
+    /// What the row's height follows: its revision, except a turn's footer, whose height follows
+    /// its summary and not the reply it copies.
+    var layoutRevision: UInt32 {
+        guard case .turnFooter(let footer) = content else { return revision }
+        return UInt32(truncatingIfNeeded: footer.end.map(ChatItemPresentation.turnSummary).hashValue)
+    }
+}
+
 struct ChatRowView: View {
     let row: ChatRow
     let isExpanded: Bool
@@ -91,10 +100,10 @@ struct ChatRowView: View {
     @ViewBuilder private func markdown(_ block: ChatMarkdownBlock) -> some View {
         switch block.kind {
         case .paragraph:
-            inlineCode(block.text).font(ChatFont.prose).lineSpacing(DS.Space.badgeV)
+            inlineCode(block.shownText).font(ChatFont.prose).lineSpacing(DS.Space.badgeV)
                 .fixedSize(horizontal: false, vertical: true)
         case .heading(let level):
-            Text(block.text)
+            Text(block.shownText)
                 .font(level == 1 ? ChatFont.proseTitle : level == 2 ? ChatFont.title : ChatFont.proseHeading)
                 .padding(.top, DS.Space.s)
                 .fixedSize(horizontal: false, vertical: true)
@@ -102,11 +111,11 @@ struct ChatRowView: View {
             HStack(alignment: .top, spacing: DS.Space.m) {
                 RoundedRectangle.rounded(DS.Radius.chip).fill(DS.Palette.border)
                     .frame(width: DS.Size.proseQuoteRule)
-                inlineCode(block.text).font(ChatFont.prose).foregroundStyle(DS.Palette.textSecondary)
+                inlineCode(block.shownText).font(ChatFont.prose).foregroundStyle(DS.Palette.textSecondary)
             }.fixedSize(horizontal: false, vertical: true)
         case .list:
             VStack(alignment: .leading, spacing: DS.Space.s) {
-                ForEach(Array(block.list.enumerated()), id: \.offset) { _, line in
+                ForEach(Array(block.shownList.enumerated()), id: \.offset) { _, line in
                     HStack(alignment: .firstTextBaseline, spacing: DS.Space.s) {
                         Text(line.marker).foregroundStyle(DS.Palette.textSecondary)
                             .frame(minWidth: DS.Space.l, alignment: .trailing)
@@ -131,7 +140,7 @@ struct ChatRowView: View {
         case .separator:
             Hairline(style: DS.Palette.separator).padding(.vertical, DS.Space.s)
         case .plain:
-            Text(block.text).font(ChatFont.literal).fixedSize(horizontal: false, vertical: true)
+            Text(block.shownText).font(ChatFont.literal).fixedSize(horizontal: false, vertical: true)
         case .image(let path):
             ChatInlineImage(path: path, height: ChatImageBox.height, loader: actions.loadImage)
         }

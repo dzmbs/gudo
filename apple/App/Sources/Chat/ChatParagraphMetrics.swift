@@ -25,7 +25,7 @@ final class ChatParagraphMetrics {
         guard environment.textCase == nil, environment.lineHeight == nil,
               case .markdown(let block) = row.content, block.kind == .paragraph,
               block.text.runs.allSatisfy({ $0.attributes == AttributeContainer() }) else { return nil }
-        let text = String(block.text.characters)
+        let text = String(block.shownText.characters)
         guard !text.isEmpty, text.utf8.allSatisfy({ (32...126).contains($0) }) else { return nil }
         let font = ChatFont.prose.resolve(in: environment.fontResolutionContext)
         let available = ChatReadingColumn.textWidth(in: width)

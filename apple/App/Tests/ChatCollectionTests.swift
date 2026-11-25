@@ -19,14 +19,14 @@ final class ChatCollectionTests: XCTestCase {
     }
 
     private func open(_ frame: TimelineFrame, following: Bool = true,
-                      onSnapshot: ((ChatViewController) -> Void)? = nil) throws -> (UIWindow, ChatViewController) {
+                      onApply: ((ChatViewController) -> Void)? = nil) throws -> (UIWindow, ChatViewController) {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let model = TimelineModel(pane: 42)
         model.followsBottom = following
         let controller = ChatViewController(model: model)
         controller.loadViewIfNeeded()
-        controller.onSnapshot = { [weak controller] _ in
-            if let controller { onSnapshot?(controller) }
+        controller.onApply = { [weak controller] _ in
+            if let controller { onApply?(controller) }
         }
         update(controller, frame)
         let window = UIWindow(windowScene: scene)
@@ -117,7 +117,7 @@ final class ChatCollectionTests: XCTestCase {
 
     func testVisibleRowsHaveFittingHeightsBeforeTheirFirstSnapshot() async throws {
         var measuredAtSubmission: [Int] = []
-        let (window, _) = try open(preparedFrame(3), onSnapshot: { measuredAtSubmission.append($0.measuredCells) })
+        let (window, _) = try open(preparedFrame(3), onApply: { measuredAtSubmission.append($0.measuredCells) })
         defer { close(window) }
         try await settle()
         XCTAssertFalse(measuredAtSubmission.isEmpty)
@@ -164,7 +164,7 @@ final class ChatCollectionTests: XCTestCase {
         try await settle()
         let before = controller.measuredCells
         var measuredAtSubmission: Int?
-        controller.onSnapshot = { [weak controller] _ in measuredAtSubmission = controller?.measuredCells }
+        controller.onApply = { [weak controller] _ in measuredAtSubmission = controller?.measuredCells }
         let previous = frame.rows[0]
         let text = String(repeating: "The changed row must fit before its new content is displayed. ", count: 20)
         frame.rows[0] = ChatRow(id: previous.id, revision: 2, turn: previous.turn,
@@ -334,7 +334,7 @@ final class ChatCollectionTests: XCTestCase {
         defer { close(window) }
         try await settle()
         var reconfigured: Set<ChatRowID> = []
-        controller.onSnapshot = { reconfigured.formUnion($0.reconfiguredItemIdentifiers) }
+        controller.onApply = { reconfigured.formUnion($0) }
         let index = 150
         XCTAssertFalse(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: index, section: 0)))
         let previous = frame.rows[index]
@@ -354,7 +354,7 @@ final class ChatCollectionTests: XCTestCase {
         defer { close(window) }
         try await settle()
         var reconfigured: Set<ChatRowID> = []
-        controller.onSnapshot = { reconfigured.formUnion($0.reconfiguredItemIdentifiers) }
+        controller.onApply = { reconfigured.formUnion($0) }
         var environment = EnvironmentValues()
         environment.dynamicTypeSize = .accessibility3
         update(controller, frame, environment: environment)

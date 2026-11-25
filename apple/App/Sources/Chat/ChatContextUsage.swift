@@ -37,8 +37,22 @@ nonisolated struct ChatContextUsage: Equatable, Sendable {
             self.init(used: reported.used, limit: reported.window, source: .agent)
             return
         }
-        guard let model = session?.model, let limit = Self.window(model: model) else { return nil }
-        for row in rows.suffix(Self.rowsSearched).reversed() {
+        self.init(reported: nil, lastTurnEnd: Self.lastTurnEnd(in: rows), session: session)
+    }
+
+    init?(reported: AgentContextUsage?, lastTurnEnd: TimelineTurnEnd?, session: TimelineSession?) {
+        if let reported, reported.window > 0 {
+            self.init(used: reported.used, limit: reported.window, source: .agent)
+            return
+        }
+        guard let model = session?.model, let limit = Self.window(model: model),
+              let end = lastTurnEnd, let input = end.inputTokens else { return nil }
+        self.init(used: input, limit: limit, lastOutput: end.outputTokens)
+    }
+
+    /// The latest turn end with input tokens among the last `rowsSearched` rows.
+    static func lastTurnEnd(in rows: [ChatRow]) -> TimelineTurnEnd? {
+        for row in rows.suffix(rowsSearched).reversed() {
             let end: TimelineTurnEnd?
             switch row.content {
             case .turnFooter(let footer): end = footer.end
@@ -46,10 +60,7 @@ nonisolated struct ChatContextUsage: Equatable, Sendable {
                 if case .turnEnd(let value) = item.body { end = value } else { end = nil }
             default: end = nil
             }
-            if let end, let input = end.inputTokens, input > 0 {
-                self.init(used: input, limit: limit, lastOutput: end.outputTokens)
-                return
-            }
+            if let end, let input = end.inputTokens, input > 0 { return end }
         }
         return nil
     }

@@ -41,7 +41,7 @@ nonisolated struct NativeListLayout: Sendable {
         var firstChanged: Int?
         var hasher = Hasher()
         hasher.combine(revision)
-        for (index, height) in heights where rows.indices.contains(index) && height.isFinite && height > 0 {
+        for (index, height) in heights where rows.indices.contains(index) && height.isFinite && height >= 0 {
             guard rows[index].height != height else { continue }
             rows[index].height = height
             firstChanged = min(firstChanged ?? index, index)

@@ -17,6 +17,11 @@ This product includes incremental Markdown partitioning adapted from OpenAI Code
 apple/App/Sources/Chat/RowBuilder.swift uses native blocks and Swift Markdown source ranges;
 the complete licence is in scripts/notices/codex.txt and ships in the app's notices.
 
+This product includes the paced reveal of streaming text adapted from Paseo
+(https://github.com/getpaseo/paseo), Copyright (c) 2025-present Mohamed Boudra, licensed under
+Apache-2.0. apple/App/Sources/Chat/ChatTextReveal.swift counts rendered characters across native
+block rows; the complete licence is in scripts/notices/paseo.txt and ships in the app's notices.
+
 This product includes software derived from Ghostty (https://github.com/ghostty-org/ghostty),
 Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors, licensed under the MIT License.
 The host daemon and the apps link libghostty-vt, built from vendor/ghostty; the Apple apps

@@ -23,6 +23,8 @@ nonisolated enum ChatCacheLimits {
 nonisolated struct RenderedChatRows: Sendable {
     let rows: [ChatRow]
     let cost: LRUCost
+    /// Leading rows identical to the item's previous render.
+    var unchanged = 0
 }
 
 nonisolated struct ChatRowID: Hashable, Sendable {
@@ -46,6 +48,11 @@ nonisolated struct ChatRow: Equatable, Sendable, Identifiable {
 
     var awaitsHighlights: Bool {
         if case .markdown(let block) = content { block.awaitsHighlights } else { false }
+    }
+
+    /// How much of a streaming reply's block is on screen; nil when all of it is.
+    var revealed: Int? {
+        if case .markdown(let block) = content { block.revealed } else { nil }
     }
 
     enum Content: Equatable, Sendable {
@@ -79,8 +86,44 @@ nonisolated struct ChatMarkdownBlock: Equatable, Sendable {
     var table: [[AttributedString]] = []
     var code: ChatCodeSnippet?
     var hasOmittedContent = false
+    /// While its reply streams, how many of `revealLength` are on screen; nil for all.
+    var revealed: Int?
 
     var awaitsHighlights: Bool { code?.awaitsHighlights == true }
+
+    /// What the reveal counts: rendered characters, or one for a block shown at once.
+    var revealLength: Int {
+        switch kind {
+        case .paragraph, .heading, .quote, .plain: max(1, text.characters.count)
+        case .list: max(1, list.reduce(0) { $0 + $1.text.characters.count })
+        case .code, .table, .separator, .image: 1
+        }
+    }
+
+    /// The text on screen; copying and selecting read `text`.
+    var shownText: AttributedString {
+        guard let revealed else { return text }
+        return Self.prefix(text, characters: revealed)
+    }
+
+    /// The list lines on screen, the last one cut where the reveal is.
+    var shownList: [ChatListLine] {
+        guard var remaining = revealed else { return list }
+        var lines: [ChatListLine] = []
+        for line in list {
+            guard remaining > 0 else { break }
+            let length = line.text.characters.count
+            lines.append(length <= remaining ? line
+                         : ChatListLine(depth: line.depth, marker: line.marker, text: Self.prefix(line.text, characters: remaining)))
+            remaining -= length
+        }
+        return lines
+    }
+
+    private static func prefix(_ text: AttributedString, characters: Int) -> AttributedString {
+        guard let end = text.characters.index(text.startIndex, offsetBy: max(0, characters), limitedBy: text.endIndex) else { return text }
+        return AttributedString(text[text.startIndex..<end])
+    }
 }
 
 nonisolated struct ChatCodeSnippet: Equatable, Sendable {
@@ -136,6 +179,10 @@ nonisolated final class RowBuilder {
         let blocks: [ChatMarkdownBlock]
         let stableBytes: Int
         let stableBlocks: Int
+        /// Possible reference definitions, which can change earlier blocks, so no prefix is kept.
+        let mayHaveReferences: Bool
+        /// Leading blocks kept from the previous partition without parsing them again.
+        var retainedBlocks = 0
     }
 
     private struct Entry {
@@ -172,9 +219,10 @@ nonisolated final class RowBuilder {
         defer { lastRenderDuration = start.duration(to: .now) }
         let previous = cache.value(for: item.id)
         if let previous, previous.revision == item.revision, !previous.awaitsHighlights {
-            return RenderedChatRows(rows: previous.rows, cost: previous.cost)
+            return RenderedChatRows(rows: previous.rows, cost: previous.cost, unchanged: previous.rows.count)
         }
         let rows: [ChatRow]
+        var unchanged = 0
         var bytes = TimelineValueWeight.of(item)
         var partition: MarkdownPartition?
         if case .assistant(let assistant) = item.body {
@@ -189,12 +237,19 @@ nonisolated final class RowBuilder {
             partition = rendered
             let blocks = rendered.blocks
             let previousRows = previous?.rows ?? []
+            // Retained blocks are the previous partition's own values: their rows need no comparing.
+            let sameTurn = previousRows.first?.turn == item.turn
+            unchanged = sameTurn ? min(rendered.retainedBlocks, previousRows.count) : 0
             rows = blocks.enumerated().map { index, block in
+                if index < unchanged { return previousRows[index] }
                 let content = ChatRow.Content.markdown(block)
                 if previousRows.indices.contains(index), previousRows[index].turn == item.turn,
                    previousRows[index].content == content { return previousRows[index] }
                 return ChatRow(id: ChatRowID(item: item.id, part: index), revision: item.revision,
                                turn: item.turn, content: content)
+            }
+            while unchanged < rows.count, previousRows.indices.contains(unchanged), previousRows[unchanged] == rows[unchanged] {
+                unchanged += 1
             }
             // Preserve ID/turn/actor charges as well as copied Markdown buffers and row metadata.
             bytes += assistant.text.utf8.count * 2
@@ -229,7 +284,7 @@ nonisolated final class RowBuilder {
         if awaitsHighlights { itemsAwaitingHighlights.insert(item.id) } else { itemsAwaitingHighlights.remove(item.id) }
         cache.insert(Entry(revision: item.revision, rows: rows, cost: cost, partition: partition, awaitsHighlights: awaitsHighlights),
                      for: item.id, cost: cost)
-        return RenderedChatRows(rows: rows, cost: cost)
+        return RenderedChatRows(rows: rows, cost: cost, unchanged: unchanged)
     }
 
     func remove(_ identifiers: Set<String>) {
@@ -290,13 +345,24 @@ nonisolated final class RowBuilder {
 
     private func markdown(_ source: String, after previous: MarkdownPartition?, streaming: Bool) -> MarkdownPartition? {
         guard source.utf8.count <= ChatRenderLimits.markdownBytes else { return nil }
-        if let previous, previous.source == source, !previous.blocks.contains(where: \.awaitsHighlights) { return previous }
+        if let previous, previous.source == source, !previous.blocks.contains(where: \.awaitsHighlights) {
+            var unchanged = previous
+            unchanged.retainedBlocks = previous.blocks.count
+            return unchanged
+        }
         var retained: [ChatMarkdownBlock] = []
         var offset = 0
         var pending = source
         // Reference definitions can affect earlier blocks. Their conservative fallback also
-        // catches escaped/code-like definitions without duplicating CommonMark's grammar.
-        if let previous, !source.contains("]:"), source.utf8.starts(with: previous.source.utf8),
+        // catches escaped/code-like definitions without duplicating CommonMark's grammar. An
+        // extended source is searched only past its old end, so the cost follows the new text.
+        let extendsPrevious = previous.map { Self.source(source, extends: $0.source) } ?? false
+        let mayHaveReferences = if let previous, extendsPrevious {
+            previous.mayHaveReferences || Self.contains(source, Self.referenceMarker, from: previous.source.utf8.count - 1)
+        } else {
+            source.contains(Self.referenceMarker)
+        }
+        if let previous, extendsPrevious, !mayHaveReferences,
            let byteIndex = source.utf8.index(source.utf8.startIndex, offsetBy: previous.stableBytes, limitedBy: source.utf8.endIndex),
            let index = String.Index(byteIndex, within: source) {
             retained = Array(previous.blocks.prefix(previous.stableBlocks))
@@ -329,7 +395,44 @@ nonisolated final class RowBuilder {
             guard rows.count <= ChatRenderLimits.rowsPerMessage - blocks.count else { return nil }
             blocks.append(contentsOf: rows)
         }
-        return MarkdownPartition(source: source, blocks: blocks, stableBytes: stableBytes, stableBlocks: stableBlocks)
+        let partition = MarkdownPartition(source: source, blocks: blocks, stableBytes: stableBytes, stableBlocks: stableBlocks,
+                                          mayHaveReferences: mayHaveReferences, retainedBlocks: retained.count)
+        #if DEBUG
+        if !retained.isEmpty {
+            let counted = (parseCount, parsedBytes)
+            let whole = markdown(source, after: nil, streaming: streaming)
+            (parseCount, parsedBytes) = counted
+            assert(Self.sameBlocks(partition.blocks, whole?.blocks), "the incremental partition differs from parsing the whole text")
+        }
+        #endif
+        return partition
+    }
+
+    private static let referenceMarker = "]:"
+
+    private static func sameBlocks(_ blocks: [ChatMarkdownBlock], _ full: [ChatMarkdownBlock]?) -> Bool {
+        guard let full, blocks.count == full.count else { return false }
+        return zip(blocks, full).allSatisfy { $0.kind == $1.kind && $0.source == $1.source && $0.text == $1.text && $0.list == $1.list }
+    }
+
+    /// Whether `source` begins with all of `previous`, compared as bytes.
+    private static func source(_ source: String, extends previous: String) -> Bool {
+        var source = source
+        var previous = previous
+        return source.withUTF8 { new in
+            previous.withUTF8 { old in
+                guard old.count <= new.count else { return false }
+                guard let oldBase = old.baseAddress, let newBase = new.baseAddress else { return true }
+                return memcmp(newBase, oldBase, old.count) == 0
+            }
+        }
+    }
+
+    /// Whether `marker` occurs in `source` at or after the UTF-8 offset `start`.
+    private static func contains(_ source: String, _ marker: String, from start: Int) -> Bool {
+        let utf8 = source.utf8
+        guard let index = utf8.index(utf8.startIndex, offsetBy: max(0, start), limitedBy: utf8.endIndex) else { return false }
+        return Substring(utf8[index...]).contains(marker)
     }
 
     private func blockRows(_ markup: any Markup, original: MarkdownSource, cachesHighlights: Bool) -> [ChatMarkdownBlock] {

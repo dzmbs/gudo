@@ -29,7 +29,8 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
     }
 }
 
-final class ChatViewController: UIViewController, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {
+final class ChatViewController: UIViewController, UICollectionViewDataSource, UICollectionViewDelegate,
+    UICollectionViewDataSourcePrefetching {
     private struct HeightKey: Hashable {
         let id: ChatRowID
         let revision: UInt32
@@ -41,6 +42,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         let expanded: Bool
         let fontSize: Double
         let topSpacing: CGFloat
+        let revealed: Int?
 
         var cost: LRUCost {
             LRUCost(bytes: 2 * (MemoryLayout<Self>.stride + id.item.utf8.count + category.utf8.count))
@@ -54,12 +56,15 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     let model: TimelineModel
     let collection: UICollectionView
-    private var source: UICollectionViewDiffableDataSource<Int, ChatRowID>?
+    /// The rows the collection holds: it moves to the frame's count with the collection's update.
+    private var itemCount = 0
     private let layout: NativeCollectionLayout
     private var document = NativeListLayout()
     private var documentRowIDs: [ChatRowID] = []
     private var current = TimelineFrame()
     private var pending: TimelineFrame?
+    private let reveal = ChatReplyReveal()
+    private var configuredWhileMeasuring: Set<ChatRowID> = []
     private var rows: [ChatRowID: ChatRow] = [:]
     private var topSpacings: [ChatRowID: CGFloat] = [:]
     private var expanded: Set<ChatRowID> = []
@@ -70,13 +75,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "chat")
     private var openedAt = CACurrentMediaTime()
     private(set) var firstContentLatency: Double?
-    var onSnapshot: ((NSDiffableDataSourceSnapshot<Int, ChatRowID>) -> Void)?
+    /// Called with the rows an update redraws, just before the collection receives it.
+    var onApply: ((Set<ChatRowID>) -> Void)?
     private let heights = BoundedLRU<HeightKey, CGFloat>(
         capacity: ChatCacheLimits.entries, byteLimit: ChatCacheLimits.bytes
     )
     private let paragraphMetrics = ChatParagraphMetrics()
     private var measured: Set<ChatRowID> = []
     private var clock: CADisplayLink?
+    /// The display link is firing, so a streaming reply can be paced; otherwise it shows whole.
+    private var paintsFrames = false
+    private var ceiling: Task<Void, Never>?
+    private var lastDisplayTick: ContinuousClock.Instant?
     private var isActive = true
     private var isWorking = false
     private var isApplying = false
@@ -102,6 +112,10 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     var retainedMeasurementCount: Int { measured.count }
     var retainedHeightBytes: Int { heights.cost.bytes }
     private(set) var applyDurations: [Double] = []
+    private(set) var revealDurations: [Double] = []
+    /// Each display frame that changed the streaming reply: when, and its characters on screen.
+    private(set) var revealSamples: [(time: ContinuousClock.Instant, length: Int)] = []
+    static let revealSampleLimit = 2_000
 
     var hasMarkedText: Bool {
         (viewIfLoaded?.firstResponderWithin() as? any UITextInput)?.markedTextRange != nil
@@ -120,7 +134,12 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(nibName: nil, bundle: nil)
         layout.beforePreparingAttributes = { [weak self] in self?.prepareRevealedRows() }
+        model.onFrame = { [weak self] frame in self?.offer(frame) }
     }
+
+    /// A frame waits at most this long for a display refresh; without refreshes, frames and the
+    /// reveal advance on a timer at the reveal's rate.
+    static let commitCeiling: Duration = .milliseconds(100)
 
     required init?(coder: NSCoder) { nil }
 
@@ -138,6 +157,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         collection.contentInsetAdjustmentBehavior = .never
         collection.contentInset.top = Self.topClearance
         collection.verticalScrollIndicatorInsets.top = Self.topClearance
+        collection.dataSource = self
         collection.delegate = self
         collection.prefetchDataSource = self
         collection.register(ChatCollectionCell.self, forCellWithReuseIdentifier: "chat-block")
@@ -179,12 +199,6 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             working.view.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             working.view.bottomAnchor.constraint(equalTo: footer.view.topAnchor, constant: -DS.Space.s),
         ])
-        source = UICollectionViewDiffableDataSource<Int, ChatRowID>(collectionView: collection) { [weak self] collection, path, identifier in
-            let cell = collection.dequeueReusableCell(withReuseIdentifier: "chat-block", for: path)
-            guard let self, let row = rows[identifier] else { return cell }
-            configure(cell, row: row)
-            return cell
-        }
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (controller: ChatViewController, _: UITraitCollection) in
             controller.invalidateMetrics()
         }
@@ -201,6 +215,8 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         super.viewDidDisappear(animated)
         clock?.invalidate()
         clock = nil
+        ceiling?.cancel()
+        ceiling = nil
     }
 
     override func viewDidLayoutSubviews() {
@@ -283,11 +299,35 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         view.backgroundColor = UIColor(environment.chrome.background.color)
         topFade.color = view.backgroundColor
         bottomFade.color = view.backgroundColor
+        offer(frame)
+    }
+
+    /// A frame from the model, committed on the next display refresh.
+    func offer(_ frame: TimelineFrame) {
+        guard isActive, isViewLoaded else { pending = frame; return }
         if frame.generation != current.generation { needsRestyle = true }
-        if frame.revision != current.revision || frame.cursor != current.cursor || frame.rows.isEmpty != current.rows.isEmpty || previousExpanded != expanded || needsRestyle {
-            pending = frame
-            ensureClock()
-            clock?.isPaused = false
+        guard frame.revision != current.revision || frame.cursor != current.cursor || frame.rows.isEmpty != current.rows.isEmpty
+            || previousExpanded != expanded || needsRestyle else { return }
+        pending = pending.map { frame.folding(after: $0) } ?? frame
+        latest.view.isHidden = !(model.hasNewItems || frame.hasNewerGap)
+        ensureClock()
+        clock?.isPaused = false
+        armCeiling()
+    }
+
+    private func armCeiling() {
+        guard ceiling == nil else { return }
+        ceiling = Task { @MainActor [weak self] in
+            let armed = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: ChatTextReveal.frameInterval)
+                guard let self, isActive, pending != nil || !reveal.isSettled else { break }
+                let now = ContinuousClock.now
+                guard armed.duration(to: now) >= Self.commitCeiling,
+                      lastDisplayTick.map({ $0.duration(to: now) >= Self.commitCeiling }) ?? true else { continue }
+                commitFrame()
+            }
+            self?.ceiling = nil
         }
     }
 
@@ -342,8 +382,16 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { updateFollowing() }
 
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int { itemCount }
+
+    func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: "chat-block", for: indexPath)
+        if current.rows.indices.contains(indexPath.item) { configure(cell, row: current.rows[indexPath.item]) }
+        return cell
+    }
+
     func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
-        if let identifier = source?.itemIdentifier(for: indexPath), !measured.contains(identifier) { unfittedDisplays += 1 }
+        if let identifier = rowID(at: indexPath), !measured.contains(identifier) { unfittedDisplays += 1 }
         needsMeasurement = true
         ensureClock()
         clock?.isPaused = false
@@ -364,9 +412,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     private func configure(_ cell: UICollectionViewCell, row: ChatRow) {
         configuredCells += 1
-        let content = rowContent(row)
+        (cell as? ChatCollectionCell)?.rowID = row.id
+        let content = rowContent(reveal.display(row) ?? row)
         cell.contentConfiguration = UIHostingConfiguration { content }.margins(.all, 0).minSize(width: 0, height: 0)
         cell.backgroundConfiguration = .clear()
+    }
+
+    func rowID(at path: IndexPath) -> ChatRowID? {
+        current.rows.indices.contains(path.item) ? current.rows[path.item].id : nil
+    }
+
+    func indexPath(of id: ChatRowID) -> IndexPath? {
+        document.indices[id.storageKey].map { IndexPath(item: $0, section: 0) }
     }
 
     private func rowContent(_ row: ChatRow) -> some View {
@@ -389,13 +446,64 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     fileprivate func tick() {
         guard isActive, view.window != nil else { clock?.isPaused = true; return }
-        if pending != nil { applyPending() }
+        lastDisplayTick = .now
+        commitFrame()
         if needsMeasurement, !isApplying { measureVisible() }
-        clock?.isPaused = pending == nil && !needsMeasurement
+        clock?.isPaused = pending == nil && !needsMeasurement && reveal.isSettled
+    }
+
+    private func commitFrame() {
+        paintsFrames = true
+        if pending != nil { applyPending() }
+        advanceReveal()
+    }
+
+    /// One display frame of the streaming reply: only the rows it changed are measured and redrawn.
+    private func advanceReveal() {
+        guard !isApplying, collection.bounds.width > 0, !reveal.isSettled else { return }
+        let start = ContinuousClock.now
+        let changed = reveal.advance(at: start)
+        guard !changed.isEmpty else { return }
+        defer {
+            revealDurations.append((ContinuousClock.now - start) / .milliseconds(1))
+            if revealDurations.count > Self.revealSampleLimit { revealDurations.removeFirst() }
+        }
+        let following = model.followsBottom && !holdsPosition
+        let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
+        measured.subtract(changed)
+        var heights: [Int: CGFloat] = [:]
+        for id in changed {
+            guard let index = document.indices[id.storageKey], current.rows.indices.contains(index),
+                  let height = fittedHeight(current.rows[index]) else { continue }
+            if document.rows[index].height != height { heights[index] = height }
+        }
+        if !heights.isEmpty {
+            document.setHeights(heights)
+            layout.document = document
+            layout.invalidateLayout()
+        }
+        reconfigureVisible(changed)
+        if following { scrollToBottom() }
+        else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
+        recordRevealSample(at: start)
+    }
+
+    private func recordRevealSample(at time: ContinuousClock.Instant) {
+        revealSamples.append((time, reveal.revealedLength))
+        if revealSamples.count > Self.revealSampleLimit { revealSamples.removeFirst() }
+    }
+
+    private func reconfigureVisible(_ changed: Set<ChatRowID>) {
+        defer { configuredWhileMeasuring.removeAll(keepingCapacity: true) }
+        for path in collection.indexPathsForVisibleItems {
+            guard let id = rowID(at: path), changed.contains(id), !configuredWhileMeasuring.contains(id),
+                  let cell = collection.cellForItem(at: path) else { continue }
+            configure(cell, row: current.rows[path.item])
+        }
     }
 
     private func applyPending() {
-        guard !isApplying, let frame = pending, collection.bounds.width > 0, let source else { return }
+        guard !isApplying, let frame = pending, collection.bounds.width > 0 else { return }
         let start = CACurrentMediaTime()
         let interval = signposter.beginInterval("Timeline apply", id: signposter.makeSignpostID())
         defer {
@@ -422,35 +530,49 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             document = NativeListLayout()
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
-        let changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
-        let appended = keptOrder == documentRowIDs.count ? frame.rows[documentRowIDs.count...].map(\.id) : nil
+        var changed = Set(updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil))
+        let revealed = reveal.update(frame, paces: paintsFrames).filter(frame.rowIDs.contains)
+        measured.subtract(revealed)
+        changed.formUnion(revealed)
+        let previousCount = itemCount
         current = frame
-        if changesOrder || needsRestyle { rebuildDocument(keeping: needsRestyle ? nil : keptOrder, changed: changed) }
+        let restyles = needsRestyle
+        if changesOrder || restyles || !revealed.isEmpty {
+            rebuildDocument(keeping: restyles ? nil : changesOrder ? keptOrder : frame.rows.count, changed: changed)
+        }
         needsRestyle = false
         previousExpanded = expanded
         guard changesOrder || !changed.isEmpty else { isApplying = false; return }
-        let initial = source.snapshot().numberOfItems == 0
-        measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !initial)
-        var snapshot: NSDiffableDataSourceSnapshot<Int, ChatRowID>
-        if changesOrder, initial || appended == nil {
-            snapshot = NSDiffableDataSourceSnapshot<Int, ChatRowID>()
-            snapshot.appendSections([0])
-            snapshot.appendItems(frame.rows.map(\.id))
-        } else {
-            snapshot = source.snapshot()
-            if changesOrder, let appended { snapshot.appendItems(appended, toSection: 0) }
-        }
-        snapshot.reconfigureItems(changed)
-        onSnapshot?(snapshot)
-        let completion: () -> Void = { [weak self] in
-            self?.finishSnapshot(anchor: anchor, following: wasFollowing, generation: generation, changesOrder: changesOrder)
-        }
-        if initial {
-            // No cells need retaining yet: fit and place the destination in one initial layout transaction.
+        let reloads = resets || restyles || previousCount == 0
+        measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !reloads)
+        onApply?(changed)
+        if reloads {
+            // No cells need retaining yet: fit and place the destination in one layout pass.
             restore(targetOffset(anchor: anchor, following: wasFollowing).y)
-            source.applySnapshotUsingReloadData(snapshot)
-            completion()
-        } else { source.apply(snapshot, animatingDifferences: false, completion: completion) }
+            itemCount = frame.rows.count
+            collection.reloadData()
+        } else if changesOrder {
+            replaceItems(from: min(keptOrder ?? 0, previousCount), previousCount: previousCount)
+            reconfigureVisible(changed)
+        } else {
+            reconfigureVisible(changed)
+        }
+        if !revealed.isEmpty { recordRevealSample(at: .now) }
+        finishSnapshot(anchor: anchor, following: wasFollowing, generation: generation, changesOrder: changesOrder)
+    }
+
+    /// The items from `start` on are replaced, so a streamed row never reloads the rows above it.
+    private func replaceItems(from start: Int, previousCount: Int) {
+        let start = min(start, previousCount, current.rows.count)
+        let removed = (start..<previousCount).map { IndexPath(item: $0, section: 0) }
+        let inserted = (start..<current.rows.count).map { IndexPath(item: $0, section: 0) }
+        UIView.performWithoutAnimation {
+            collection.performBatchUpdates {
+                itemCount = current.rows.count
+                if !removed.isEmpty { collection.deleteItems(at: removed) }
+                if !inserted.isEmpty { collection.insertItems(at: inserted) }
+            }
+        }
     }
 
     private func finishSnapshot(anchor: NativeListLayout.Anchor?, following: Bool, generation: Int, changesOrder: Bool) {
@@ -468,6 +590,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             topSpacings = topSpacings.filter { identifiers.contains($0.key) }
             measured.formIntersection(identifiers)
         }
+        configuredWhileMeasuring.removeAll(keepingCapacity: true)
         isApplying = false
         needsMeasurement = true
         clock?.isPaused = !isActive
@@ -507,17 +630,18 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
 
     /// Rows before `keptOrder` that did not change keep their geometry and only the rest is
     /// rebuilt; streaming appends at the end.
-    private func rebuildDocument(keeping keptOrder: Int?, changed: [ChatRowID]) {
+    private func rebuildDocument(keeping keptOrder: Int?, changed: Set<ChatRowID>) {
         let old = document
         let width = collection.bounds.width
         let kept = keptOrder.map { keptRowCount(keptOrder: $0, width: width, changed: changed) } ?? 0
         let scale = UIFont.preferredFont(forTextStyle: .body).lineHeight / 20
         let tail = current.rows[kept...].map { row -> NativeListRow in
             let height: CGFloat
-            if let cached = heights.peek(key(row)) { height = cached }
+            if reveal.shown(row.id) == .waiting { height = 0 }
+            else if let cached = heights.peek(key(row)) { height = cached }
             else if old.contentWidth == width, let index = old.indices[row.id.storageKey] { height = old.rows[index].height }
             else { height = ChatRowEstimate.height(for: row, rowWidth: ChatReadingColumn.rowWidth(in: width), scale: scale) }
-            return NativeListRow(id: row.id.storageKey, height: max(1, height))
+            return NativeListRow(id: row.id.storageKey, height: reveal.shown(row.id) == .waiting ? 0 : max(1, height))
         }
         if kept > 0 { document.replaceRows(from: kept, with: tail) }
         else { document = NativeListLayout(rows: tail, contentWidth: width) }
@@ -534,27 +658,45 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         return zip(frame.rows, documentRowIDs).prefix { $0.id == $1 }.count
     }
 
-    private func keptRowCount(keptOrder: Int, width: CGFloat, changed: [ChatRowID]) -> Int {
+    private func keptRowCount(keptOrder: Int, width: CGFloat, changed: Set<ChatRowID>) -> Int {
         guard document.contentWidth == width, documentRowIDs.count == document.rows.count else { return 0 }
         let firstChanged = changed.lazy.compactMap { self.document.indices[$0.storageKey] }.min()
         return min(keptOrder, firstChanged ?? keptOrder, document.rows.count)
     }
 
-    private func fittedHeight(_ row: ChatRow) -> CGFloat? {
+    /// While applying, a changed row on screen is measured through its own cell, configured with
+    /// the new content, so SwiftUI lays it out once rather than in a sizing host and again in the cell.
+    private func fittedHeight(_ row: ChatRow, at index: Int? = nil) -> CGFloat? {
+        guard let shownRow = reveal.display(row) else {
+            measured.insert(row.id)
+            return 0
+        }
         let key = key(row)
         if let cached = heights.value(for: key) {
             measured.insert(row.id)
             return cached
         }
-        let fitting = paragraphMetrics.height(for: row, width: collection.bounds.width, topSpacing: topSpacings[row.id] ?? 0,
+        let fitting = paragraphMetrics.height(for: shownRow, width: collection.bounds.width, topSpacing: topSpacings[row.id] ?? 0,
                                               environment: environment, measure: nativeFittingHeight)
-            ?? nativeFittingHeight(row)
+            ?? index.flatMap { visibleCellHeight(row, at: $0) }
+            ?? nativeFittingHeight(shownRow)
         guard let fitting, fitting.isFinite, fitting > 0 else { return nil }
         let height = ceil(fitting)
         heights.insert(height, for: key, cost: key.cost)
         measured.insert(row.id)
         measuredCells += 1
         return height
+    }
+
+    private func visibleCellHeight(_ row: ChatRow, at index: Int) -> CGFloat? {
+        guard isApplying, let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? ChatCollectionCell,
+              cell.rowID == row.id else { return nil }
+        configure(cell, row: row)
+        configuredWhileMeasuring.insert(row.id)
+        let width = collection.bounds.width
+        return cell.contentView.systemLayoutSizeFitting(CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+                                                        withHorizontalFittingPriority: .required,
+                                                        verticalFittingPriority: .fittingSizeLevel).height
     }
 
     private func nativeFittingHeight(_ row: ChatRow) -> CGFloat? {
@@ -599,7 +741,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
             var changed: [Int: CGFloat] = [:]
             for index in candidates {
                 guard current.rows.indices.contains(index), !measured.contains(current.rows[index].id),
-                      let height = fittedHeight(current.rows[index]) else { continue }
+                      let height = fittedHeight(current.rows[index], at: index) else { continue }
                 changed[index] = height
             }
             guard !changed.isEmpty else { break }
@@ -620,7 +762,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
         let start = CACurrentMediaTime()
         for path in collection.indexPathsForVisibleItems {
             if CACurrentMediaTime() - start > 0.003 { needsMeasurement = true; break }
-            guard let identifier = source?.itemIdentifier(for: path), !measured.contains(identifier),
+            guard let identifier = rowID(at: path), !measured.contains(identifier),
                   let row = rows[identifier], collection.cellForItem(at: path) != nil else { continue }
             guard let height = fittedHeight(row) else { continue }
             if let index = document.indices[identifier.storageKey], document.rows[index].height != height { changed[index] = height }
@@ -636,10 +778,11 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     }
 
     private func key(_ row: ChatRow) -> HeightKey {
-        HeightKey(id: row.id, revision: row.revision, width: collection.bounds.width,
+        HeightKey(id: row.id, revision: row.layoutRevision, width: collection.bounds.width,
                   category: traitCollection.preferredContentSizeCategory.rawValue, dynamicType: environment.dynamicTypeSize,
                   boldText: environment.legibilityWeight == .bold, rightToLeft: environment.layoutDirection == .rightToLeft,
-                  expanded: expanded.contains(row.id), fontSize: codeFontSize, topSpacing: topSpacings[row.id] ?? 0)
+                  expanded: expanded.contains(row.id), fontSize: codeFontSize, topSpacing: topSpacings[row.id] ?? 0,
+                  revealed: reveal.display(row)?.revealed)
     }
 
     private func restore(_ y: CGFloat) {
@@ -650,7 +793,7 @@ final class ChatViewController: UIViewController, UICollectionViewDelegate, UICo
     private var holdsPosition: Bool { isUserDragging || collection.isTracking }
 
     private func updateFollowing() {
-        model.readingItem = collection.indexPathsForVisibleItems.min().flatMap { source?.itemIdentifier(for: $0)?.item }
+        model.readingItem = collection.indexPathsForVisibleItems.min().flatMap { rowID(at: $0)?.item }
         guard !isUserDragging else { return }
         let distance = document.height - collection.bounds.height + collection.adjustedContentInset.bottom - collection.contentOffset.y
         model.followsBottom = distance < 40
@@ -719,6 +862,8 @@ private final class ChatFrameClock: NSObject {
 }
 
 private final class ChatCollectionCell: UICollectionViewCell {
+    var rowID: ChatRowID?
+
     override func preferredLayoutAttributesFitting(_ layoutAttributes: UICollectionViewLayoutAttributes) -> UICollectionViewLayoutAttributes { layoutAttributes }
 }
 #endif

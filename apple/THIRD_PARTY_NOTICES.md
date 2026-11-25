@@ -238,6 +238,14 @@ for native rows and Swift Markdown source ranges. No Ratatui rendering code is i
 The complete licence is in `scripts/notices/codex.txt` and ships in
 `App/Resources/THIRD_PARTY_NOTICES.txt`.
 
+## Paseo paced text reveal
+
+Source: https://github.com/getpaseo/paseo, `packages/app/src/agent-stream/text-reveal.ts`.
+Copyright (c) 2025-present Mohamed Boudra, Apache License 2.0.
+`App/Sources/Chat/ChatTextReveal.swift` adapts its backlog-proportional reveal step and reveal
+state, counting rendered characters across native block rows. The complete licence is in
+`scripts/notices/paseo.txt` and ships in `App/Resources/THIRD_PARTY_NOTICES.txt`.
+
 ## Tree-sitter code colours
 
 `Packages/ChatSyntax` links SwiftTreeSitter 0.25.0 (BSD-3-Clause), Tree-sitter 0.25.10 (MIT)

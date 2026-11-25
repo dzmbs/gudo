@@ -53,8 +53,8 @@ struct PaneChatView<Terminal: View>: View {
                 .allowsHitTesting(state.presentation == .chat)
                 .accessibilityHidden(state.presentation != .chat)
             }
-            if state.presentation == .chat, state.model?.frame.rows.isEmpty != false {
-                emptyState(ChatEmptyState(isLoading: state.model?.isLoading ?? true, session: state.model?.frame.session,
+            if state.presentation == .chat, state.model?.outline.hasRows != true {
+                emptyState(ChatEmptyState(isLoading: state.model?.isLoading ?? true, session: state.model?.outline.session,
                                           agent: state.agent, terminalWait: terminalWait))
             }
         }
@@ -107,7 +107,7 @@ struct PaneChatView<Terminal: View>: View {
         }
         .onChange(of: draftSelection) { _, _ in updateAutocomplete() }
         .onChange(of: collapsesTurns) { _, collapses in state.model?.collapsesTurns = collapses }
-        .onChange(of: state.model?.frame.session?.title, initial: true) { _, title in
+        .onChange(of: state.model?.outline.session?.title, initial: true) { _, title in
             if let title, !title.isEmpty { state.sessionTitle = title }
         }
         .onChange(of: state.presentation) { _, presentation in
@@ -310,10 +310,10 @@ struct PaneChatView<Terminal: View>: View {
                 .accessibilityIdentifier("chat-hide-keyboard")
             }
             #endif
-            ChatAgentControls(context: agentControls, session: state.model?.frame.session)
+            ChatAgentControls(context: agentControls, session: state.model?.outline.session)
             Spacer(minLength: 0)
             if let usage = ChatContextUsage(reported: hub.agentControls[pane.id.rawValue]?.config.context,
-                                            rows: state.model?.frame.rows ?? [], session: state.model?.frame.session) {
+                                            lastTurnEnd: state.model?.outline.lastTurnEnd, session: state.model?.outline.session) {
                 ChatContextMeter(usage: usage)
             }
             dictationButton
@@ -597,7 +597,7 @@ struct PaneChatView<Terminal: View>: View {
             return
         }
         state.autocomplete.update(draft: state.draft, cursor: draftCursor,
-                                  commands: state.model?.frame.session?.commands ?? [], files: fileSource)
+                                  commands: state.model?.outline.session?.commands ?? [], files: fileSource)
     }
 
     /// Where the cursor is in the draft; its end when the field is not being typed in.

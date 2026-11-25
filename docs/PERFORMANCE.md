@@ -174,6 +174,23 @@ moves that off the main thread too. Guards: `GutterMarkTests.cleanFramesDoNotAsk
 | Every keystroke's round trip set the host's status, which the sidebar, its host headers and the tab bar read: typing re-rendered them all | The status changes only when the link turns slow or healthy (`echoRoundTrip` keeps the exact figure). `AppStressTests.testTypingDoesNotInvalidateSidebar`: 200 round trips over 300 tabs, no sidebar view updates |
 | Each sidebar row read the whole agent feed (every pane's metadata on every host) for its "since", and the Inbox badges counted it on every render: one busy pane re-rendered every row | A row reads its own pane's "since"; the badge count is assigned only when it changes. One pane updating 20 times a second re-renders only its row |
 
+### Chat streaming (`ChatPerformanceBudget`, 2,100-item session, -O with whole-module optimisation)
+
+Budget: first rows ≤ 150 ms, apply mean ≤ 4 ms and max ≤ 8 ms, main-thread stall ≤ 16 ms, ≤ 20 MB.
+Smoothness (`StreamSmoothness`, docs/CHAT.md "Streaming pace"): chars-per-frame CV ≤ 2.0, p95 gap
+between visible updates ≤ 34 ms.
+
+| | First rows | Apply mean | Apply max | Stall | Memory | CV | Gap p50 / p95 |
+|---|---|---|---|---|---|---|---|
+| Mac before | 107 ms | 1.7 ms | 11 ms | 36 ms | +18 MB | | |
+| Mac after | 104 ms | 1.05 ms | 6.6 ms | 7 ms | +18 MB | 0.76 | 20 / 23 ms |
+| iOS simulator before | 299 ms | 7.6 ms | 27 ms | 59 ms | +3 MB | | |
+| iOS simulator after | 299 ms | 6.9 ms | 32 ms (first apply after scrolling) | 73 ms scrolling, 34 ms streaming | +4 MB | 0.83 | 17 / 31 ms |
+
+The Mac smoothness run commits on the timer because the screen was locked (`pacesWhileHidden`).
+iOS still misses its budget: each streamed apply lays the changed row out in SwiftUI twice (the
+sizing host, then the cell) and scrolling measures each revealed row the same way.
+
 ### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 
 A window opens on the workspace this device saved of each host, before the host answers.

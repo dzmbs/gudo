@@ -50,7 +50,7 @@ final class PaneChatState {
     var model: TimelineModel? { lease?.model }
     var capabilities: AgentCapabilities {
         guard let model, model.error == nil else { return [] }
-        return model.frame.capabilities
+        return model.outline.capabilities
     }
     #if canImport(UIKit)
     @ObservationIgnored weak var controller: ChatViewController?
@@ -61,8 +61,8 @@ final class PaneChatState {
     @ObservationIgnored private var actionEpoch = UUID()
 
     var actionContext: ActionContext {
-        ActionContext(presentation: actionEpoch, session: model?.frame.session?.nativeSession,
-                      epoch: model?.frame.cursor?.epoch, capabilityGeneration: model?.frame.capabilityGeneration)
+        ActionContext(presentation: actionEpoch, session: model?.outline.session?.nativeSession,
+                      epoch: model?.outline.epoch, capabilityGeneration: model?.outline.capabilityGeneration)
     }
 
     private let member: HostPane

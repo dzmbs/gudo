@@ -19,6 +19,46 @@ nonisolated struct TimelineFrame: Sendable {
     /// How many leading rows are where they were in the parent frame.
     var keptOrder: Int?
     var changedRows: [ChatRow]?
+    /// The latest item, while it is a reply still streaming: its rows end the frame.
+    var streamingReply: String?
+}
+
+extension TimelineFrame {
+    /// This frame as one step from `earlier`'s parent, for a transcript that never applied
+    /// `earlier`: it still redraws only the rows that changed since what it shows.
+    nonisolated func folding(after earlier: TimelineFrame) -> TimelineFrame {
+        guard parentRevision == earlier.revision, generation == earlier.generation,
+              let rows = changedRows, let earlierRows = earlier.changedRows else { return self }
+        var folded = self
+        let later = Set(rows.lazy.map(\.id))
+        folded.changedRows = earlierRows.filter { !later.contains($0.id) } + rows
+        folded.parentRevision = earlier.parentRevision
+        folded.keptOrder = keptOrder.flatMap { kept in earlier.keptOrder.map { min(kept, $0) } }
+        return folded
+    }
+}
+
+/// What the views around the transcript read from a frame. It changes far less often than the
+/// rows, so a streamed row redraws the transcript alone.
+nonisolated struct TimelineOutline: Equatable, Sendable {
+    var capabilities: AgentCapabilities = []
+    var capabilityGeneration = UUID()
+    var session: TimelineSession?
+    var epoch: UInt64?
+    var hasRows = false
+    /// The latest turn end among the last rows, for the context meter.
+    var lastTurnEnd: TimelineTurnEnd?
+
+    init() {}
+
+    init(_ frame: TimelineFrame) {
+        capabilities = frame.capabilities
+        capabilityGeneration = frame.capabilityGeneration
+        session = frame.session
+        epoch = frame.cursor?.epoch
+        hasRows = !frame.rows.isEmpty
+        lastTurnEnd = ChatContextUsage.lastTurnEnd(in: frame.rows)
+    }
 }
 
 nonisolated enum TimelineJob: Sendable {
@@ -157,12 +197,18 @@ actor TimelineRenderWorker {
         }
         identifierCount = rows.count
         assert(rowIDs.count == rows.count, "row identifiers are not unique")
+        let streamingReply = window.order.last.flatMap { identifier -> String? in
+            guard case .assistant(let assistant) = items[identifier]?.body, assistant.streaming,
+                  rows.last?.id.item == identifier else { return nil }
+            return identifier
+        }
         let frame = TimelineFrame(
             capabilities: capabilities, capabilityGeneration: capabilityGeneration,
             rows: rows, rowIDs: rowIDs, session: window.session,
             cursor: window.cursor, before: window.before, hasNewerGap: window.hasNewerGap,
             note: window.note, revision: revision, generation: generation,
-            parentRevision: parentRevision, orderRevision: orderRevision, keptOrder: keptOrder, changedRows: changedRows)
+            parentRevision: parentRevision, orderRevision: orderRevision, keptOrder: keptOrder, changedRows: changedRows,
+            streamingReply: streamingReply)
         return TimelineRenderResult(frame: frame, needsHistoryCursor: window.needsHistoryCursor, consumedSnapshot: consumedSnapshot,
                                     consumedHistory: consumedHistory, hasLiveChanges: hasLiveChanges,
                                     awaitsHighlights: !builder.itemsAwaitingHighlights.isEmpty)
@@ -183,7 +229,9 @@ actor TimelineRenderWorker {
             let rendered = builder.render(item)
             guard prepared.store(rendered, for: identifier) else { return nil }
             let previous = rowsByItem[identifier]?.rows ?? []
-            for (index, row) in rendered.rows.enumerated() {
+            let unchanged = min(rendered.unchanged, previous.count)
+            assert(previous.prefix(unchanged) == rendered.rows.prefix(unchanged), "rows reported unchanged differ")
+            for (index, row) in rendered.rows.enumerated().dropFirst(unchanged) {
                 if !previous.indices.contains(index) || previous[index] != row { prepared.changedRows.append(row) }
             }
         }
@@ -198,7 +246,17 @@ actor TimelineRenderWorker {
 final class TimelineModel {
     let pane: UInt64
     let valueByteLimit: Int
-    private(set) var frame = TimelineFrame()
+    /// The latest frame. Views read `outline`; the transcript takes each frame from `onFrame`
+    /// and commits it on the next display refresh.
+    @ObservationIgnored private(set) var frame = TimelineFrame() {
+        didSet {
+            let next = TimelineOutline(frame)
+            if next != outline { outline = next }
+            onFrame?(frame)
+        }
+    }
+    private(set) var outline = TimelineOutline()
+    @ObservationIgnored var onFrame: ((TimelineFrame) -> Void)?
     private(set) var isLoading = false
     private(set) var isLoadingHistory = false
     private(set) var hasNewItems = false
@@ -293,6 +351,9 @@ final class TimelineModel {
         historyError = nil
         followsBottom = true
         hasNewItems = false
+        // Without a gap the window already holds the latest rows; reloading them all would only
+        // redraw the transcript.
+        guard frame.hasNewerGap else { return }
         resetsSnapshot = true
         pending.removeAll(keepingCapacity: false)
         pendingBytes = 0
@@ -374,13 +435,13 @@ final class TimelineModel {
                                                         historyAnchor: readingItem, expanded: expanded,
                                                         collapsesTurns: collapsesTurns)
                     guard self.lifetime == lifetime, !Task.isCancelled else { return }
-                    if !followsBottom, result.hasLiveChanges { hasNewItems = true }
+                    if !followsBottom, result.hasLiveChanges, !hasNewItems { hasNewItems = true }
                     frame = result.frame
-                    error = result.frame.note
-                    isLoading = false
+                    if error != result.frame.note { error = result.frame.note }
+                    if isLoading { isLoading = false }
                     if result.consumedSnapshot { self.resetsSnapshot = false }
                     if result.consumedHistory { isLoadingHistory = false; historyError = nil }
-                    expanded.formIntersection(frame.rowIDs)
+                    if !expanded.isEmpty, !expanded.isSubset(of: frame.rowIDs) { expanded.formIntersection(frame.rowIDs) }
                     if result.needsHistoryCursor { channel?.requestSnapshot() }
                     if result.awaitsHighlights, pending.isEmpty { pending.append(.highlights) }
                 } catch TimelineWindowError.valueTooLarge, TimelineWindowError.historyBudget {

@@ -159,8 +159,43 @@ final class PaneChatViewTests: XCTestCase {
         let streamReport = watch.stop()
         let applies = controller.applyDurations.dropFirst(appliesBefore).map { Duration.milliseconds($0) }
         print("chat-perf iOS: the latest page on screen in \(latestPage.milliseconds) ms (the first open warms up), the whole session in \(shown.milliseconds) ms")
+        let slowest = applies.enumerated().sorted { $0.element > $1.element }.prefix(4)
+        print("chat-perf iOS: scrolling \(scrollReport); streaming \(streamReport); slowest applies "
+              + slowest.map { "#\($0.offset) \($0.element.formattedMilliseconds)" }.joined(separator: ", "))
         ChatPerformanceBudget.check(label: "iOS", firstRows: shown, applies: applies,
                                     stalls: [scrollReport.worst, streamReport.worst], addedMB: openFootprint)
+    }
+
+    /// A reply streaming in lumpy bursts grows on screen in even steps, every frame.
+    /// Timing runs only on request (`TEST_RUNNER_GUDO_CHAT_PERF=1`).
+    func testAStreamingReplyGrowsSmoothly() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["GUDO_CHAT_PERF"] == nil, "timing runs on request")
+        let suite = "chat-smooth-stream-" + UUID().uuidString
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let fixture = try makeFixture(preferences: preferences, permitsSending: true,
+                                      snapshot: ChatScenes.snapshot(ChatScenes.streamingTurn()))
+        defer {
+            fixture.state.deactivate()
+            fixture.window.isHidden = true
+            fixture.window.rootViewController = nil
+        }
+        try await wait(timeout: .seconds(10)) {
+            guard let controller = fixture.state.controller, fixture.state.model?.frame.streamingReply == ChatScenes.streamingReply else { return false }
+            return !controller.collection.indexPathsForVisibleItems.isEmpty
+        }
+        let controller = try XCTUnwrap(fixture.state.controller)
+        let samplesBefore = controller.revealSamples.count
+        var stream = BurstyStream(seed: 7)
+        for sequence in 1...60 {
+            fixture.events.deliver(.timeline(paneId: 7, updateJson: try TimelineFixtureJSON.append(
+                ChatScenes.streamingReply, text: stream.burst(), sequence: UInt64(sequence))))
+            try await Task.sleep(for: BurstyStream.gap)
+        }
+        try await wait(timeout: .seconds(10)) { fixture.state.model?.frame.cursor?.sequence == 60 }
+        let samples = Array(controller.revealSamples.dropFirst(samplesBefore))
+        print("chat-smoothness iOS: reveal frame max \(String(format: "%.2f", controller.revealDurations.max() ?? 0)) ms over \(controller.revealDurations.count)")
+        StreamSmoothness(samples: samples).check(label: "iOS")
     }
 
     func testCapabilitiesNotKindSelectNativeControls() async throws {
@@ -832,16 +867,16 @@ final class PaneChatViewTests: XCTestCase {
     }
 
     private func readingAnchor(in collection: UICollectionView) throws -> (row: ChatRowID, position: CGFloat) {
-        let source = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, ChatRowID>)
+        let controller = try XCTUnwrap(collection.dataSource as? ChatViewController)
         let point = CGPoint(x: 1, y: collection.contentOffset.y + collection.adjustedContentInset.top)
         let path = try XCTUnwrap(collection.indexPathForItem(at: point))
-        let identifier = try XCTUnwrap(source.itemIdentifier(for: path))
+        let identifier = try XCTUnwrap(controller.rowID(at: path))
         return (identifier, try position(of: identifier, in: collection))
     }
 
     private func position(of identifier: ChatRowID, in collection: UICollectionView) throws -> CGFloat {
-        let source = try XCTUnwrap(collection.dataSource as? UICollectionViewDiffableDataSource<Int, ChatRowID>)
-        let path = try XCTUnwrap(source.indexPath(for: identifier))
+        let controller = try XCTUnwrap(collection.dataSource as? ChatViewController)
+        let path = try XCTUnwrap(controller.indexPath(of: identifier))
         return try XCTUnwrap(collection.layoutAttributesForItem(at: path)).frame.minY - collection.contentOffset.y
     }
 

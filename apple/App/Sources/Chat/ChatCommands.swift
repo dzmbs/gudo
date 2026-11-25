@@ -26,7 +26,7 @@ struct ChatCommandOffer: Identifiable {
     init(state: PaneChatState) {
         context = state.actionContext
         draft = state.draft
-        commands = ChatCommands.matches(draft, commands: state.model?.frame.session?.commands ?? [])
+        commands = ChatCommands.matches(draft, commands: state.model?.outline.session?.commands ?? [])
     }
 }
 
@@ -53,7 +53,7 @@ extension ChatCommands {
         guard state.actionContext == offer.context, state.presentation == .chat, state.draft == offer.draft,
               !state.composer.isBusy, !state.interrupt.isBusy, !state.dictation.isActive, !state.photos.isBusy,
               offer.commands.contains(command),
-              matches(state.draft, commands: state.model?.frame.session?.commands ?? []).contains(command) else { return false }
+              matches(state.draft, commands: state.model?.outline.session?.commands ?? []).contains(command) else { return false }
         state.invalidateActions()
         state.draft = "/" + command.name + " "
         return true

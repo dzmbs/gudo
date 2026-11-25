@@ -174,6 +174,30 @@ final class MacChatTests: XCTestCase {
         }
     }
 
+    /// A reply streaming in lumpy bursts grows on screen in even steps, every frame.
+    /// Timing runs only on request (`TEST_RUNNER_GUDO_CHAT_PERF=1`), on a quiet machine.
+    func testAStreamingReplyGrowsSmoothly() async throws {
+        try XCTSkipIf(ProcessInfo.processInfo.environment["GUDO_CHAT_PERF"] == nil, "timing runs on request")
+        let fixture = try MacChatFixture(snapshot: ChatScenes.snapshot(ChatScenes.streamingTurn()))
+        defer { fixture.close() }
+        try await fixture.wait { fixture.model?.frame.streamingReply == ChatScenes.streamingReply && !fixture.visibleRows.isEmpty }
+        let controller = try XCTUnwrap(fixture.controller)
+        controller.pacesWhileHidden = true
+        let samplesBefore = controller.revealSamples.count
+        var stream = BurstyStream(seed: 7)
+        for sequence in 1...60 {
+            fixture.events.deliver(.timeline(paneId: 7, updateJson: try TimelineFixtureJSON.append(
+                ChatScenes.streamingReply, text: stream.burst(), sequence: UInt64(sequence))))
+            try await Task.sleep(for: BurstyStream.gap)
+        }
+        try await fixture.wait(timeout: .seconds(10)) { fixture.model?.frame.cursor?.sequence == 60 }
+        let samples = Array(controller.revealSamples.dropFirst(samplesBefore))
+        XCTAssertLessThan(controller.distanceFromBottom, ChatTranscriptController.followDistance, "the growing reply stays in view")
+        let reveals = controller.revealDurations
+        print("chat-smoothness Mac: reveal frame max \((reveals.max() ?? .zero).formattedMilliseconds) over \(reveals.count)")
+        StreamSmoothness(samples: samples).check(label: "Mac")
+    }
+
     /// Opening a long session as the daemon sends it, its latest page with history above; the first
     /// open in the process also pays for warming up.
     private func openLatestPage(of session: [[String: Any]]) async throws -> Duration {
@@ -239,6 +263,8 @@ final class MacChatTests: XCTestCase {
         print("chat-perf \(label): 40 wheel gestures in \(scrolled.milliseconds) ms, \(measuredWhileScrolling) rows measured; \(scrollReport)")
         print("chat-perf \(label): 100 streamed appends in \(streamed.milliseconds) ms; apply max \(applies.max() ?? 0) ms,"
               + " mean \(applies.isEmpty ? 0 : applies.reduce(0, +) / applies.count) ms over \(applies.count); \(streamReport)")
+        let slowest = controller.applyDurations.dropFirst(appliesBefore).enumerated().sorted { $0.element > $1.element }.prefix(4)
+        print("chat-perf \(label): slowest applies " + slowest.map { "#\($0.offset) \($0.element.formattedMilliseconds)" }.joined(separator: ", "))
         print("chat-perf \(label): the latest page of the session on screen in \(latestPage.milliseconds) ms")
         ChatPerformanceBudget.check(label: "Mac \(label)", firstRows: shown, applies: controller.applyDurations.dropFirst(appliesBefore),
                                     stalls: [scrollReport.worst, streamReport.worst], addedMB: openFootprint)

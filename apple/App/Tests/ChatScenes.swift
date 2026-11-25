@@ -52,6 +52,16 @@ nonisolated enum ChatScenes {
         ]
     }
 
+    static let streamingReply = "live-reply"
+
+    /// A prompt and the start of the reply still streaming to it.
+    static func streamingTurn(now: UInt64 = UInt64(Date().timeIntervalSince1970 * 1_000)) -> [[String: Any]] {
+        [
+            item("live-prompt", at: now - 5_000, body: ["User": ["text": "Explain the change.", "attachments": [], "queued": false]]),
+            item(streamingReply, body: ["Assistant": ["text": "Here is what changed.", "streaming": true]]),
+        ]
+    }
+
     static func failedTurn(now: UInt64 = UInt64(Date().timeIntervalSince1970 * 1_000)) -> [[String: Any]] {
         [
             item("prompt", at: now - 120_000, body: ["User": ["text": "Run the proto tests.", "attachments": [], "queued": false]]),

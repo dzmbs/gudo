@@ -41,6 +41,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         let expanded: Bool
         let fontSize: Double
         let topSpacing: CGFloat
+        let revealed: Int?
 
         var cost: LRUCost { LRUCost(bytes: 2 * (MemoryLayout<Self>.stride + id.item.utf8.count)) }
     }
@@ -63,6 +64,14 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     private var itemCount = 0
     private var clock: CADisplayLink?
     private var current = TimelineFrame()
+    private let reveal = ChatReplyReveal()
+    /// The display link is running, so a streaming reply can be paced; otherwise it shows whole.
+    private var paintsFrames = false
+    /// Paces a streaming reply in a window that is not on screen, committing on the timer, so a
+    /// locked screen can still measure the reveal.
+    var pacesWhileHidden = false
+    private var ceiling: Task<Void, Never>?
+    private var lastDisplayTick: ContinuousClock.Instant?
     private var pending: TimelineFrame?
     private var rows: [ChatRowID: ChatRow] = [:]
     private var topSpacings: [ChatRowID: CGFloat] = [:]
@@ -95,11 +104,20 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     private let signposter = OSSignposter(subsystem: Bundle.main.bundleIdentifier ?? "app", category: "chat")
     private(set) var firstContentLatency: Duration?
     private(set) var applyDurations: [Duration] = []
+    private(set) var revealDurations: [Duration] = []
     private(set) var measuredRows = 0
+    /// Each display frame that changed the streaming reply: when, and its characters on screen.
+    private(set) var revealSamples: [(time: ContinuousClock.Instant, length: Int)] = []
+    static let revealSampleLimit = 2_000
+
+    /// A frame waits at most this long for a display refresh. Refreshes stop while the screen is
+    /// locked; frames and the reveal then advance on a timer at the reveal's rate.
+    static let commitCeiling: Duration = .milliseconds(100)
 
     init(model: TimelineModel) {
         self.model = model
         super.init(nibName: nil, bundle: nil)
+        model.onFrame = { [weak self] frame in self?.offer(frame) }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -245,12 +263,17 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         view.layer?.backgroundColor = background.cgColor
         topFade.color = background
         bottomFade.color = background
+        offer(frame)
+    }
+
+    /// A frame from the model, committed on the next display refresh.
+    func offer(_ frame: TimelineFrame) {
+        guard isViewLoaded else { pending = frame; return }
         if frame.generation != current.generation { needsRestyle = true }
-        if frame.revision != current.revision || frame.cursor != current.cursor || frame.rows.isEmpty != current.rows.isEmpty
-            || previousExpanded != expanded || needsRestyle {
-            pending = frame
-            scheduleApply()
-        }
+        guard frame.revision != current.revision || frame.cursor != current.cursor || frame.rows.isEmpty != current.rows.isEmpty
+            || previousExpanded != expanded || needsRestyle else { return }
+        pending = pending.map { frame.folding(after: $0) } ?? frame
+        scheduleApply()
     }
 
     func showsWorking(_ isWorking: Bool) {
@@ -286,10 +309,13 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
         let item = collectionView.makeItem(withIdentifier: Self.rowIdentifier, for: indexPath)
         if current.rows.indices.contains(indexPath.item) {
-            (item as? ChatTranscriptItem)?.configure(AnyView(rowContent(current.rows[indexPath.item])))
+            (item as? ChatTranscriptItem)?.configure(AnyView(rowContent(shown(current.rows[indexPath.item]))))
         }
         return item
     }
+
+    /// The row as the reveal shows it; a row still waiting draws at no height.
+    private func shown(_ row: ChatRow) -> ChatRow { reveal.display(row) ?? row }
 
     private func rowContent(_ row: ChatRow) -> some View {
         ChatRowView(row: row, isExpanded: expanded.contains(row.id), toggle: { [weak self] in self?.model.toggle(row.id) },
@@ -304,15 +330,18 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     /// Frames that arrive between two screen refreshes are applied once, on the next refresh.
     private func scheduleApply() {
         // An occluded window gets no display refreshes; its frames apply as they come.
-        if let window = view.window, window.screen != nil, window.occlusionState.contains(.visible) {
+        let isVisible = view.window.map { $0.screen != nil && $0.occlusionState.contains(.visible) } ?? false
+        if isVisible || pacesWhileHidden {
             if clock == nil {
                 let clock = view.displayLink(target: ChatTranscriptClock(owner: self), selector: #selector(ChatTranscriptClock.step))
                 clock.add(to: .main, forMode: .common)
                 self.clock = clock
             }
             clock?.isPaused = false
+            armCeiling()
             return
         }
+        paintsFrames = false
         guard !applyScheduled else { return }
         applyScheduled = true
         Task { @MainActor [weak self] in
@@ -322,15 +351,74 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         }
     }
 
+    private func armCeiling() {
+        guard ceiling == nil else { return }
+        ceiling = Task { @MainActor [weak self] in
+            let armed = ContinuousClock.now
+            while !Task.isCancelled {
+                try? await Task.sleep(for: ChatTextReveal.frameInterval)
+                guard let self, pending != nil || !reveal.isSettled else { break }
+                let now = ContinuousClock.now
+                guard armed.duration(to: now) >= Self.commitCeiling,
+                      lastDisplayTick.map({ $0.duration(to: now) >= Self.commitCeiling }) ?? true else { continue }
+                commitFrame()
+            }
+            self?.ceiling = nil
+        }
+    }
+
     fileprivate func tick() {
-        clock?.isPaused = true
+        lastDisplayTick = .now
+        commitFrame()
+        clock?.isPaused = reveal.isSettled && pending == nil
+    }
+
+    private func commitFrame() {
+        paintsFrames = true
         applyPending()
+        advanceReveal()
+    }
+
+    /// One display frame of the streaming reply: only the rows it changed are measured and redrawn.
+    private func advanceReveal() {
+        guard isActive, !isApplying, lastWidth > 0, !reveal.isSettled else { return }
+        let start = ContinuousClock.now
+        let changed = reveal.advance(at: start)
+        guard !changed.isEmpty else { return }
+        defer {
+            revealDurations.append(ContinuousClock.now - start)
+            if revealDurations.count > Self.revealSampleLimit { revealDurations.removeFirst() }
+        }
+        let following = model.followsBottom
+        let anchor = document.anchor(at: readingRect.minY)
+        measured.subtract(changed)
+        var heights: [Int: CGFloat] = [:]
+        for id in changed {
+            guard let index = document.indices[id.storageKey], current.rows.indices.contains(index),
+                  let height = fittedHeight(current.rows[index]) else { continue }
+            if document.rows[index].height != height { heights[index] = height }
+        }
+        if !heights.isEmpty {
+            document.setHeights(heights)
+            install()
+        }
+        reconfigure(changed)
+        if following { scrollToBottom() }
+        else if let anchor, let y = document.position(of: anchor) { scroll(toY: y - scroll.contentInsets.top) }
+        recordRevealSample(at: start)
+    }
+
+    private func recordRevealSample(at time: ContinuousClock.Instant) {
+        revealSamples.append((time, reveal.revealedLength))
+        if revealSamples.count > Self.revealSampleLimit { revealSamples.removeFirst() }
     }
 
     override func viewWillDisappear() {
         super.viewWillDisappear()
         clock?.invalidate()
         clock = nil
+        ceiling?.cancel()
+        ceiling = nil
     }
 
     private func applyPending() {
@@ -362,13 +450,16 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             document = NativeListLayout()
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
-        let changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
+        var changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
+        let revealed = reveal.update(frame, paces: paintsFrames).filter(frame.rowIDs.contains)
+        measured.subtract(revealed)
+        changed.formUnion(revealed)
         let previousCount = current.rows.count
         current = frame
         let restyles = needsRestyle
-        let kept = changesOrder || restyles || !changed.isEmpty
-            ? rebuildDocument(keeping: restyles ? nil : changesOrder ? keptOrder ?? 0 : frame.rows.count, changed: changed)
-            : frame.rows.count
+        if changesOrder || restyles || !changed.isEmpty {
+            rebuildDocument(keeping: restyles ? nil : changesOrder ? keptOrder ?? 0 : frame.rows.count, changed: changed)
+        }
         assert(document.rows.count == current.rows.count && documentRowIDs.count == current.rows.count,
                "the document and the frame disagree on the rows")
         needsRestyle = false
@@ -379,7 +470,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             itemCount = current.rows.count
             collection.reloadData()
         }
-        else if changesOrder { replaceItems(from: min(kept, keptOrder ?? 0), previousCount: previousCount, changed: changed) }
+        else if changesOrder { replaceItems(from: keptOrder ?? 0, previousCount: previousCount, changed: changed) }
         else { reconfigure(changed) }
         if following { scrollToBottom() }
         else if let anchor, let y = document.position(of: anchor) { scroll(toY: y - scroll.contentInsets.top) }
@@ -390,6 +481,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             measured.formIntersection(identifiers)
         }
         if firstContentLatency == nil, !current.rows.isEmpty { firstContentLatency = .now - openedAt }
+        if !revealed.isEmpty { recordRevealSample(at: start) }
         latest.isHidden = !(model.hasNewItems || current.hasNewerGap)
         model.readingItem = visibleRows.first?.item
     }
@@ -437,10 +529,11 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         let scale = Self.proseLineHeight / 20
         let tail = current.rows[kept...].map { row -> NativeListRow in
             let height: CGFloat
-            if let cached = heights.peek(key(row)) { height = cached }
+            if reveal.shown(row.id) == .waiting { height = 0 }
+            else if let cached = heights.peek(key(row)) { height = cached }
             else if previous.contentWidth == width, let index = previous.indices[row.id.storageKey] { height = previous.rows[index].height }
             else { height = ChatRowEstimate.height(for: row, rowWidth: ChatReadingColumn.rowWidth(in: width), scale: scale) }
-            return NativeListRow(id: row.id.storageKey, height: max(1, height))
+            return NativeListRow(id: row.id.storageKey, height: reveal.shown(row.id) == .waiting ? 0 : max(1, height))
         }
         if kept > 0 { document.replaceRows(from: kept, with: tail) }
         else { document = NativeListLayout(rows: tail, contentWidth: width) }
@@ -490,7 +583,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         for path in collection.indexPathsForVisibleItems() where current.rows.indices.contains(path.item) {
             let row = current.rows[path.item]
             guard changed.contains(row.id), let item = collection.item(at: path) as? ChatTranscriptItem else { continue }
-            item.configure(AnyView(rowContent(row)))
+            item.configure(AnyView(rowContent(shown(row))))
         }
     }
 
@@ -533,14 +626,18 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     }
 
     private func fittedHeight(_ row: ChatRow) -> CGFloat? {
+        guard reveal.shown(row.id) != .waiting else {
+            measured.insert(row.id)
+            return 0
+        }
         let key = key(row)
         if let cached = heights.value(for: key) {
             measured.insert(row.id)
             return cached
         }
-        sizing.rootView = AnyView(rowContent(row))
-        let fitting = sizing.sizeThatFits(in: CGSize(width: lastWidth, height: .greatestFiniteMagnitude)).height
-        guard fitting.isFinite, fitting > 0 else { return nil }
+        let shownRow = shown(row)
+        let fitting = nativeFittingHeight(shownRow)
+        guard let fitting, fitting.isFinite, fitting > 0 else { return nil }
         let height = ceil(fitting)
         heights.insert(height, for: key, cost: key.cost)
         measured.insert(row.id)
@@ -548,9 +645,14 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         return height
     }
 
+    private func nativeFittingHeight(_ row: ChatRow) -> CGFloat? {
+        sizing.rootView = AnyView(rowContent(row))
+        return sizing.sizeThatFits(in: CGSize(width: lastWidth, height: .greatestFiniteMagnitude)).height
+    }
+
     private func key(_ row: ChatRow) -> HeightKey {
-        HeightKey(id: row.id, revision: row.revision, width: lastWidth, expanded: expanded.contains(row.id),
-                  fontSize: codeFontSize, topSpacing: topSpacings[row.id] ?? 0)
+        HeightKey(id: row.id, revision: row.layoutRevision, width: lastWidth, expanded: expanded.contains(row.id),
+                  fontSize: codeFontSize, topSpacing: topSpacings[row.id] ?? 0, revealed: reveal.display(row)?.revealed)
     }
 
     // MARK: Scrolling
