@@ -2967,10 +2967,10 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
 
 ## 10. Known gaps / follow-ups
 
-- **Live upgrade**: replacing the daemon binary (over SSH, or the owner's self upgrade, §2 "Version, host name and updating the daemon") ends its PTYs. Shells come back in their last
-  directory and Claude/Codex resume their sessions, but running commands and unsaved terminal
-  state are lost. Handing PTY masters and VT snapshots to the new process (fd passing over a
-  Unix socket, then `exec`) is the design for an upgrade that keeps them; not built.
+- **Upgrades**: a hot upgrade (§2 "Hot upgrade") keeps PTYs, running commands and terminal
+  state. A cold restart (a release that cannot read this build's hand-off, or one that refuses
+  it) ends the PTYs: shells come back in their last directory and agents resume the
+  conversation they saved, or start afresh when they saved none.
 - History paging serves the last two snapshots sent per pane; a client that resumed from the
   ring holds an older snapshot and gets `HistoryGone` until its next snapshot. Those snapshots
   are kept whole and uncompressed (each up to about the scrollback size); compressing the
@@ -3001,8 +3001,8 @@ An agent on host A driving a pane on host B. Not built; the safe shape:
   run; editors are not idle-stopped; the in-window "open file" path and the URL payload are
   untested against a real browser; no transfer resume by offset for uploads (downloads take an
   offset); `fs.find`/`fs.resolve`, git stage/discard/commit and `log` are not built.
-- Drawings (§7): no MCP server for agents to read/draw artifacts yet (`gudo mcp`); no
-  `.excalidraw` export (import works); kitty images cannot be dragged out of a pane (they
+- Drawings (§7): agents read drawings through the MCP tools (`list_drawings`,
+  `get_drawing`) but cannot draw; no `.excalidraw` export (import works); kitty images cannot be dragged out of a pane (they
   are not placements, §7.10);
   Excalidraw scenes keep no history (only the current revision exports); live ink is relayed without per-connection
   rate limiting; a session's artifacts are deleted with it; anchors detach on daemon restart;
