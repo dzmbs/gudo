@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use client_core::ClientConfig;
 use client_core::proto::{AgentKind, Axis, LayoutOp, OpOutcome, PaneId, PaneLaunch};
 
-use crate::support::{TIMEOUT, TestClient, leaves, start_with, ticket};
+use crate::support::{TestClient, leaves, start_with, ticket};
 
 const CODEX_ID: &str = "0199a213-81c0-7800-8aa1-bbab2a035a53";
 const CLAUDE_ID: &str = "5d2c7f3a-1b4e-4c8d-9e6f-0a1b2c3d4e5f";
@@ -63,7 +63,7 @@ async fn split(owner: &mut TestClient, from: PaneId, launch: PaneLaunch) -> Pane
 
 fn wait_persisted(state: &Path, needles: &[&str]) {
     let layout = state.join("layout.json");
-    let deadline = Instant::now() + TIMEOUT;
+    let deadline = Instant::now() + RESTORE_TIMEOUT;
     loop {
         let text = std::fs::read_to_string(&layout).unwrap_or_default();
         if needles.iter().all(|needle| text.contains(needle)) {
@@ -182,6 +182,10 @@ async fn agents_resume_their_sessions_after_a_cold_restart() {
     daemon.shutdown().await;
 }
 
+/// How long a step of a restore may take on a machine busy with other tests: agents resume
+/// one after another, and a loaded machine starts each slowly.
+const RESTORE_TIMEOUT: Duration = Duration::from_secs(90);
+
 const UNUSED_CLAUDE_ID: &str = "e4ea3b84-6daf-4905-9510-2efcd840fd83";
 
 /// Claude Code as it is before its first message: it names its session but writes no
@@ -247,16 +251,27 @@ async fn a_claude_that_saved_no_conversation_starts_afresh_after_a_cold_restart(
         hand_claude,
         &format!("claude --session-id {UNUSED_CLAUDE_ID}"),
     );
-    owner.wait_text(hand_claude, "claude-running").await;
-    owner.wait_text(launched_claude, "claude-running").await;
-    wait_persisted(state.path(), &[UNUSED_CLAUDE_ID]);
+    for pane in [hand_claude, launched_claude] {
+        owner
+            .until_within(RESTORE_TIMEOUT, "Claude Code running", |owner| {
+                owner.text(pane).contains("claude-running")
+            })
+            .await;
+    }
+    // Saved as the agent's session, not only in the command line the pane ran.
+    wait_persisted(
+        state.path(),
+        &[&format!("\"session_id\": \"{UNUSED_CLAUDE_ID}\"")],
+    );
     drop(owner);
     daemon.shutdown().await;
 
     let daemon = start_with(state.path(), configure(env)).await;
     let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
     owner.client.attach(None);
-    owner.until("layout", |owner| owner.layout.is_some()).await;
+    owner
+        .until_within(RESTORE_TIMEOUT, "layout", |owner| owner.layout.is_some())
+        .await;
     let since_restore = |owner: &TestClient, pane: PaneId| {
         let text = owner.flat_text(pane);
         text.split_once("Restored after restart")
@@ -265,20 +280,15 @@ async fn a_claude_that_saved_no_conversation_starts_afresh_after_a_cold_restart(
     };
     for pane in [hand_claude, launched_claude] {
         owner.follow(pane).await;
-        let deadline = Instant::now() + TIMEOUT;
-        while !since_restore(&owner, pane).contains("claude-running --session-id") {
-            assert!(
-                Instant::now() < deadline,
-                "Claude Code never started afresh in pane {pane}:\n{}",
-                owner.text(pane)
-            );
-            owner.until("pane output", |_| true).await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        owner
+            .until_within(RESTORE_TIMEOUT, "Claude Code started afresh", |owner| {
+                since_restore(owner, pane).contains("claude-running --session-id")
+            })
+            .await;
         let text = since_restore(&owner, pane);
         assert!(!text.contains("No conversation found"), "{text}");
         owner
-            .until("the pane runs Claude Code", |owner| {
+            .until_within(RESTORE_TIMEOUT, "the pane runs Claude Code", |owner| {
                 owner
                     .metas
                     .get(&pane)

@@ -341,8 +341,18 @@ impl TestClient {
     }
 
     /// Pumps events until `done` holds.
-    pub async fn until(&mut self, what: &str, mut done: impl FnMut(&Self) -> bool) {
-        let deadline = Instant::now() + TIMEOUT;
+    pub async fn until(&mut self, what: &str, done: impl FnMut(&Self) -> bool) {
+        self.until_within(TIMEOUT, what, done).await;
+    }
+
+    /// Pumps events until `done` holds, for at most `timeout`.
+    pub async fn until_within(
+        &mut self,
+        timeout: Duration,
+        what: &str,
+        mut done: impl FnMut(&Self) -> bool,
+    ) {
+        let deadline = Instant::now() + timeout;
         loop {
             if done(self) {
                 return;
