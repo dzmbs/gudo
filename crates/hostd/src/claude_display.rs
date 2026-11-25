@@ -25,7 +25,12 @@ fn command(program: &OsStr, arguments: &[String]) -> io::Result<Command> {
     if prefix.last().map(String::as_str) != Some("--settings") {
         return Err(io::Error::other("missing final settings option"));
     }
-    let version = match super::cli_version::read(program) {
+    // Kept beside the settings, in the helper's state.
+    let version = match std::path::Path::new(display_settings).parent() {
+        Some(cache_dir) => super::cli_version::read_cached(program, cache_dir),
+        None => super::cli_version::read(program),
+    };
+    let version = match version {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
         version => version.ok().flatten(),
     };
