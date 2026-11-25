@@ -603,7 +603,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     }
 
     private func finishSnapshot(anchor: NativeListLayout.Anchor?, following: Bool, generation: Int, changesOrder: Bool) {
-        if isActive { collection.layoutIfNeeded() }
+        // Later updates lay the cells out once, with the frame's commit, at the offset they land on.
+        if isActive, firstContentLatency == nil { collection.layoutIfNeeded() }
         if isActive, firstContentLatency == nil, !collection.visibleCells.isEmpty {
             firstContentLatency = (CACurrentMediaTime() - openedAt) * 1_000
         }

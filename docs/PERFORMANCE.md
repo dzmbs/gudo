@@ -207,8 +207,11 @@ figure. What moved iOS inside its budget:
   their cells built.
 - **Streaming applies.** The first apply after scrolling no longer lays out the bottom rows from
   nothing (up to 12 ms before on a quiet machine, 28 ms on a busy one; under 6 ms after). A
-  streamed apply still lays the growing row out twice, through its cell and then at its new
-  height, which is most of its 2.8 ms.
+  streamed apply still measures the growing row through its cell; the cells are laid out once,
+  with the frame's commit, at the offset the update lands on, instead of inside the apply and
+  again after it scrolled. Debug, `testStreamingApplyBudgetForALargeCachedWindow`: p99 3.93-4.02
+  ms on main, 1.46-1.54 ms after; the budget run's worst streaming stall 5-15 ms on main, 7-11 ms
+  after.
 
 ### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 
