@@ -66,6 +66,7 @@ mod preauth;
 mod procinfo;
 mod resumable;
 mod resume;
+mod saved_conversation;
 mod scan;
 mod screens;
 mod shell;

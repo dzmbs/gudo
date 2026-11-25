@@ -50,9 +50,40 @@ pub(crate) fn find_transcript(config_dir: &Path, session: &str) -> Option<std::p
         .find(|path| path.is_file())
 }
 
+/// The directory the Claude Code that wrote `transcript` started in, as its messages name it.
+pub(crate) fn transcript_cwd(transcript: &Path) -> Option<std::path::PathBuf> {
+    use std::io::{BufRead, Read};
+    // Lines before the first message (summaries, snapshots) name no directory; a message names
+    // it within the first few lines, and a line can be long, so this much is read at most.
+    const MAX_READ: u64 = 1 << 20;
+    let file = std::fs::File::open(transcript).ok()?;
+    std::io::BufReader::new(file.take(MAX_READ))
+        .lines()
+        .map_while(Result::ok)
+        .find_map(|line| {
+            let entry: serde_json::Value = serde_json::from_str(&line).ok()?;
+            entry.get("cwd")?.as_str().map(std::path::PathBuf::from)
+        })
+}
+
+/// Whether `transcript` is in the project folder Claude Code reads for `cwd`.
+pub(crate) fn is_filed_under(config_dir: &Path, transcript: &Path, cwd: &Path) -> bool {
+    let Some(folder) = transcript.parent().and_then(Path::file_name) else {
+        return false;
+    };
+    [project_dir(config_dir, cwd), encoded_dir(config_dir, cwd)]
+        .iter()
+        .any(|expected| expected.file_name() == Some(folder))
+}
+
 /// Claude Code's folder for the transcripts of sessions started in `cwd`.
 pub(crate) fn project_dir(config_dir: &Path, cwd: &Path) -> std::path::PathBuf {
     let cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_owned());
+    encoded_dir(config_dir, &cwd)
+}
+
+/// The project folder of `cwd` as written, not resolved.
+fn encoded_dir(config_dir: &Path, cwd: &Path) -> std::path::PathBuf {
     let name: String = cwd
         .to_string_lossy()
         .chars()

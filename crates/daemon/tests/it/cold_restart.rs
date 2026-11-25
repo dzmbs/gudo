@@ -181,3 +181,106 @@ async fn agents_resume_their_sessions_after_a_cold_restart() {
     drop(owner);
     daemon.shutdown().await;
 }
+
+const UNUSED_CLAUDE_ID: &str = "e4ea3b84-6daf-4905-9510-2efcd840fd83";
+
+/// Claude Code as it is before its first message: it names its session but writes no
+/// transcript, so resuming the session fails as the real one does. It runs as `claude` with
+/// its arguments, where the helper reads the session of one started by hand.
+const UNUSED_CLAUDE: &str = r#"#!/bin/bash
+case " $* " in *" --resume "*) echo "No conversation found with session ID: $2"; exit 1 ;; esac
+echo "claude-running $*"
+exec -a claude /bin/bash -c 'sleep 600; exit' claude "$@"
+"#;
+
+/// A Claude Code that was started and never used has a session id and nothing saved under it:
+/// after a cold restart it starts afresh in its pane rather than fail to resume and leave a
+/// shell, whether the user or the helper started it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_that_saved_no_conversation_starts_afresh_after_a_cold_restart() {
+    let state = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let bin = tools.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    install(&bin, "claude", UNUSED_CLAUDE);
+    let work = tools.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let claude_config = tools.path().join("claude-config");
+    std::fs::create_dir_all(claude_config.join("projects")).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let env = vec![
+        ("PATH".to_owned(), path),
+        (
+            "CLAUDE_CONFIG_DIR".to_owned(),
+            claude_config.display().to_string(),
+        ),
+    ];
+    let configure =
+        |env: Vec<(String, String)>| move |config: &mut daemon::Config| config.pane_env.extend(env);
+
+    let daemon = start_with(state.path(), configure(env.clone())).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let first = owner.attach_and_follow().await;
+    let hand_claude = split(
+        &mut owner,
+        first,
+        PaneLaunch::Shell {
+            cwd: Some(work.display().to_string()),
+        },
+    )
+    .await;
+    let launched_claude = split(
+        &mut owner,
+        first,
+        PaneLaunch::Agent {
+            agent: AgentKind::Claude,
+            resume: None,
+            cwd: Some(work.display().to_string()),
+        },
+    )
+    .await;
+    owner.type_line(
+        hand_claude,
+        &format!("claude --session-id {UNUSED_CLAUDE_ID}"),
+    );
+    owner.wait_text(hand_claude, "claude-running").await;
+    owner.wait_text(launched_claude, "claude-running").await;
+    wait_persisted(state.path(), &[UNUSED_CLAUDE_ID]);
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(env)).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner.until("layout", |owner| owner.layout.is_some()).await;
+    let since_restore = |owner: &TestClient, pane: PaneId| {
+        let text = owner.flat_text(pane);
+        text.split_once("Restored after restart")
+            .map(|(_, after)| after.to_owned())
+            .unwrap_or_default()
+    };
+    for pane in [hand_claude, launched_claude] {
+        owner.follow(pane).await;
+        owner
+            .until("Claude Code started afresh", |owner| {
+                since_restore(owner, pane).contains("claude-running --session-id")
+            })
+            .await;
+        let text = since_restore(&owner, pane);
+        assert!(!text.contains("No conversation found"), "{text}");
+        owner
+            .until("the pane runs Claude Code", |owner| {
+                owner
+                    .metas
+                    .get(&pane)
+                    .is_some_and(|meta| meta.agent.is_some())
+            })
+            .await;
+    }
+    drop(owner);
+    daemon.shutdown().await;
+}

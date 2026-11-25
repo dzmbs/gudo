@@ -95,6 +95,33 @@ pub(crate) fn rollout_path(codex_home: &Path, id: &str) -> Option<PathBuf> {
         .find(|path| rollout_id(path).is_some_and(|found| found.eq_ignore_ascii_case(id)))
 }
 
+/// Whether Codex keeps a rollout of session `id` under `codex_home`, plain or compressed:
+/// `codex resume` finds it only there.
+pub(crate) fn has_rollout(codex_home: &Path, id: &str) -> bool {
+    let children = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+    };
+    let plain = format!("-{}.jsonl", id.to_ascii_lowercase());
+    let compressed = format!("{plain}.zst");
+    children(&codex_home.join("sessions"))
+        .flat_map(|year| children(&year))
+        .flat_map(|month| children(&month))
+        .flat_map(|day| children(&day))
+        .any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_ascii_lowercase)
+                .is_some_and(|name| {
+                    name.starts_with("rollout-")
+                        && (name.ends_with(&plain) || name.ends_with(&compressed))
+                })
+        })
+}
+
 /// The three most recent `YYYY/MM/DD` directories (sessions crossing midnight, time zones).
 fn day_dirs(sessions: &Path) -> Vec<PathBuf> {
     fn newest(dir: &Path, count: usize) -> Vec<PathBuf> {

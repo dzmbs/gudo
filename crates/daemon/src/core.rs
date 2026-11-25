@@ -29,6 +29,7 @@ use crate::osc::Osc;
 use crate::pane::{Pane, VtEvent};
 use crate::persist;
 use crate::resumable::{ResumableAgent, ResumableProgram};
+use crate::saved_conversation::SavedConversation;
 use crate::shell::ShellIntegration;
 use crate::sizing::{EmptyGrid, SizeChoice, Sizing};
 use crate::ws::Viewer;
@@ -1685,19 +1686,23 @@ impl Core {
             return PaneLaunch::Shell { cwd };
         };
         self.mark_dirty();
-        let cwd = closed.cwd.or(cwd);
+        let mut cwd = closed.cwd.or(cwd);
         match closed.agent {
-            Some(AgentRecord {
-                kind,
-                session_id: Some(session_id),
-                account,
-                ..
-            }) if crate::resumable::is_session_id(&session_id) => PaneLaunch::AccountAgent {
-                agent: kind,
-                account,
-                resume: Some(session_id),
-                cwd,
-            },
+            Some(agent)
+                if agent
+                    .session_id
+                    .as_deref()
+                    .is_some_and(crate::resumable::is_session_id) =>
+            {
+                let mut resume = agent.session_id.clone();
+                resume_where_saved(self, pane, &agent, &mut resume, &mut cwd);
+                PaneLaunch::AccountAgent {
+                    agent: agent.kind,
+                    account: agent.account,
+                    resume,
+                    cwd,
+                }
+            }
             _ => PaneLaunch::Shell { cwd },
         }
     }
@@ -1962,10 +1967,18 @@ impl Core {
             .repos
             .take_pre_command(std::path::Path::new(&cwd))
             .map(|script| format!("{script}\n"));
+        let mut resumable = resumable;
+        let starts_afresh = resumable.as_mut().is_some_and(|agent| {
+            let unsaved = has_unsaved_session(self, id, agent, &cwd);
+            if unsaved {
+                agent.session_id = None;
+            }
+            unsaved
+        });
         match &launch {
             PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => {
                 let resume_line = resumable.as_ref().map(|agent| {
-                    if launches_pi {
+                    if launches_pi || starts_afresh {
                         agent.program.launch_line(agent.session_id.as_deref())
                     } else {
                         agent.program.resume_line(agent.session_id.as_deref())
@@ -3903,6 +3916,7 @@ pub(crate) fn restore(
                     .clone()
                     .filter(|id| crate::resumable::is_session_id(id));
                 *cwd = record.cwd.clone().or(cwd.take());
+                resume_where_saved(core, id, agent, resume, cwd);
                 let resumed = resume.is_some();
                 // Back under the account it ran under.
                 if let PaneLaunch::Agent {
@@ -3977,6 +3991,97 @@ pub(crate) fn restore(
     for id in failed {
         let _ = lock(&core.layout).close_pane(id);
     }
+}
+
+/// Resumes the agent's session only if it saved a conversation to resume, from the directory
+/// it was started in; one it never saved starts afresh with the same settings.
+fn resume_where_saved(
+    core: &Core,
+    pane: PaneId,
+    agent: &AgentRecord,
+    resume: &mut Option<String>,
+    cwd: &mut Option<String>,
+) {
+    let Some(session) = resume.clone() else {
+        return;
+    };
+    let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
+    let Some(agent_dir) = account_dir(core, agent.kind, account) else {
+        return;
+    };
+    let pane_dir = cwd
+        .clone()
+        .or_else(|| {
+            core.cfg
+                .pane_var("HOME")
+                .map(|home| home.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "/".to_owned());
+    let transcript = agent.transcript.as_deref();
+    let saved = match agent.kind {
+        AgentKind::Claude => crate::saved_conversation::claude(
+            &agent_dir,
+            transcript,
+            std::path::Path::new(&pane_dir),
+            &session,
+        ),
+        AgentKind::Codex => crate::saved_conversation::codex(&agent_dir, transcript, &session),
+        AgentKind::Pi => SavedConversation::Resumable,
+    };
+    let kind = agent.kind;
+    match saved {
+        SavedConversation::Resumable => {
+            tracing::info!(%pane, ?kind, %session, "resuming the agent's conversation");
+        }
+        SavedConversation::StartedIn(started_in) => {
+            tracing::info!(
+                %pane, ?kind, %session,
+                "resuming the agent's conversation in the directory it started in"
+            );
+            *cwd = Some(started_in.to_string_lossy().into_owned());
+        }
+        SavedConversation::Missing => {
+            tracing::info!(
+                %pane, ?kind, %session,
+                "the agent saved no conversation to resume; starting it afresh"
+            );
+            *resume = None;
+        }
+    }
+}
+
+/// Whether the session a pi or Kimi Code started by hand would resume was never saved where
+/// its resume looks, so the resume would fail.
+fn has_unsaved_session(core: &Core, pane: PaneId, agent: &ResumableAgent, cwd: &str) -> bool {
+    let Some(session) = agent.session_id.as_deref() else {
+        return false;
+    };
+    let Some(home) = core.cfg.pane_var("HOME") else {
+        return false;
+    };
+    let env = |name: &str| {
+        core.cfg
+            .pane_var(name)
+            .map(|value| value.to_string_lossy().into_owned())
+    };
+    let directory = agent.cwd.as_deref().unwrap_or(cwd);
+    let program = agent.program;
+    let unsaved = crate::resumable::saved_session(
+        program,
+        &env,
+        std::path::Path::new(&home),
+        std::path::Path::new(directory),
+        session,
+    ) == Some(false);
+    if unsaved {
+        tracing::info!(
+            %pane, ?program, %session,
+            "the agent saved no conversation to resume; starting it afresh"
+        );
+    } else {
+        tracing::info!(%pane, ?program, %session, "resuming the agent's conversation");
+    }
+    unsaved
 }
 
 /// Saved state, for [`persist`].

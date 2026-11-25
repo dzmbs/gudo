@@ -128,6 +128,37 @@ impl ResumableProgram {
     }
 }
 
+/// Whether the agent saved session `id` where its resume looks from `cwd`: `None` when its
+/// sessions folder is not there at all, so where it keeps them is unknown.
+pub(crate) fn saved_session(
+    program: ResumableProgram,
+    env: &impl Fn(&str) -> Option<String>,
+    home: &Path,
+    cwd: &Path,
+    id: &str,
+) -> Option<bool> {
+    let directories = [cwd.canonicalize().ok(), Some(cwd.to_path_buf())];
+    match program {
+        ResumableProgram::Pi => {
+            let root = pi_session_dir(env, home, cwd).root;
+            root.is_dir().then(|| {
+                directories.iter().flatten().any(|cwd| {
+                    pi_session_file(&pi_session_dir(env, home, cwd).folder, id).is_some()
+                })
+            })
+        }
+        ResumableProgram::Kimi => {
+            let root = kimi_home(env, home).join("sessions");
+            root.is_dir().then(|| {
+                directories
+                    .iter()
+                    .flatten()
+                    .any(|cwd| kimi_session_dir(env, home, cwd).join(id).is_dir())
+            })
+        }
+    }
+}
+
 /// pi's sessions for `cwd`: (id, last written).
 fn pi_sessions(
     env: &impl Fn(&str) -> Option<String>,
@@ -194,15 +225,7 @@ fn kimi_sessions(
     home: &Path,
     cwd: &Path,
 ) -> Vec<(String, SystemTime)> {
-    let kimi_home = env("KIMI_CODE_HOME").map_or_else(|| home.join(".kimi-code"), PathBuf::from);
-    let name = cwd
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let digest = ring::digest::digest(&ring::digest::SHA256, cwd.as_os_str().as_encoded_bytes());
-    let hash = crate::fsutil::hex(&digest.as_ref()[..6]);
-    let directory = kimi_home.join("sessions").join(format!("wd_{name}_{hash}"));
-    entries(&directory)
+    entries(&kimi_session_dir(env, home, cwd))
         .filter_map(|(path, modified)| {
             let id = path.file_name()?.to_str()?;
             let modified = std::fs::metadata(path.join("state.json"))
@@ -211,6 +234,23 @@ fn kimi_sessions(
             (id.starts_with("session_") && is_session_id(id)).then(|| (id.to_owned(), modified))
         })
         .collect()
+}
+
+fn kimi_home(env: &impl Fn(&str) -> Option<String>, home: &Path) -> PathBuf {
+    env("KIMI_CODE_HOME").map_or_else(|| home.join(".kimi-code"), PathBuf::from)
+}
+
+/// Kimi Code's session folder for `cwd`.
+fn kimi_session_dir(env: &impl Fn(&str) -> Option<String>, home: &Path, cwd: &Path) -> PathBuf {
+    let name = cwd
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let digest = ring::digest::digest(&ring::digest::SHA256, cwd.as_os_str().as_encoded_bytes());
+    let hash = crate::fsutil::hex(&digest.as_ref()[..6]);
+    kimi_home(env, home)
+        .join("sessions")
+        .join(format!("wd_{name}_{hash}"))
 }
 
 fn entries(directory: &Path) -> impl Iterator<Item = (PathBuf, SystemTime)> {
@@ -351,6 +391,35 @@ mod tests {
         assert_eq!(
             ResumableProgram::Kimi.find_session(env, &work, started, &[]),
             Some("session_1234".into())
+        );
+    }
+
+    #[test]
+    fn a_pi_session_is_saved_only_with_its_file() {
+        let home = tempfile::tempdir().unwrap();
+        let work = home.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let env = |name: &str| (name == "HOME").then(|| home.path().display().to_string());
+        let pi = ResumableProgram::Pi;
+        assert_eq!(
+            saved_session(pi, &env, home.path(), &work, "0199-aaaa"),
+            None,
+            "no sessions folder: pi may keep them elsewhere"
+        );
+        let folder = pi_session_dir(&env, home.path(), &work.canonicalize().unwrap()).folder;
+        std::fs::create_dir_all(&folder).unwrap();
+        assert_eq!(
+            saved_session(pi, &env, home.path(), &work, "0199-aaaa"),
+            Some(false)
+        );
+        std::fs::write(
+            folder.join("2026-11-25T10-00-00-000Z_0199-aaaa.jsonl"),
+            "{}",
+        )
+        .unwrap();
+        assert_eq!(
+            saved_session(pi, &env, home.path(), &work, "0199-aaaa"),
+            Some(true)
         );
     }
 
