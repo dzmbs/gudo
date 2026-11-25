@@ -215,10 +215,8 @@ neither send to it nor see the image. Tests pin each.
 
 1. Should guests with Prompter keep the right to send images to an agent? Recommended: yes, it
    is the same as typing a prompt, and already rate limited.
-2. Pasting an image into an agent pane does nothing today (decided so that a paste never
-   surprises). Should paste on an agent pane send the image to the agent? Recommended: yes, it
-   matches pasting an image into Claude Code in a local terminal; left unchanged until you say
-   so. The same for dropping an image file (not a photo) on an agent pane on iPhone and iPad,
-   which pastes the device's own path today.
+2. Pasting an image into an agent pane, or dropping image files on it: decided yes and built
+   (DAEMON.md §7.4.1, `PasteImage`): the pictures go to the agent through a per-pane store on
+   its host. Panes running no agent paste as before.
 3. Retention beyond the session: delete send copies after a fixed age (say 30 days)?
    Recommended: not now; they go with the image or the session.

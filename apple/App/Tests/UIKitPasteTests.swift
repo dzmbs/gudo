@@ -29,6 +29,33 @@ final class UIKitPasteTests: XCTestCase {
         XCTAssertEqual(PaneDrawing.terminalDropKind([NSItemProvider(object: "git status" as NSString)], toAgent: true), .text)
     }
 
+    /// Image files go to the agent as pictures, not as this device's paths; a drop that is not
+    /// all images pastes as before.
+    func testImageFilesDroppedOnAnAgentAreSentAndMixedDropsPaste() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let shot = folder.appending(path: "shot.png"), notes = folder.appending(path: "notes.txt")
+        try Data([0x89, 0x50, 0x4e, 0x47]).write(to: shot)
+        try Data("notes".utf8).write(to: notes)
+        let files = [try XCTUnwrap(NSItemProvider(contentsOf: shot)), NSItemProvider(object: UIImage())]
+        XCTAssertEqual(PaneDrawing.terminalDropKind(files, toAgent: true), .agentImage)
+        XCTAssertEqual(PaneDrawing.terminalDropKind(files, toAgent: false), .files)
+        let mixed = [try XCTUnwrap(NSItemProvider(contentsOf: shot)), try XCTUnwrap(NSItemProvider(contentsOf: notes))]
+        XCTAssertEqual(PaneDrawing.terminalDropKind(mixed, toAgent: true), .files)
+    }
+
+    func testPasteIsOfferedForAnImageAloneOnlyWhereItIsTaken() throws {
+        let sink = PasteSink(), view = try makeView(sink)
+        let paste = #selector(UIResponderStandardEditActions.paste(_:))
+        UIPasteboard.general.image = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
+            context.cgContext.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        }
+        XCTAssertFalse(view.canPerformAction(paste, withSender: nil))
+        view.acceptsImages = { true }
+        XCTAssertTrue(view.canPerformAction(paste, withSender: nil))
+    }
+
     func testFileDropTakesPrecedenceOverImageRepresentations() {
         let provider = NSItemProvider(object: URL(fileURLWithPath: "/tmp/a b/it's.png") as NSURL)
         provider.registerDataRepresentation(forTypeIdentifier: UTType.png.identifier, visibility: .all) { completion in

@@ -12,23 +12,46 @@ import UIKit
 import AppKit
 #endif
 
+extension PaneDrawing {
+    /// Where pictures pasted or dropped on this pane go, when it runs an agent.
+    var imageDestination: AgentDestination? {
+        guard let workspace, let window = ActiveWindow.model(for: workspace) else { return nil }
+        return AgentImageSender.destination(pane: PaneId(paneId), in: workspace, window: window)
+    }
+
+    /// Images pasted (or, on the Mac, dropped) on an agent pane go to the agent.
+    func installImagePaste(on view: TerminalView) {
+        AgentImageSender.install(on: view, destination: { [weak self] in
+            guard let self, !self.isReadOnly else { return nil }
+            return self.imageDestination
+        }, send: { [weak self] images, destination in
+            guard let window = self?.workspace.flatMap(ActiveWindow.model(for:)) else { return }
+            AgentImageSender.paste(images, to: destination, window: window)
+        })
+    }
+}
+
 #if os(iOS)
 extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
     enum TerminalDropKind { case files, text, agentImage, ignore }
 
-    /// An image alone (from Photos, a screenshot) is sent to the agent of an agent pane, and
-    /// ignored elsewhere.
+    /// Images only (from Photos, screenshots, image files) are sent to the agent of an agent
+    /// pane; elsewhere files paste their paths and a lone image is ignored.
     static func terminalDropKind(_ providers: [NSItemProvider], toAgent: Bool = false) -> TerminalDropKind {
+        if toAgent, !providers.isEmpty, providers.allSatisfy(isImage) { return .agentImage }
         if providers.contains(where: { $0.canLoadObject(ofClass: NSURL.self) }) { return .files }
-        if toAgent, providers.contains(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) }) { return .agentImage }
         if providers.contains(where: { $0.canLoadObject(ofClass: NSString.self) }) { return .text }
         return .ignore
     }
 
-    /// Where an image dropped on this pane goes, when it runs an agent.
-    private var imageDestination: AgentDestination? {
-        guard let workspace, let window = ActiveWindow.model(for: workspace) else { return nil }
-        return AgentImageSender.destination(pane: PaneId(paneId), in: workspace, window: window)
+    private static func isImage(_ provider: NSItemProvider) -> Bool {
+        provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+    }
+
+    private static func imageData(_ provider: NSItemProvider) async -> Data? {
+        await withCheckedContinuation { done in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in done.resume(returning: data) }
+        }
     }
 
     /// Pencil on the terminal opens draw mode at that row (held still: Write); a two-finger long
@@ -48,6 +71,7 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
         view.addGestureRecognizer(twoFinger)
 
         view.addInteraction(UIDropInteraction(delegate: self))
+        installImagePaste(on: view)
         view.onPasteAttachment = { [weak self] pasteboard in
             guard let self, let image = pasteboard.image, let png = image.pngData() else { return false }
             importAttachment(name: "Pasted Image.png", data: png)
@@ -237,17 +261,14 @@ extension PaneDrawing: UIGestureRecognizerDelegate, UIDropInteractionDelegate {
                 Task { @MainActor [weak view] in view?.pasteText(text) }
             }
         case .agentImage:
-            guard let destination, let window = workspace.flatMap(ActiveWindow.model(for:)),
-                  let provider = session.items.map(\.itemProvider).first(where: { $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) })
-            else { return }
-            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
-                Task { @MainActor in
-                    guard let data else {
-                        window.toasts.show(Toast("That file is not an image", systemImage: "photo", style: .failure))
-                        return
-                    }
-                    await AgentImageSender.send(data, to: destination, window: window)
+            guard let destination, let window = workspace.flatMap(ActiveWindow.model(for:)) else { return }
+            let providers = session.items.map(\.itemProvider)
+            Task { @MainActor in
+                var pictures: [Data] = []
+                for provider in providers {
+                    pictures.append(await Self.imageData(provider) ?? Data())
                 }
+                await AgentImageSender.send(pictures, to: destination, window: window)
             }
         case .ignore: break
         }
@@ -488,6 +509,7 @@ final class PlacementMarker: UIView, UIDragInteractionDelegate {
 extension PaneDrawing {
     /// Explicit clipboard placement and Option-drop import; Option-drop onto an agent sends it.
     func installInput(on view: TerminalView) {
+        installImagePaste(on: view)
         view.attachmentDragTypes = [DrawingDragRef.typeIdentifier]
         view.onPasteAttachment = { [weak self] pasteboard in
             self?.importFromPasteboard(pasteboard, send: false) ?? false

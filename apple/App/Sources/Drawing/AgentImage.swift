@@ -3,6 +3,7 @@ import Foundation
 import ImageIO
 import PaneLayout
 import SwiftUI
+import TerminalRenderer
 import UniformTypeIdentifiers
 import GudoCore
 #if os(iOS)
@@ -10,8 +11,8 @@ import PhotosUI
 #endif
 
 /// A picture the user hands an agent, written again from its pixels: upright, at most 2048 px
-/// on its long side, and without its location, camera or time. Screenshots stay PNG, photos
-/// become JPEG.
+/// on its long side, and without its location, camera or time. Photos (JPEG, HEIC) become JPEG;
+/// screenshots and graphics (PNG, TIFF, GIF, WebP) become PNG, keeping their transparency.
 nonisolated enum AgentImage {
     static let maximumInputBytes = 40 * 1_024 * 1_024
     static let maximumBytes = 16 * 1_024 * 1_024
@@ -29,8 +30,9 @@ nonisolated enum AgentImage {
                 kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary)
         else { throw Failure.unreadable }
-        let isScreenshot = CGImageSourceGetType(source) as String? == UTType.png.identifier
-        let type = isScreenshot ? UTType.png : UTType.jpeg
+        let isPhoto = (CGImageSourceGetType(source) as String?).flatMap(UTType.init)
+            .map { [UTType.jpeg, .heic, .heif].contains(where: $0.conforms(to:)) } ?? false
+        let type = isPhoto ? UTType.jpeg : UTType.png
         let encoded = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(encoded, type.identifier as CFString, 1, nil) else {
             throw Failure.unreadable
@@ -57,24 +59,109 @@ enum AgentImageSender {
             pane: pane.rawValue, agent: AgentKind(agent.kind), title: tab?.title ?? meta.title, sameHost: false)
     }
 
-    /// Prepares `data` off the main thread and attaches it to the agent's prompt on its host.
-    static func send(_ data: Data, to destination: AgentDestination, window: WindowModel) async {
+    /// At most this many pictures go with one paste or drop.
+    static let maximumPerPaste = 8
+
+    /// Prepares the pictures off the main thread and puts them in the agent's input on its host,
+    /// in order, without sending the prompt.
+    static func send(_ pictures: [Data], to destination: AgentDestination, window: WindowModel) async {
+        guard let daemon = window.app.hosts.connection(destination.hostId) as? DaemonConnection,
+              let client = daemon.workspace.api as? DaemonClient
+        else {
+            window.toasts.show(Toast("\(destination.agent.title) did not get it: disconnected", systemImage: "photo", style: .failure))
+            return
+        }
+        window.toasts.show(await deliver(pictures, to: destination, through: client))
+    }
+
+    /// The host takes each picture into the pane's image store and pastes its path into the
+    /// agent's input; a helper without that keeps the picture as an image of the session and
+    /// pastes the same way.
+    static func deliver(_ pictures: [Data], to destination: AgentDestination, through host: any AgentImageHost) async -> Toast {
         let agent = destination.agent.title
+        guard pictures.count <= maximumPerPaste else {
+            return Toast("Paste at most \(maximumPerPaste) images at once", systemImage: "photo", style: .failure)
+        }
         do {
-            let image = try await Task.detached(priority: .userInitiated) { try AgentImage.prepare(data) }.value
-            guard let daemon = window.app.hosts.connection(destination.hostId) as? DaemonConnection,
-                  let client = daemon.workspace.api as? DaemonClient
-            else { throw ArtifactError.Disconnected }
-            _ = try await client.sendToAgent(paneId: destination.pane, artifactId: nil, version: nil, png: image)
-            window.toasts.show(Toast("Image sent to \(agent)", systemImage: "photo", style: .success))
+            let images = try await Task.detached(priority: .userInitiated) { try pictures.map(AgentImage.prepare) }.value
+            let pastesImages = host.pastesImages()
+            for image in images {
+                if pastesImages {
+                    try await host.pasteImage(pane: destination.pane, image: image)
+                } else {
+                    try await host.sendImage(pane: destination.pane, image: image)
+                }
+            }
+            let what = images.count == 1 ? "Image" : "\(images.count) images"
+            return Toast("\(what) sent to \(agent)", systemImage: "photo", style: .success)
         } catch AgentImage.Failure.tooLarge {
-            window.toasts.show(Toast("The image is too large to send", systemImage: "photo", style: .failure))
+            return Toast("The image is too large to send", systemImage: "photo", style: .failure)
         } catch AgentImage.Failure.unreadable {
-            window.toasts.show(Toast("That file is not an image", systemImage: "photo", style: .failure))
+            return Toast("That file is not an image", systemImage: "photo", style: .failure)
         } catch {
             CanvasWebView.log.error("image to agent: \(String(describing: error), privacy: .public)")
-            window.toasts.show(Toast("\(agent) did not get it: \(DrawOverlay.describe(error))", systemImage: "photo", style: .failure))
+            return Toast("\(agent) did not get it: \(describe(error))", systemImage: "photo", style: .failure)
         }
+    }
+
+    private static func describe(_ error: any Error) -> String {
+        guard let error = error as? WorkspaceError else { return DrawOverlay.describe(error) }
+        switch error {
+        case .Denied: return "view only"
+        case .Disconnected: return "disconnected"
+        case .NotFound(let message), .Conflict(let message), .Invalid(let message), .Unavailable(let message), .Failed(let message):
+            return message
+        }
+    }
+
+    /// Sends what is pasted or dropped on `view` as pictures to the agent `destination` names,
+    /// when it names one; otherwise the terminal pastes as before.
+    static func install(
+        on view: TerminalView,
+        destination: @escaping @MainActor () -> AgentDestination?,
+        send: @escaping @MainActor ([PastedImage], AgentDestination) -> Void
+    ) {
+        view.acceptsImages = { destination() != nil }
+        view.onImages = { images in
+            guard let target = destination() else { return }
+            send(images, target)
+        }
+    }
+
+    /// Reads the pictures (files off the main thread) and sends them.
+    static func paste(_ images: [PastedImage], to destination: AgentDestination, window: WindowModel) {
+        Task {
+            let pictures = await Task.detached(priority: .userInitiated) {
+                images.map { image -> Data in
+                    switch image {
+                    case .data(let data): data
+                    case .file(let url): (try? Data(contentsOf: url)) ?? Data()
+                    }
+                }
+            }.value
+            await send(pictures, to: destination, window: window)
+        }
+    }
+}
+
+/// What a host's helper offers for handing an agent pictures.
+nonisolated protocol AgentImageHost: Sendable {
+    /// Whether the helper keeps pasted pictures per pane (`paste_image`).
+    func pastesImages() -> Bool
+    func pasteImage(pane: UInt64, image: Data) async throws
+    /// Send to agent: the picture becomes an image of the session.
+    func sendImage(pane: UInt64, image: Data) async throws
+}
+
+extension DaemonClient: AgentImageHost {
+    nonisolated func pastesImages() -> Bool { offersPaneImages() }
+
+    nonisolated func pasteImage(pane: UInt64, image: Data) async throws {
+        _ = try await pasteImage(paneId: pane, image: image)
+    }
+
+    nonisolated func sendImage(pane: UInt64, image: Data) async throws {
+        _ = try await sendToAgent(paneId: pane, artifactId: nil, version: nil, png: image)
     }
 }
 
@@ -113,7 +200,7 @@ struct AgentImagePicker: ViewModifier {
                         model.toasts.show(Toast("That file is not an image", systemImage: "photo", style: .failure))
                         return
                     }
-                    await AgentImageSender.send(data, to: destination, window: model)
+                    await AgentImageSender.send([data], to: destination, window: model)
                 }
             }
         #else
@@ -128,7 +215,7 @@ struct AgentImagePicker: ViewModifier {
                     model.toasts.show(Toast("That file is not an image", systemImage: "photo", style: .failure))
                     return
                 }
-                Task { await AgentImageSender.send(data, to: destination, window: model) }
+                Task { await AgentImageSender.send([data], to: destination, window: model) }
             }
         #endif
     }

@@ -52,6 +52,17 @@ final class AgentImageTests: XCTestCase {
         XCTAssertEqual([screenshot.width, screenshot.height], [AgentImage.maximumPixels, AgentImage.maximumPixels / 4])
     }
 
+    /// Graphics keep their transparency as PNG; only photos become JPEG.
+    func testGraphicsBecomePngAndPhotosJpeg() throws {
+        for type in [UTType.tiff, .gif] {
+            XCTAssertEqual(try properties(AgentImage.prepare(image(width: 8, height: 8, type: type))).type, UTType.png.identifier, "\(type)")
+        }
+        let heic = NSMutableData()
+        if CGImageDestinationCreateWithData(heic, UTType.heic.identifier as CFString, 1, nil) != nil {
+            XCTAssertEqual(try properties(AgentImage.prepare(image(width: 8, height: 8, type: .heic))).type, UTType.jpeg.identifier)
+        }
+    }
+
     func testWhatIsNotAnImageOrIsTooLargeIsRefused() {
         XCTAssertThrowsError(try AgentImage.prepare(Data("not an image".utf8))) { error in
             XCTAssertEqual(error as? AgentImage.Failure, .unreadable)
