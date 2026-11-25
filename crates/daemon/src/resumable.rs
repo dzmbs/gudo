@@ -130,6 +130,20 @@ impl ResumableProgram {
                 .map(|(id, _)| id)
         })
     }
+
+    /// The session the agent writes now when it is no longer `current` (it switched inside
+    /// itself): the newest written since it started that no other pane claimed.
+    pub fn writing_session(
+        self,
+        env: impl Fn(&str) -> Option<String>,
+        cwd: &Path,
+        started: SystemTime,
+        current: &str,
+        claimed: &[String],
+    ) -> Option<String> {
+        self.find_session(env, cwd, started, claimed)
+            .filter(|newest| newest != current)
+    }
 }
 
 /// Whether the agent saved session `id` where its resume looks from `cwd`: `None` when its
@@ -401,6 +415,43 @@ mod tests {
         assert_eq!(
             ResumableProgram::Kimi.find_session(env, &work, started, &[]),
             Some("session_1234".into())
+        );
+    }
+
+    /// pi resumed another session inside itself: the file it writes now names it.
+    #[test]
+    fn a_pi_that_switched_sessions_is_followed() {
+        let home = tempfile::tempdir().unwrap();
+        let work = home.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let work = work.canonicalize().unwrap();
+        let env = |name: &str| (name == "HOME").then(|| home.path().display().to_string());
+        let started = SystemTime::now();
+        let folder = pi_session_dir(&env, home.path(), &work).folder;
+        std::fs::create_dir_all(&folder).unwrap();
+        let write = |id: &str| {
+            std::fs::write(
+                folder.join(format!("2026-11-25T10-00-00-000Z_{id}.jsonl")),
+                id,
+            )
+            .unwrap();
+        };
+        let pi = ResumableProgram::Pi;
+        write("0199-aaaa");
+        assert_eq!(
+            pi.writing_session(env, &work, started, "0199-aaaa", &[]),
+            None
+        );
+        std::thread::sleep(Duration::from_millis(20));
+        write("0199-bbbb");
+        assert_eq!(
+            pi.writing_session(env, &work, started, "0199-aaaa", &[]),
+            Some("0199-bbbb".into())
+        );
+        assert_eq!(
+            pi.writing_session(env, &work, started, "0199-aaaa", &["0199-bbbb".into()]),
+            None,
+            "another pane's session is not this one's"
         );
     }
 

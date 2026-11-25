@@ -299,3 +299,119 @@ async fn a_claude_that_saved_no_conversation_starts_afresh_after_a_cold_restart(
     drop(owner);
     daemon.shutdown().await;
 }
+
+const FIRST_ROLLOUT: &str = "0199a213-1111-7800-8aa1-bbab2a035a53";
+const SWITCHED_ROLLOUT: &str = "0199a213-2222-7800-8aa1-bbab2a035a53";
+
+/// A Codex that writes one conversation, then, when a line `switch` is typed into it, resumes
+/// another inside itself: it holds that one's rollout open instead, as Codex does. Run as
+/// `codex` in the process table.
+const SWITCHING_CODEX: &str = r#"#!/bin/bash
+if [[ "$1" != serve ]]; then
+  case " $* " in *" resume "*) echo "codex-resumed $*"; exec -a codex /bin/sleep 600 ;; esac
+  exec -a codex /bin/bash "$0" serve
+fi
+dir="$CODEX_HOME/sessions/2026/11/25"
+mkdir -p "$dir"
+open_rollout() {
+  f="$dir/rollout-2026-11-25T10-00-00-$1.jsonl"
+  printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$1" "$PWD" >> "$f"
+  exec 3>>"$f"
+}
+open_rollout __FIRST__
+echo codex-writing-first
+while IFS= read -r line; do
+  if [[ "$line" == switch ]]; then
+    exec 3>&-
+    open_rollout __SWITCHED__
+    echo codex-writing-switched
+  fi
+done
+"#;
+
+/// Codex resumed another conversation inside itself: the pane follows it, and a cold restart
+/// resumes that one, not the one it started with.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_codex_that_switched_conversations_resumes_the_one_it_writes() {
+    let state = tempfile::tempdir().unwrap();
+    let tools = tempfile::tempdir().unwrap();
+    let bin = tools.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    install(
+        &bin,
+        "codex",
+        &SWITCHING_CODEX
+            .replace("__FIRST__", FIRST_ROLLOUT)
+            .replace("__SWITCHED__", SWITCHED_ROLLOUT),
+    );
+    let work = tools.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let env = vec![
+        ("PATH".to_owned(), path),
+        (
+            "CODEX_HOME".to_owned(),
+            tools.path().join("codex-home").display().to_string(),
+        ),
+    ];
+    let configure =
+        |env: Vec<(String, String)>| move |config: &mut daemon::Config| config.pane_env.extend(env);
+    let daemon = start_with(state.path(), configure(env.clone())).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    let first = owner.attach_and_follow().await;
+    let pane = split(
+        &mut owner,
+        first,
+        PaneLaunch::Shell {
+            cwd: Some(work.display().to_string()),
+        },
+    )
+    .await;
+    owner.type_line(pane, "codex");
+    owner
+        .until_within(RESTORE_TIMEOUT, "Codex writing", |owner| {
+            owner.text(pane).contains("codex-writing-first")
+        })
+        .await;
+    wait_persisted(
+        state.path(),
+        &[&format!("\"session_id\": \"{FIRST_ROLLOUT}\"")],
+    );
+    owner.type_line(pane, "switch");
+    owner
+        .until_within(RESTORE_TIMEOUT, "Codex switched", |owner| {
+            owner.text(pane).contains("codex-writing-switched")
+        })
+        .await;
+    wait_persisted(
+        state.path(),
+        &[&format!("\"session_id\": \"{SWITCHED_ROLLOUT}\"")],
+    );
+    drop(owner);
+    daemon.shutdown().await;
+
+    let daemon = start_with(state.path(), configure(env)).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner
+        .until_within(RESTORE_TIMEOUT, "layout", |owner| owner.layout.is_some())
+        .await;
+    owner.follow(pane).await;
+    owner
+        .until_within(
+            RESTORE_TIMEOUT,
+            "the switched conversation resumed",
+            |owner| {
+                owner
+                    .flat_text(pane)
+                    .contains(&format!("resume {SWITCHED_ROLLOUT}"))
+            },
+        )
+        .await;
+    drop(owner);
+    daemon.shutdown().await;
+}

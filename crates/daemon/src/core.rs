@@ -3110,6 +3110,8 @@ fn kill_if_lingering(pane: Arc<Pane>) {
 /// Connections one device may hold at once: the app and its extensions, with room to spare.
 const MAX_CONNS_PER_DEVICE: usize = 16;
 
+/// Ticks between looks for a Codex or pi that switched conversations inside itself.
+const SESSION_SWITCH_TICKS: u32 = 8;
 /// How often a pane task checks for agents and feeds agent timers.
 const PANE_TICK: Duration = Duration::from_millis(500);
 /// How long after its last event a pane without an agent keeps ticking: long enough to see a
@@ -3238,6 +3240,10 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                 if detect_tick.is_multiple_of(2) {
                     capture_agent_session(&core, &entry, &session_lookup);
                     capture_resumable_session(&core, &entry, &session_lookup);
+                }
+                // Every 4 s: reading an agent's open files costs more than a tick should.
+                if detect_tick.is_multiple_of(SESSION_SWITCH_TICKS) {
+                    follow_session_switch(&core, &entry, &session_lookup);
                 }
                 let screen = screen_dirty.then(|| pane.screen_text());
                 screen_dirty = false;
@@ -3530,6 +3536,102 @@ fn capture_agent_session(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<At
                 core.mark_dirty();
                 // Chat waits on this pane's events: it shows the session now, not at the next write.
                 core.emit(Event::PaneMeta(entry.pane.id));
+            }
+        }
+        busy.store(false, Ordering::Release);
+    });
+}
+
+/// Follows a Codex or pi that switched conversations inside itself (`/resume`, `/new`): the
+/// session it writes now, rather than the one it started with, is the one Chat shows and a
+/// restart resumes. Codex holds the rollout it writes open; pi writes its session file.
+fn follow_session_switch(core: &Arc<Core>, entry: &Arc<PaneEntry>, busy: &Arc<AtomicBool>) {
+    if lock(&entry.codex).is_some() {
+        return;
+    }
+    let codex = lock(&entry.record)
+        .agent
+        .as_ref()
+        .filter(|agent| agent.kind == AgentKind::Codex)
+        .and_then(|agent| agent.session_id.clone());
+    let pi = lock(&entry.record)
+        .resumable
+        .as_ref()
+        .filter(|agent| agent.program == ResumableProgram::Pi)
+        .and_then(|agent| agent.session_id.clone());
+    let pi_process = *lock(&entry.resumable_process);
+    if codex.is_none() && (pi.is_none() || pi_process.is_none()) {
+        return;
+    }
+    if busy.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let others: Vec<String> = core
+        .pane_entries()
+        .iter()
+        .filter(|(id, _)| *id != entry.pane.id)
+        .flat_map(|(_, other)| {
+            let record = lock(&other.record);
+            [
+                record
+                    .agent
+                    .as_ref()
+                    .and_then(|agent| agent.session_id.clone()),
+                record
+                    .resumable
+                    .as_ref()
+                    .and_then(|agent| agent.session_id.clone()),
+            ]
+        })
+        .flatten()
+        .collect();
+    let root = entry.pane.pty().pid();
+    let (core, entry, busy) = (Arc::clone(core), Arc::clone(entry), Arc::clone(busy));
+    tokio::task::spawn_blocking(move || {
+        if let Some(current) = codex
+            && let Some(writing) = crate::codex_session::from_open_files(root)
+            && writing != current
+            && !others.contains(&writing)
+        {
+            let mut record = lock(&entry.record);
+            if let Some(agent) = record.agent.as_mut().filter(|agent| {
+                agent.kind == AgentKind::Codex && agent.session_id.as_ref() == Some(&current)
+            }) {
+                tracing::info!(pane = %entry.pane.id, session = %current, conversation = %writing, "Codex switched conversations");
+                let account = agent
+                    .account
+                    .clone()
+                    .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
+                core.ws.accounts.pin(AgentKind::Codex, &writing, &account);
+                agent.session_id = Some(writing);
+                agent.transcript = None;
+                drop(record);
+                core.mark_dirty();
+                core.emit(Event::PaneMeta(entry.pane.id));
+            }
+        }
+        if let (Some(current), Some((pid, started))) = (pi, pi_process) {
+            let program = ResumableProgram::Pi;
+            let recorded_cwd = lock(&entry.record).cwd.clone().unwrap_or_default();
+            let cwd = crate::procinfo::process_cwd(pid).unwrap_or_else(|| recorded_cwd.into());
+            let env = |name: &str| {
+                crate::procinfo::process_env_var(pid, name).or_else(|| {
+                    core.cfg
+                        .pane_var(name)
+                        .map(|value| value.to_string_lossy().into_owned())
+                })
+            };
+            if let Some(writing) = program.writing_session(env, &cwd, started, &current, &others) {
+                let mut record = lock(&entry.record);
+                if let Some(agent) = record.resumable.as_mut().filter(|agent| {
+                    agent.program == program && agent.session_id.as_ref() == Some(&current)
+                }) {
+                    tracing::info!(pane = %entry.pane.id, session = %current, conversation = %writing, "pi switched conversations");
+                    agent.session_id = Some(writing);
+                    drop(record);
+                    core.mark_dirty();
+                    core.emit(Event::PaneMeta(entry.pane.id));
+                }
             }
         }
         busy.store(false, Ordering::Release);
