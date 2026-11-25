@@ -181,7 +181,7 @@ impl DisplayOverlay {
                 live.item.revision = live.item.revision.saturating_add(1);
                 if message.text.starts_with(text.as_str()) && *streaming == is_streaming {
                     let delta = message.text[text.len()..].to_owned();
-                    *text = message.text.clone();
+                    text.push_str(&delta);
                     operations.push(TimelineOp::Append {
                         cursor: transcript.next_cursor(),
                         id: live.item.id.clone(),

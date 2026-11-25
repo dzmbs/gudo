@@ -83,9 +83,25 @@ async fn only_matching_agent_events_or_native_wakes_refresh_a_pane() {
         .is_err()
     );
     events.send(Event::PaneMeta(PaneId(1))).unwrap();
-    assert!(wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await);
+    assert_eq!(
+        wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await,
+        Some(Wake::Session)
+    );
+    events
+        .send(Event::Agent {
+            pane_id: PaneId(1),
+            json: "{}".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await,
+        Some(Wake::Agent)
+    );
     wake.try_send(()).unwrap();
-    assert!(wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await);
+    assert_eq!(
+        wait_for_wake(PaneId(1), &mut wakes, &mut receiver).await,
+        Some(Wake::Session)
+    );
 }
 
 #[test]
@@ -753,4 +769,48 @@ fn reopened_timelines_never_reuse_an_epoch_from_before_a_hand_off() {
     let started = crate::identity::now_millis();
     seed_epochs(1);
     assert!(next_epoch() > started);
+}
+
+fn streamed_text() -> TimelineOp {
+    TimelineOp::Append {
+        cursor: proto::TimelineCursor {
+            epoch: 1,
+            sequence: 1,
+        },
+        id: "reply".into(),
+        field: TimelineField::Text,
+        text: "more".into(),
+    }
+}
+
+#[tokio::test]
+async fn a_turn_ending_during_the_stream_window_refreshes_at_once() {
+    let pane = PaneId(3);
+    let (wake, mut wakes) = mpsc::channel(1);
+    let (events, mut receiver) = broadcast::channel(8);
+    let mut pace = RefreshPace::default();
+    pace.refreshed(tokio::time::Instant::now(), &[streamed_text()]);
+    wake.try_send(()).unwrap();
+    events
+        .send(Event::Agent {
+            pane_id: pane,
+            json: "{}".into(),
+        })
+        .unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(wait_until_due(&pace, Wake::Session, pane, &mut wakes, &mut receiver).await);
+    assert!(started.elapsed() < refresh_pace::STREAM_WINDOW);
+}
+
+#[tokio::test]
+async fn more_streamed_text_waits_for_the_window_to_close() {
+    let pane = PaneId(3);
+    let (wake, mut wakes) = mpsc::channel(1);
+    let (_events, mut receiver) = broadcast::channel::<Event>(8);
+    let mut pace = RefreshPace::default();
+    let refreshed = tokio::time::Instant::now();
+    pace.refreshed(refreshed, &[streamed_text()]);
+    wake.try_send(()).unwrap();
+    assert!(wait_until_due(&pace, Wake::Session, pane, &mut wakes, &mut receiver).await);
+    assert!(refreshed.elapsed() >= refresh_pace::STREAM_WINDOW);
 }

@@ -9,6 +9,7 @@ mod display_overlay;
 pub(crate) mod jsonl_file;
 pub(crate) mod native_watch;
 pub(crate) mod record_stream;
+mod refresh_pace;
 mod text;
 mod transcript;
 pub(crate) mod value_weight;
@@ -31,6 +32,7 @@ use tokio::task::AbortHandle;
 use crate::agent_driver::{AgentSession, TimelineRead};
 use crate::core::{Core, Event, lock};
 use crate::ws::ConnCtx;
+use refresh_pace::{RefreshPace, Wake};
 
 #[cfg(test)]
 use claude_source::{ClaudeSession as LiveState, Source};
@@ -56,7 +58,6 @@ const MAX_PUSH_BYTES: usize = 1024 * 1024;
 const MAX_BULK_REQUESTS: usize = 4;
 const MAX_IO_RETRIES: usize = 3;
 const IO_RETRY_DELAY: Duration = Duration::from_millis(250);
-const MIN_REFRESH_INTERVAL: Duration = Duration::from_millis(35);
 const MAX_COALESCED_EVENTS: usize = 64;
 const MAX_VISIBLE_ITEMS: usize = 3000;
 
@@ -390,11 +391,13 @@ async fn run(
     };
     let mut events = initial_core.events.subscribe();
     drop(initial_core);
-    let mut next_refresh = tokio::time::Instant::now();
+    let mut pace = RefreshPace::default();
     let mut failures = 0;
-    while wait_for_wake(pane, &mut wakes, &mut events).await {
+    while let Some(wake) = wait_for_wake(pane, &mut wakes, &mut events).await {
         // Throttle only already-pending work; idle timelines have no active timer or strong lease.
-        tokio::time::sleep_until(next_refresh).await;
+        if !wait_until_due(&pace, wake, pane, &mut wakes, &mut events).await {
+            return;
+        }
         drain_pending(&mut wakes, &mut events);
         let (Some(core), Some(timeline)) = (core.upgrade(), timeline.upgrade()) else {
             return;
@@ -402,6 +405,7 @@ async fn run(
         match refresh_live(core, pane, Arc::clone(&timeline)).await {
             Ok(operations) => {
                 failures = 0;
+                pace.refreshed(tokio::time::Instant::now(), &operations);
                 if !operations.is_empty() {
                     let _ = timeline.updates.send(operations);
                 }
@@ -412,25 +416,45 @@ async fn run(
             }
             Err(_) => return,
         }
-        drop(timeline);
-        next_refresh = tokio::time::Instant::now() + MIN_REFRESH_INTERVAL;
     }
+}
+
+/// Waits out the pace for `wake`; an agent event arriving meanwhile, such as the turn ending,
+/// refreshes at once. False when the pane's wakes have ended.
+async fn wait_until_due(
+    pace: &RefreshPace,
+    mut wake: Wake,
+    pane: PaneId,
+    wakes: &mut mpsc::Receiver<()>,
+    events: &mut broadcast::Receiver<Event>,
+) -> bool {
+    while let Some(due) = pace.due(wake) {
+        tokio::select! {
+            () = tokio::time::sleep_until(due) => return true,
+            next = wait_for_wake(pane, wakes, events) => match next {
+                Some(next) => wake = next,
+                None => return false,
+            },
+        }
+    }
+    true
 }
 
 async fn wait_for_wake(
     pane: PaneId,
     wakes: &mut mpsc::Receiver<()>,
     events: &mut broadcast::Receiver<Event>,
-) -> bool {
+) -> Option<Wake> {
     loop {
         tokio::select! {
-            wake = wakes.recv() => return wake.is_some(),
+            wake = wakes.recv() => return wake.map(|()| Wake::Session),
             event = events.recv() => match event {
-                Ok(Event::PaneMeta(changed)
-                    | Event::PaneClosed(changed)
-                    | Event::Agent { pane_id: changed, .. }) if changed == pane => return true,
-                Err(broadcast::error::RecvError::Lagged(_)) => return true,
-                Err(broadcast::error::RecvError::Closed) => return false,
+                Ok(Event::Agent { pane_id: changed, .. }) if changed == pane => return Some(Wake::Agent),
+                Ok(Event::PaneMeta(changed) | Event::PaneClosed(changed)) if changed == pane => {
+                    return Some(Wake::Session);
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => return Some(Wake::Session),
+                Err(broadcast::error::RecvError::Closed) => return None,
                 _ => {},
             },
         }
