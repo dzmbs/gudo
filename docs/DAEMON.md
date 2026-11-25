@@ -312,7 +312,10 @@ shell prompt (after 133;A/B, before 133;C; shell integration is injected, see be
 ### Sizing
 
 Each client sends its size per pane (`Resize`). The default live-pane policy is `LastActive`:
-activation, explicit claims and actual input select the latest active eligible client.
+activation, explicit claims and actual input select the latest active eligible client. A client
+asking for the grid the pane already has changes nothing: the client sizing it keeps doing so,
+so two windows of one size never pass the pane back and forth, and no client of any release is
+told another one sized it. Once their grids differ, the latest active one sizes it again.
 Backgrounding or disconnecting hands sizing to another eligible active client; inactive size
 requests are saved without resizing the PTY. Legacy clients use visible-pane transitions as
 activity. New clients report `PaneActivity` separately and use `ClaimSize` for an explicit claim;
@@ -334,8 +337,10 @@ scene activation claims a visible Terminal even if a deferral was left behind; t
 own size back on its next activation or input.
 
 Apple clients cache sizing identity per pane, clearing it on closure, disconnect and attachment
-changes. A quiet strip along the pane's top edge names the other device or local window after
-200 ms, clear of the program's input lines; it does not take space from the grid. Local tap handoffs notify both windows even when their grids match,
+changes. A quiet strip along the pane's top edge names the other device (its name in the device
+list, else its own, else its kind) or local window after 200 ms, clear of the program's input
+lines; it does not take space from the grid, and it is not shown while the pane's grid is the
+one this view would choose. Local tap handoffs notify both windows even when their grids match,
 so live-resize dimension differences are not mistaken for another window. The action requires
 an active window, Drive and an open input gate. “Use this size” claims the local tap and daemon
 connection before selecting `LastActive`, including when leaving a fixed or composite policy.
