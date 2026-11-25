@@ -242,7 +242,7 @@ struct PaneChatView<Terminal: View>: View {
                 composerBox
             } else {
                 if state.capabilities.contains(.read) {
-                    Text("Reply in Terminal. Chat sends only to agents started in \(Brand.name).")
+                    Text("Reply in Terminal: Chat can't send to this agent.")
                         .font(ChatFont.caption).foregroundStyle(DS.Palette.textSecondary)
                         .accessibilityIdentifier("chat-read-only")
                 }

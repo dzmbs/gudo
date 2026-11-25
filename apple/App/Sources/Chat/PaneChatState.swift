@@ -50,7 +50,7 @@ final class PaneChatState {
     var model: TimelineModel? { lease?.model }
     var capabilities: AgentCapabilities {
         guard let model, model.error == nil else { return [] }
-        return model.outline.capabilities
+        return model.outline.capabilities.forComposer
     }
     @ObservationIgnored weak var controller: ChatTranscriptViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
