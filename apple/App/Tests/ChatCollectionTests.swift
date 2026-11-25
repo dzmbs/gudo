@@ -44,6 +44,16 @@ final class ChatCollectionTests: XCTestCase {
 
     private func settle() async throws { try await Task.sleep(for: .milliseconds(160)) }
 
+    /// Waits until the idle display stops measuring and laying out rows ahead of the viewport.
+    private func settleAhead(_ controller: ChatViewController) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        var work = (-1, -1)
+        while (controller.measuredCells, controller.configuredCells) != work, ContinuousClock.now < deadline {
+            work = (controller.measuredCells, controller.configuredCells)
+            try await settle()
+        }
+    }
+
     private func close(_ window: UIWindow) {
         window.isHidden = true
         window.rootViewController = nil
@@ -230,7 +240,7 @@ final class ChatCollectionTests: XCTestCase {
         newest.rowIDs = Set(newest.rows.map(\.id))
         let (window, controller) = try open(newest)
         defer { close(window) }
-        try await settle()
+        try await settleAhead(controller)
         let shown = Set(controller.collection.visibleCells.map(ObjectIdentifier.init))
         var next = whole
         next.revision = newest.revision + 1
@@ -277,6 +287,38 @@ final class ChatCollectionTests: XCTestCase {
             kinds.insert(expected)
         }
         XCTAssertGreaterThan(kinds.count, 1)
+    }
+
+    func testRowsWithinAScreenAreMeasuredBeforeTheyAreScrolledTo() async throws {
+        let (window, controller) = try open(preparedFrame(200))
+        defer { close(window) }
+        try await settleAhead(controller)
+        let measured = controller.measuredCells
+        let collection = controller.collection
+        collection.setContentOffset(CGPoint(x: 0, y: collection.contentOffset.y - collection.bounds.height * 0.9), animated: false)
+        collection.layoutIfNeeded()
+        XCTAssertEqual(controller.measuredCells, measured)
+        XCTAssertEqual(controller.unfittedDisplays, 0)
+    }
+
+    func testTheCellsForTheScreenAboveExistBeforeTheFirstScroll() async throws {
+        let conversation = try await ChatTestFixtures.conversation().rows
+        var frame = TimelineFrame(revision: 1)
+        for copy in 0..<6 {
+            for row in conversation {
+                frame.rows.append(ChatRow(id: ChatRowID(item: "\(copy)-\(row.id.item)", part: row.id.part), revision: row.revision,
+                                          turn: row.turn, content: row.content))
+            }
+        }
+        frame.rowIDs = Set(frame.rows.map(\.id))
+        let (window, controller) = try open(frame)
+        defer { close(window) }
+        try await settleAhead(controller)
+        let created = controller.createdCells
+        let collection = controller.collection
+        collection.setContentOffset(CGPoint(x: 0, y: collection.contentOffset.y - collection.bounds.height * 0.9), animated: false)
+        collection.layoutIfNeeded()
+        XCTAssertEqual(controller.createdCells, created)
     }
 
     func testBottomFollowingAndReadingProtection() async throws {
@@ -433,13 +475,13 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertGreaterThan(controller.configuredCells, configured)
     }
 
-    func testCachedLargeWindowCreatesOnlyVisibleCells() async throws {
+    func testCachedLargeWindowConfiguresCellsOnlyNearTheViewport() async throws {
         let frame = preparedFrame(2_000)
         let (window, controller) = try open(frame)
         defer { close(window) }
-        try await settle()
+        try await settleAhead(controller)
         XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), 2_000)
-        XCTAssertLessThan(controller.configuredCells, 60)
+        XCTAssertLessThan(controller.configuredCells, 100)
         XCTAssertLessThan(controller.collection.visibleCells.count, 40)
         let latency = try XCTUnwrap(controller.firstContentLatency)
         print("Chat cached open: \(latency) ms, first apply: \(controller.applyDurations.first ?? 0) ms,",

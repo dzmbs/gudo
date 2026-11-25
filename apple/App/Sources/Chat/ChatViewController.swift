@@ -53,6 +53,10 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     /// Measuring can grow rows into view that need measuring in turn; past this many passes the
     /// rest waits for the next frame.
     static let measurePassLimit = 8
+    /// Measuring ahead of the viewport takes at most this many rows and this long per frame.
+    static let measureAheadLimit = 8
+    static let measureAheadBudget: CFTimeInterval = 0.002
+    static let warmSteps: CGFloat = 4
 
     let model: TimelineModel
     let collection: UICollectionView
@@ -82,6 +86,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     )
     private let paragraphMetrics = ChatParagraphMetrics()
     private var measured: Set<ChatRowID> = []
+    /// How far above the viewport the cells were laid out once while idle.
+    private var warmedAbove: CGFloat = 0
     private var clock: CADisplayLink?
     /// The display link is firing, so a streaming reply can be paced; otherwise it shows whole.
     private var paintsFrames = false
@@ -108,6 +114,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     let topFade = ChatEdgeFade(edge: .top, height: DS.Space.xxxl)
     let bottomFade = ChatEdgeFade(edge: .bottom, height: DS.Space.xxl)
     private(set) var configuredCells = 0
+    private(set) var createdCells = 0
     private(set) var measuredCells = 0
     private(set) var unfittedDisplays = 0
     var retainedMeasurementCount: Int { measured.count }
@@ -209,7 +216,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         ensureClock()
-        clock?.isPaused = pending == nil && !needsMeasurement
+        // A tick decides whether there is anything to do, measuring ahead included.
+        clock?.isPaused = false
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -392,6 +400,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         let row = current.rows.indices.contains(indexPath.item) ? current.rows[indexPath.item] : nil
         let cell = collectionView.dequeueReusableCell(withReuseIdentifier: (row.map(ChatCellKind.init) ?? .paragraph).rawValue,
                                                       for: indexPath)
+        if (cell as? ChatCollectionCell)?.rowID == nil { createdCells += 1 }
         if let row { configure(cell, row: row) }
         return cell
     }
@@ -455,7 +464,9 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         lastDisplayTick = .now
         commitFrame()
         if needsMeasurement, !isApplying { measureVisible() }
-        clock?.isPaused = pending == nil && !needsMeasurement && reveal.isSettled
+        let idle = pending == nil && !needsMeasurement && reveal.isSettled
+        let preparesAhead = idle && (measureAhead() || warmCellsAbove())
+        clock?.isPaused = idle && !preparesAhead
     }
 
     private func commitFrame() {
@@ -534,6 +545,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             heights.removeAll()
             measured.removeAll(keepingCapacity: false)
             document = NativeListLayout()
+            warmedAbove = 0
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
         let keptTail = keptOrder.map { keptTail(of: frame, after: $0) } ?? 0
@@ -806,6 +818,66 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             if model.followsBottom, !holdsPosition { scrollToBottom() }
             else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
         }
+    }
+
+    /// While the display is idle, rows within a screen of the viewport are measured, nearest
+    /// first and a few per frame, so scrolling to them only draws them. Returns whether any are left.
+    private func measureAhead() -> Bool {
+        guard !isMeasuring, !isApplying, !holdsPosition, !collection.isDecelerating, collection.bounds.height > 0 else { return false }
+        let shown = document.visibleRows(in: collection.bounds)
+        let window = document.visibleRows(in: collection.bounds.insetBy(dx: 0, dy: -collection.bounds.height))
+        guard !window.isEmpty else { return false }
+        isMeasuring = true
+        defer { isMeasuring = false }
+        let anchor = document.anchor(at: collection.contentOffset.y + collection.adjustedContentInset.top)
+        let start = CACurrentMediaTime()
+        var changed: [Int: CGFloat] = [:]
+        var above = shown.lowerBound - 1
+        var below = shown.upperBound
+        var measuredRows = 0
+        func measure(_ index: Int) {
+            guard window.contains(index), current.rows.indices.contains(index), !measured.contains(current.rows[index].id) else { return }
+            measuredRows += 1
+            if let height = fittedHeight(current.rows[index]), document.rows[index].height != height { changed[index] = height }
+        }
+        var remains = false
+        while above >= window.lowerBound || below < window.upperBound {
+            if measuredRows >= Self.measureAheadLimit || CACurrentMediaTime() - start > Self.measureAheadBudget {
+                remains = true
+                break
+            }
+            measure(above)
+            measure(below)
+            above -= 1
+            below += 1
+        }
+        guard !changed.isEmpty else { return remains }
+        document.setHeights(changed)
+        layout.document = document
+        layout.invalidateLayout()
+        if model.followsBottom { scrollToBottom() }
+        else if let anchor, let y = document.position(of: anchor) { restore(y - collection.adjustedContentInset.top) }
+        return remains
+    }
+
+    /// While the display is idle, the collection lays out the screen above the viewport, a
+    /// quarter per frame, and comes back in the same frame: nothing shows, but the cells those
+    /// rows need exist before the first scroll instead of being built during it. Returns whether
+    /// any is left.
+    private func warmCellsAbove() -> Bool {
+        guard !isMeasuring, !isApplying, !holdsPosition, !collection.isDecelerating, collection.bounds.height > 0,
+              warmedAbove < collection.bounds.height else { return false }
+        let offset = collection.contentOffset
+        let top = -collection.adjustedContentInset.top
+        guard offset.y - warmedAbove > top else { return false }
+        warmedAbove += collection.bounds.height / Self.warmSteps
+        UIView.performWithoutAnimation {
+            collection.contentOffset = CGPoint(x: offset.x, y: max(top, offset.y - warmedAbove))
+            collection.layoutIfNeeded()
+            collection.contentOffset = offset
+            collection.layoutIfNeeded()
+        }
+        return warmedAbove < collection.bounds.height
     }
 
     private func key(_ row: ChatRow) -> HeightKey {
