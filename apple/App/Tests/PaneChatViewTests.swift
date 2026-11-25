@@ -398,6 +398,8 @@ final class PaneChatViewTests: XCTestCase {
         }
         try await wait { fixture.state.controller?.working.view.isHidden == false && fixture.state.model?.frame.rows.count == 60 }
         let controller = try XCTUnwrap(fixture.state.controller)
+        // The first rows show before the composer's first layout; its editor follows.
+        try await wait { self.draftEditor(in: controller.footer.view) != nil }
         controller.view.layoutIfNeeded()
         let dots = controller.working.view.frame
         let composer = controller.footer.view.frame
