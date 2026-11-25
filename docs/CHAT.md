@@ -132,6 +132,28 @@ only inactive models are replaced, with the least recently used one first. The f
 stops its model's subscription. This bounds pooled value retention, not rendered-memory or RSS;
 controllers and derived caches need their own limits.
 
+The pool keeps each pane's transcript controller with its model, so showing a pane again (a tab
+switch, the iPhone's one pane) shows its cells, measured heights and scroll position as they were
+and then catches up from the refreshed watch. A controller still in another view hierarchy is
+never taken from it; a new one replaces it in the pool. The pool's four places bound the kept
+controllers, and on iOS a memory warning drops every model and transcript no pane shows.
+Resting the pointer on a tab for 80 ms (`ChatHoverPrewarm`, tab strip and sidebar) starts its
+agent panes' Chat before the view (`PaneChatState.prewarm`): only into the pane's own place or a
+free one, never evicting a warm pane, and released after 2 s unless the view shows.
+
+A reader at the bottom whose session moved past every loaded row (a pane shown again after a long
+turn) is given the latest page instead of a gap; a reader in history keeps it behind the newer gap.
+
+Older pages are asked for while the reader is within three screens of the loaded top
+(`ChatHistoryLead`), from any scroll, so a page lands before the top is reached. A page the
+rendered budget (3,000 rows, 8 MiB) cannot hold lets the newest items go a page at a time, at
+most a window's worth, behind the newer gap, instead of falling back to Terminal; the reading
+item never goes. The collection keeps the run of rows that stayed (`ChatItemUpdate`): a page
+above inserts only its rows, and older rows above with the newest leaving below keep the rows in
+between. On the Mac a page above reloads only the items on screen, because AppKit's batch update
+visits every item after an insertion, and rows within a screen of the viewport are measured a
+few per frame while nothing else draws, as on iOS.
+
 Paging further back evicts newest values but never the controller's current reading item. A
 page that cannot fit without losing that anchor is rejected transactionally with a Terminal
 fallback, not retried automatically. Protected history declines over-budget growth and exposes

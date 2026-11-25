@@ -213,6 +213,55 @@ figure. What moved iOS inside its budget:
   ms on main, 1.46-1.54 ms after; the budget run's worst streaming stall 5-15 ms on main, 7-11 ms
   after.
 
+### Chat pane switch and long history (`ChatPaneSwitchTests`, `ChatHistoryScrollTests`, -O)
+
+Measured with `TEST_RUNNER_GUDO_CHAT_PERF=1` on an M5 Max shared with other agents' Rust builds
+(load average 6-8), so stalls read about twice a quiet machine's. iOS on the iPhone 17 Pro
+simulator (iOS 27.0), booted before measuring.
+
+**Pane switch**: two panes of 2,100 items, switched back and forth ten times; time from the switch
+to the first frame showing rows, median / worst.
+
+| | Mac | iOS simulator |
+|---|---|---|
+| Before (a new transcript every time) | 97 / 108 ms, opened at the session's first row | 74 / 100 ms |
+| After (the pool keeps the pane's transcript) | 64-67 / 72-81 ms, at the row the reader left | 59 / 84 ms |
+| Memory for the second warm pane | +7-19 MB | +4-9 MB |
+
+The kept transcript adds nothing to the switch: its cells, measured heights and offset are there
+when the view attaches, and the refreshed watch lands after the first frame. What is left is SwiftUI
+building the pane's own views again (composer, overlays, sheets): 60 ms of main thread in the Mac
+profile, against the 16 ms (Mac) and 33 ms (iOS) targets. `switchBudget` holds the measured 100 ms.
+
+**Reading back**: a 10,500-item session (1,500 turns) paged as the helper pages it, 20 ms a read,
+scrolled up 400 pt a step until 32 older pages have loaded.
+
+| | Before | After |
+|---|---|---|
+| Pages read | 27, then "exceeds the rendering budget" and Terminal | all 32; the newest rows wait behind the newer gap |
+| Rows kept | 1,772 | 1,775 (bounded by the 3,000-row page) |
+| Row being read moved by a page landing | 0 pt (Mac) | 0 pt Mac, 0.3 pt iOS over 31 landings |
+| Reached the loaded top while a page loaded | 0 | 0 (pages are asked for three screens ahead) |
+| Mac slowest apply / worst stall / pings over 100 ms | 82-94 ms / 132-138 ms / 19-24 | 10-32 ms / 28-36 ms / 0 |
+| Mac footprint while reading back | +260 MB | +29 MB (one run +359 MB: the system's caches swing; the window stays bounded) |
+| iOS slowest apply / worst stall | not run before | 30 ms / 23 ms, +13-17 MB |
+
+What moved it on the Mac: AppKit's batch update visits every item after an insertion above (64 ms
+a page over 1,700 rows, and its animation state held the 230 MB), so a page above reloads the
+items on screen instead; row views no longer ask SwiftUI for their size again on every layout;
+rows within a screen of the viewport are measured a few per frame while nothing else draws.
+
+**Cold open** stays what the helper's latest page costs: the watch returns at most 60 items and 1 MB
+(`transcript.rs`), so decoding the first page does not grow with the session; the 2,100-item
+snapshot in `ChatPerformanceBudget` is a worst case no helper sends. Hovering a tab for 80 ms starts
+its Chat, so a link's round trip (80 ms in `testAPaneStartedAheadOpensOnRowsAlreadyLoaded`) is
+spent before the click.
+
+Existing budgets in the same runs: Mac long session first rows 83-116 ms, apply mean 1.2-1.6 ms,
+max 4.7-8.7 ms, stall 17-24 ms (with or without measuring ahead; 7 ms on a quiet machine before),
+smoothness CV 0.50, p95 23 ms. iOS first rows 127 ms, apply mean 2.2 ms, max 3.7 ms, stall 12 ms,
+smoothness CV 0.77, p95 32 ms.
+
 ### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 
 A window opens on the workspace this device saved of each host, before the host answers.
@@ -345,6 +394,10 @@ App (not measured end to end, because the Mac app is not launched in the foregro
   would roughly halve atlas memory (the atlas is now shared, so about 1.3 MB per font size).
 - **Other periodic SwiftUI views:** `TabSubtitle` (one per tab, 1 s) and the presence/knock timelines. Each is small,
   but they scale with tabs.
+- **Chat pane switch is SwiftUI-bound.** Switching back to a warm pane costs 59-67 ms, nearly all
+  of it building the pane's composer and overlays again. Keeping recent panes' views alive, or
+  moving the composer's state into `PaneChatState` so its hosting view is reused whole, would bring
+  it toward the 16 ms (Mac) and 33 ms (iOS) targets.
 - **Keystroke latency and frame pacing under load** were not measured. This needs instrumentation in the
   client (input → echo applied → frame presented).
 
