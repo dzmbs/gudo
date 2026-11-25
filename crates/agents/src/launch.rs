@@ -125,7 +125,8 @@ impl LaunchSpec {
     }
 
     /// The POSIX shell line that runs the program: `unset` of [`Self::env_remove`], `export`
-    /// of [`Self::env_pinned`], then the command.
+    /// of [`Self::env_pinned`], then the command, past any shell function of its name (the
+    /// one that runs a typed agent through its launch).
     ///
     /// # Examples
     ///
@@ -141,7 +142,7 @@ impl LaunchSpec {
     /// };
     /// assert_eq!(
     ///     spec.shell_line(),
-    ///     "unset ANTHROPIC_API_KEY; export CLAUDE_CONFIG_DIR='/s/a b'; claude --resume s1"
+    ///     "unset ANTHROPIC_API_KEY; export CLAUDE_CONFIG_DIR='/s/a b'; command claude --resume s1"
     /// );
     /// ```
     pub fn shell_line(&self) -> String {
@@ -161,6 +162,7 @@ impl LaunchSpec {
             .chain(&self.args)
             .map(|arg| shell_quote(&arg.to_string_lossy()))
             .collect();
+        line.push_str("command ");
         line.push_str(&command.join(" "));
         line
     }
@@ -522,6 +524,9 @@ mod tests {
             line.contains("export CODEX_HOME=/state/accounts/claude/a1b2; "),
             "{line}"
         );
-        assert!(line.ends_with(r"; codex resume 'it'\''s'"), "{line}");
+        assert!(
+            line.ends_with(r"; command codex resume 'it'\''s'"),
+            "{line}"
+        );
     }
 }

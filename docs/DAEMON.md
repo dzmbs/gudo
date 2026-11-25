@@ -493,6 +493,17 @@ changing their policy requires a helper update.
      is the pane's directory and that no other pane claimed.
   The id is persisted like Claude's and the pane resumes with `codex resume <id>` after a
   restart.
+- Claude Code typed at a prompt with the shell integration (zsh, bash, fish) runs through its
+  launch (`daemon::typed_agent`): the wrappers that load the integration define a `claude`
+  function that asks the daemon through the shim (`gudo-hook agent-typed claude <args>`) and
+  runs the pane's restart loop and exit fence, as a launch does, so it has its hooks, a pinned
+  session, Chat's controls and Send. The daemon takes an interactive session with the options
+  it knows (`--resume`/`-r <id>`, `--continue`/`-c`, `--session-id`, `--model`,
+  `--permission-mode`, `--effort`, and switches such as `--dangerously-skip-permissions`, which
+  are kept in the pane's agent record and passed at every start and restore); anything else (a
+  prompt, a subcommand, `-p`, another option) runs as typed, as does `command claude`. Launch
+  lines name `command <program>`, past the function. The added start is two shim calls and the
+  daemon's launch, 19 ms in all (median, release build, M-series Mac).
 - Agents started by hand in a shell pane (the foreground process is `claude` or `codex`, also
   under `node`/`bun`) are recorded under the system account, and their session id is learnt
   the same way: Codex's as above; Claude's from `--resume`/`-r`/`--session-id`, else the

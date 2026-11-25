@@ -76,6 +76,7 @@ mod term;
 mod theme;
 mod timeline;
 mod turn_message;
+pub mod typed_agent;
 mod upgrade;
 mod usage;
 mod ws;

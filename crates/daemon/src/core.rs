@@ -197,6 +197,10 @@ pub(crate) struct AgentRecord {
     /// with them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<agents::ClaudeConfig>,
+    /// Options the user typed it with that it starts with again (Claude Code's
+    /// `--dangerously-skip-permissions`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 /// A pane that closed, kept so a recently closed tab can come back (`PaneLaunch::Reopen`).
@@ -1794,28 +1798,38 @@ impl Core {
         cwd_hint: Option<String>,
         start: PaneStart,
     ) -> Result<(), (OpError, String)> {
-        let (restored, preamble, resumable, run_again, created_at, agent_delay, agent_config) =
-            match start {
-                PaneStart::New => (
-                    false,
-                    Vec::new(),
-                    None,
-                    None,
-                    proto::UnixMillis(crate::identity::now_millis()),
-                    Duration::ZERO,
-                    None,
-                ),
-                // Without a recorded creation time the pane may be older than any guest.
-                PaneStart::Restored(restored) => (
-                    restored.agent == AgentStart::Resumed,
-                    restored.preamble,
-                    restored.resumable,
-                    restored.run_again,
-                    restored.created_at.unwrap_or(proto::UnixMillis(0)),
-                    restored.agent_delay,
-                    restored.agent_config,
-                ),
-            };
+        let (
+            restored,
+            preamble,
+            resumable,
+            run_again,
+            created_at,
+            agent_delay,
+            agent_config,
+            agent_args,
+        ) = match start {
+            PaneStart::New => (
+                false,
+                Vec::new(),
+                None,
+                None,
+                proto::UnixMillis(crate::identity::now_millis()),
+                Duration::ZERO,
+                None,
+                Vec::new(),
+            ),
+            // Without a recorded creation time the pane may be older than any guest.
+            PaneStart::Restored(restored) => (
+                restored.agent == AgentStart::Resumed,
+                restored.preamble,
+                restored.resumable,
+                restored.run_again,
+                restored.created_at.unwrap_or(proto::UnixMillis(0)),
+                restored.agent_delay,
+                restored.agent_config,
+                restored.agent_args,
+            ),
+        };
         let agent_wait = if agent_delay.is_zero() {
             String::new()
         } else {
@@ -2179,6 +2193,9 @@ impl Core {
                 if let Some(config) = agent_config.as_ref().filter(|_| *kind == AgentKind::Claude) {
                     agents::ClaudeCode::apply_config(&mut spec, config);
                 }
+                if *kind == AgentKind::Claude {
+                    crate::agent_config::insert_options(&mut spec, &agent_args);
+                }
                 for file in &spec.files {
                     if let Some(dir) = file.path.parent() {
                         let _ = std::fs::create_dir_all(dir);
@@ -2215,6 +2232,7 @@ impl Core {
                                 spec.program != "claude",
                                 agent_config.clone().unwrap_or_default(),
                             )
+                            .with_switches(agent_args.clone())
                             .starts_afresh_on_failure_until(
                                 Instant::now()
                                     + agent_delay
@@ -2279,6 +2297,14 @@ impl Core {
         }
         crate::theme::apply_pane_env(&mut command);
         command.env(brand::env_var("PANE_ID"), id.0.to_string());
+        // The shim a typed agent's shell function asks to start it through its launch.
+        if self.cfg.hook_bin_runs() {
+            let hooks = &self.hooks;
+            command.env(brand::env_var("HOOK"), self.cfg.hook_bin());
+            command.env(brand::env_var("SOCK"), hooks.socket());
+            command.env(brand::env_var("TOKEN"), hooks.pane_token(id));
+            command.env(brand::env_var("ENDPOINT_FILE"), hooks.endpoint_file());
+        }
         for (key, value) in self
             .askpass
             .pane_env(self, id)
@@ -2341,6 +2367,7 @@ impl Core {
                     account: Some(account.clone()),
                     transcript: None,
                     config: agent_config.clone().filter(|_| *kind == AgentKind::Claude),
+                    args: agent_args.clone(),
                 }),
             worktree,
             resumable: resumable.clone(),
@@ -2460,6 +2487,7 @@ impl Core {
                 account: Some(proto::SYSTEM_ACCOUNT.into()),
                 transcript: None,
                 config: None,
+                args: Vec::new(),
             });
         }
         let created_at = *record.created_at.get_or_insert_with(|| {
@@ -3732,6 +3760,7 @@ pub(crate) fn record_agent_started_by_hand(
             account: Some(proto::SYSTEM_ACCOUNT.into()),
             transcript: None,
             config: None,
+            args: Vec::new(),
         });
     }
     core.mark_dirty();
@@ -3803,6 +3832,8 @@ pub(crate) struct Restored {
     pub agent_delay: Duration,
     /// What its Claude Code was last started with from Chat.
     pub agent_config: Option<agents::ClaudeConfig>,
+    /// Options its Claude Code was typed with, which it starts with again.
+    pub agent_args: Vec<String>,
 }
 
 /// A resuming agent reads its transcript and starts its runtime, about a second of CPU for
@@ -3989,6 +4020,11 @@ pub(crate) fn restore(
                 .filter(|command| !resumes_something && can_run_again(command)),
             created_at: record.created_at,
             agent_config: record.agent.as_ref().and_then(|agent| agent.config.clone()),
+            agent_args: record
+                .agent
+                .as_ref()
+                .map(|agent| agent.args.clone())
+                .unwrap_or_default(),
         }));
         if let Err((_, message)) = core.spawn_pane(id, launch, None, start) {
             tracing::warn!(pane = %id, "restoring pane failed: {message}");

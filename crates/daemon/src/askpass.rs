@@ -159,29 +159,26 @@ impl Askpass {
             conns: Mutex::default(),
             answered: Mutex::default(),
         };
-        if !config.enabled {
-            return this;
-        }
         let dir = state_dir.join("askpass");
-        let helper = dir.join(format!("{}-askpass", brand::CLI_BIN));
-        let script = format!(
-            "#!/bin/sh\n# Written by {}: asks the app for a password (docs/DAEMON.md §9).\nexec {} askpass \"$@\"\n",
-            brand::DAEMON_BIN,
-            shell_quote(&hook_bin.to_string_lossy()),
-        );
-        match write_executable(&helper, &script) {
-            Ok(()) => this.helper = Some(helper),
-            Err(error) => {
-                tracing::warn!("writing the askpass helper: {error}");
-                return this;
+        if config.enabled {
+            let helper = dir.join(format!("{}-askpass", brand::CLI_BIN));
+            let script = format!(
+                "#!/bin/sh\n# Written by {}: asks the app for a password (docs/DAEMON.md §9).\nexec {} askpass \"$@\"\n",
+                brand::DAEMON_BIN,
+                shell_quote(&hook_bin.to_string_lossy()),
+            );
+            match write_executable(&helper, &script) {
+                Ok(()) => this.helper = Some(helper),
+                Err(error) => tracing::warn!("writing the askpass helper: {error}"),
             }
         }
-        if config.sudo {
-            let integration_dir = state_dir.join("shell-integration");
-            match write_wrappers(&dir, &integration_dir) {
-                Ok(()) => this.wrappers = Some(dir),
-                Err(error) => tracing::warn!("writing the sudo wrappers: {error}"),
-            }
+        let wraps = Wraps {
+            sudo: config.sudo && this.helper.is_some(),
+        };
+        let integration_dir = state_dir.join("shell-integration");
+        match write_wrappers(&dir, &integration_dir, wraps) {
+            Ok(()) => this.wrappers = Some(dir),
+            Err(error) => tracing::warn!("writing the shell wrappers: {error}"),
         }
         this
     }
@@ -621,33 +618,75 @@ const SUDO_FISH: &str = r#"if status is-interactive; and set -q GUDO_ASKPASS_SUD
 end
 "#;
 
+/// The shell functions the wrappers define.
+#[derive(Debug, Clone, Copy)]
+struct Wraps {
+    /// `sudo` asks the app for the password.
+    sudo: bool,
+}
+
+/// `claude` typed at the prompt runs through its launch (`typed_agent`), so Chat drives it as
+/// one started with New agent. The function asks the daemon once; if it declines, or the pane
+/// has no shim, Claude Code runs as typed. The fence after it keeps unread Chat input from the
+/// shell, as after a launch, and ends the shell if it fails.
+const AGENT_SH: &str = r#"claude() {
+  local __gudo_launch
+  if [ -x "${GUDO_HOOK-}" ] && __gudo_launch=$("$GUDO_HOOK" agent-typed claude "$@" </dev/null 2>/dev/null); then
+    "$GUDO_HOOK" claude-relaunch "$__gudo_launch"
+    while "$GUDO_HOOK" claude-relaunch-pending "$__gudo_launch" </dev/null; do
+      "$GUDO_HOOK" claude-relaunch "$__gudo_launch"
+    done
+    "$GUDO_HOOK" agent-exit-fence "$__gudo_launch" || exit
+  else
+    command claude "$@"
+  fi
+}
+"#;
+
+const AGENT_FISH: &str = r#"if status is-interactive
+    function claude --wraps claude
+        if set -q GUDO_HOOK; and test -x "$GUDO_HOOK"; and set -l __gudo_launch ("$GUDO_HOOK" agent-typed claude $argv </dev/null 2>/dev/null)
+            "$GUDO_HOOK" claude-relaunch $__gudo_launch
+            while "$GUDO_HOOK" claude-relaunch-pending $__gudo_launch </dev/null
+                "$GUDO_HOOK" claude-relaunch $__gudo_launch
+            end
+            "$GUDO_HOOK" agent-exit-fence $__gudo_launch; or exit
+        else
+            command claude $argv
+        end
+    end
+end
+"#;
+
 /// Writes the zsh `ZDOTDIR` and bash `ENV` wrappers under `dir`, and fish's next to Ghostty's
 /// `vendor_conf.d` script under `integration_dir`.
-fn write_wrappers(dir: &Path, integration_dir: &Path) -> io::Result<()> {
+fn write_wrappers(dir: &Path, integration_dir: &Path, wraps: Wraps) -> io::Result<()> {
     let prefix = brand::ENV_PREFIX;
-    let sudo_sh = SUDO_SH.replace("GUDO_", prefix);
+    let functions = if wraps.sudo { SUDO_SH } else { "" };
+    let functions = format!("{functions}{AGENT_SH}").replace("GUDO_", prefix);
     let ghostty_zshenv = shell_quote(&integration_dir.join("zsh/.zshenv").to_string_lossy());
     let zshenv = format!(
         "# Written by {daemon}: Ghostty's zsh integration, then the askpass `sudo` wrapper\n\
-         # (docs/DAEMON.md §9).\n\
+         # (docs/DAEMON.md §9) and typed agents' launch.\n\
          builtin source {ghostty_zshenv}\n\
-         if [[ -o interactive ]]; then\n{sudo_sh}fi\n",
+         if [[ -o interactive ]]; then\n{functions}fi\n",
         daemon = brand::DAEMON_BIN,
     );
     write_executable(&dir.join("zsh/.zshenv"), &zshenv)?;
     let ghostty_bash = shell_quote(&integration_dir.join("bash/ghostty.bash").to_string_lossy());
     let bash = format!(
         "# Written by {daemon}: Ghostty's bash integration, then the askpass `sudo` wrapper\n\
-         # (docs/DAEMON.md §9).\n\
+         # (docs/DAEMON.md §9) and typed agents' launch.\n\
          builtin source {ghostty_bash}\n\
-         if [[ $- == *i* ]]; then\n{sudo_sh}fi\n",
+         if [[ $- == *i* ]]; then\n{functions}fi\n",
         daemon = brand::DAEMON_BIN,
     );
     write_executable(&dir.join("askpass.bash"), &bash)?;
+    let sudo_fish = if wraps.sudo { SUDO_FISH } else { "" };
     let fish = format!(
-        "# Written by {}: the askpass `sudo` wrapper (docs/DAEMON.md §9).\n{}",
+        "# Written by {}: the askpass `sudo` wrapper (docs/DAEMON.md §9) and typed agents' launch.\n{}",
         brand::DAEMON_BIN,
-        SUDO_FISH.replace("GUDO_", prefix)
+        format!("{sudo_fish}{AGENT_FISH}").replace("GUDO_", prefix)
     );
     write_executable(
         &integration_dir.join(format!(
@@ -736,5 +775,39 @@ mod tests {
             Path::new("/x"),
         );
         assert!(off.helper.is_none());
+        let zshenv = std::fs::read_to_string(dir.path().join("askpass/zsh/.zshenv")).unwrap();
+        assert!(
+            !zshenv.contains("sudo()") && zshenv.contains("claude()"),
+            "without askpass a typed agent still runs through its launch: {zshenv}"
+        );
+    }
+
+    /// Every shell the wrappers are for reads them without a syntax error.
+    #[test]
+    fn the_wrappers_parse_in_their_shells() {
+        let dir = tempfile::tempdir().unwrap();
+        Askpass::install(&AskpassConfig::default(), dir.path(), Path::new("/x"));
+        let fish = dir.path().join(format!(
+            "shell-integration/fish/vendor_conf.d/{}-askpass.fish",
+            brand::CLI_BIN
+        ));
+        for (shell, file) in [
+            ("zsh", dir.path().join("askpass/zsh/.zshenv")),
+            ("bash", dir.path().join("askpass/askpass.bash")),
+            ("fish", fish),
+        ] {
+            let Ok(output) = std::process::Command::new(shell)
+                .arg("-n")
+                .arg(&file)
+                .output()
+            else {
+                continue;
+            };
+            assert!(
+                output.status.success(),
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 }

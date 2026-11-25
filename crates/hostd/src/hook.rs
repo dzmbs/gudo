@@ -37,6 +37,7 @@ mod codex_remote;
 mod launch_failure;
 mod mcp;
 mod term_tools;
+mod typed_agent;
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -55,6 +56,7 @@ pub fn run_hook(arguments: &[String]) {
             std::process::exit(claude_relaunch::pending(&arguments[1..]))
         }
         Some("claude-relaunch") => std::process::exit(claude_relaunch::relaunch(&arguments[1..])),
+        Some("agent-typed") => std::process::exit(typed_agent::main(&arguments[1..])),
         Some("agent-input-arm") => std::process::exit(agent_exit_fence::main(
             &arguments[1..],
             agent_exit_fence::FenceAction::Arm,

@@ -125,6 +125,14 @@ impl AgentInputGate {
         }
     }
 
+    /// Armed already: the shell function that asked for `launch` starts the agent at once,
+    /// with no step of its own to arm it.
+    pub(crate) fn armed(launch: String) -> Self {
+        let mut gate = Self::pending(launch.clone());
+        gate.arm(&launch);
+        gate
+    }
+
     /// The launch this pane's input belongs to, for the build a hot upgrade hands it to.
     pub(crate) fn to_carried(&self) -> Option<CarriedLaunch> {
         match &self.phase {

@@ -1028,6 +1028,13 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         reader.get_mut().set_limit(u64::MAX);
         return crate::agent_driver::pi::bridge::serve(core, call, peer_uid, reader, write).await;
     }
+    if let Ok(call) = serde_json::from_str::<crate::typed_agent::TypedAgentCall>(&line) {
+        let reply = crate::typed_agent::serve(core, call);
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
+        return write.shutdown().await;
+    }
     if let Ok(call) = serde_json::from_str::<crate::agent_config::RelaunchCall>(&line) {
         let reply = crate::agent_config::serve_relaunch(core, call);
         let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;

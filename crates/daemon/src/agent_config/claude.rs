@@ -68,6 +68,8 @@ pub(crate) struct ClaudeLaunch {
     /// Until when an exit before it reports its session starts it again on a new
     /// conversation; used once.
     fresh_start_until: Option<Instant>,
+    /// Options the user started it with that every start keeps (`--dangerously-skip-permissions`).
+    switches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,8 @@ pub(crate) struct CarriedClaudeLaunch {
     relaunch: Option<Relaunch>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     starting: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    switches: Vec<String>,
 }
 
 impl ClaudeLaunch {
@@ -118,7 +122,14 @@ impl ClaudeLaunch {
             awaits_prompt: false,
             starting: true,
             fresh_start_until: None,
+            switches: Vec::new(),
         }
+    }
+
+    /// One started with `switches`, which every start of it keeps.
+    pub fn with_switches(mut self, switches: Vec<String>) -> Self {
+        self.switches = switches;
+        self
     }
 
     /// A resumed launch that, should it exit before `deadline` without reporting its
@@ -148,6 +159,7 @@ impl ClaudeLaunch {
             pending: self.pending.clone(),
             relaunch: self.relaunch.clone(),
             starting: self.starting,
+            switches: self.switches.clone(),
         })
     }
 
@@ -166,6 +178,7 @@ impl ClaudeLaunch {
             relaunch: carried.relaunch,
             starting: carried.starting,
             fresh_start_until: None,
+            switches: carried.switches,
         }
     }
 }
@@ -570,6 +583,7 @@ fn restart(core: &Core, entry: &PaneEntry) -> Result<(), WsError> {
                 .as_ref()
                 .map(|launch| launch.session.clone())
         })
+        .filter(|session| crate::claude_session::is_session_id(session))
         .ok_or_else(|| WsError::Unavailable("Claude Code cannot restart here.".into()))?;
     let has_conversation = {
         let meta = lock(&entry.meta);
@@ -676,6 +690,24 @@ fn loop_relaunch(
             .map_err(|error| WsError::Failed(format!("{}: {error}", file.path.display())))?;
     }
     ClaudeCode::apply_config(&mut spec, config);
+    insert_options(&mut spec, &launch.switches);
+    Ok(relaunch_of(&spec))
+}
+
+/// Puts `options` before `--mcp-config`, which must stay last but for `--settings` because it
+/// takes several values.
+pub(crate) fn insert_options(spec: &mut agents::LaunchSpec, options: &[String]) {
+    let at = spec
+        .args
+        .iter()
+        .position(|arg| arg == "--mcp-config")
+        .unwrap_or(spec.args.len());
+    spec.args
+        .splice(at..at, options.iter().map(std::ffi::OsString::from));
+}
+
+/// What the launch script's loop starts Claude Code with for `spec`.
+fn relaunch_of(spec: &agents::LaunchSpec) -> Relaunch {
     let display = spec.program != "claude";
     let args = spec
         .args
@@ -683,11 +715,11 @@ fn loop_relaunch(
         .skip(usize::from(display))
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    Ok(Relaunch {
+    Relaunch {
         args,
         display,
         notice: None,
-    })
+    }
 }
 
 /// `claude --resume <session>` with the settings, as the user would type it.
@@ -771,6 +803,109 @@ fn type_at_prompt(core: &Core, pane: PaneId, line: String) {
             }
         }
     });
+}
+
+/// How a Claude Code typed in a shell pane starts on its conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TypedSession {
+    /// A new conversation, under this id.
+    Fresh(String),
+    Resume(String),
+    /// The newest conversation in its directory (`--continue`), named once it reports it.
+    Continue,
+}
+
+/// Starts a Claude Code the user typed in `entry`'s shell through the pane's restart loop, as
+/// one the daemon launches: its hooks, pinned session and Chat controls. Returns the launch the
+/// shell function runs.
+pub(crate) fn typed_launch(
+    core: &Core,
+    entry: &PaneEntry,
+    context: agents::LaunchContext,
+    session: TypedSession,
+    config: ClaudeConfig,
+    switches: Vec<String>,
+) -> Result<String, WsError> {
+    let pane = entry.pane.id;
+    let (mode, session_id, extra) = match session {
+        TypedSession::Fresh(id) => (
+            LaunchMode::Fresh {
+                session_id: Some(agents::NativeSessionId::new(id.clone())),
+            },
+            id,
+            None,
+        ),
+        TypedSession::Resume(id) => (
+            LaunchMode::Resume {
+                session_id: agents::NativeSessionId::new(id.clone()),
+            },
+            id,
+            None,
+        ),
+        TypedSession::Continue => (
+            LaunchMode::Fresh { session_id: None },
+            String::new(),
+            Some("--continue".to_owned()),
+        ),
+    };
+    let resumed = !matches!(
+        mode,
+        LaunchMode::Fresh {
+            session_id: Some(_)
+        }
+    );
+    let display = core.cfg.claude_chat_streaming && core.hooks.display_http.is_some();
+    let mut launch = ClaudeLaunch::new(
+        crate::agent::new_uuid(),
+        context,
+        session_id.clone(),
+        resumed,
+        display,
+        config.clone(),
+    )
+    .with_switches(switches.clone());
+    let mut relaunch = loop_relaunch(core, pane, &launch, &mode, &config)?;
+    if let Some(extra) = extra {
+        let at = relaunch
+            .args
+            .iter()
+            .position(|arg| arg == "--mcp-config")
+            .unwrap_or(relaunch.args.len());
+        relaunch.args.insert(at, extra);
+    }
+    launch.display = relaunch.display;
+    launch.relaunch = Some(relaunch);
+    launch.relaunched_at = Some(Instant::now());
+    let launch_id = launch.launch_id.clone();
+    *lock(&entry.pane.agent_input_gate) =
+        crate::agent_input::AgentInputGate::armed(launch_id.clone());
+    *lock(&entry.claude_launch) = Some(launch);
+    let session_id = crate::claude_session::is_session_id(&session_id).then_some(session_id);
+    if let Some(session) = &session_id {
+        core.ws
+            .accounts
+            .pin(proto::AgentKind::Claude, session, proto::SYSTEM_ACCOUNT);
+    }
+    lock(&entry.record).agent = Some(crate::core::AgentRecord {
+        kind: proto::AgentKind::Claude,
+        session_id: session_id.clone(),
+        account: Some(proto::SYSTEM_ACCOUNT.into()),
+        transcript: None,
+        config: (!config.is_empty()).then_some(config),
+        args: switches,
+    });
+    *lock(&entry.agent) = Some(crate::agent::AgentRuntime::new(
+        proto::AgentKind::Claude,
+        pane,
+        crate::agent::adapter(proto::AgentKind::Claude),
+        false,
+    ));
+    core.mark_dirty();
+    core.emit(crate::core::Event::Accounts);
+    core.emit(crate::core::Event::PaneMeta(pane));
+    super::changed(core, pane);
+    tracing::info!(%pane, program = "claude", session = ?session_id, "Claude Code typed in the pane runs through its launch");
+    Ok(launch_id)
 }
 
 /// A resumed Claude Code exited before it reported its conversation: it could not resume it.
