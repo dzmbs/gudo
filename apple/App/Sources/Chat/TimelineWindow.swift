@@ -207,7 +207,12 @@ nonisolated struct TimelineWindow: Sendable {
 
     private mutating func snapshot(_ snapshot: TimelineSnapshot, reset: Bool, protectsHistory: Bool, changes: inout TimelineChanges) {
         if !reset, let cursor, cursor.epoch == snapshot.cursor.epoch, snapshot.cursor.sequence < cursor.sequence { return }
-        let shouldReset = reset || cursor?.epoch != snapshot.cursor.epoch || session?.nativeSession != snapshot.session.nativeSession || (order.isEmpty && note != nil)
+        // A reader at the bottom whose session moved past every loaded row (a pane shown again
+        // after a long turn) follows to the latest page rather than stopping at a gap.
+        let followsPastLoadedRows = !protectsHistory && !hasNewerGap && !order.isEmpty
+            && !snapshot.items.isEmpty && !snapshot.items.contains { items[$0.id] != nil }
+        let shouldReset = reset || cursor?.epoch != snapshot.cursor.epoch || session?.nativeSession != snapshot.session.nativeSession
+            || (order.isEmpty && note != nil) || followsPastLoadedRows
         // A snapshot must fit as a page: endlessly refreshing the same over-budget page
         // cannot repair a missing boundary. Keep a bounded Terminal fallback instead.
         if snapshot.items.reduce(0, { $0 + TimelineValueWeight.of($1) }) > byteLimit {

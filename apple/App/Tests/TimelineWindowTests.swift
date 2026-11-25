@@ -68,6 +68,27 @@ final class TimelineWindowTests: XCTestCase {
         XCTAssertEqual(Set(window.order).count, window.order.count)
     }
 
+    /// A pane shown again after its agent wrote more than a page while it was away.
+    func testARefreshPastTheLoadedRowsReplacesAFollowingWindowWithTheLatestPage() throws {
+        var window = TimelineWindow()
+        _ = window.replace(try snapshot(100..<160))
+        _ = try window.prepend(snapshot(0..<100, before: nil))
+        let changes = window.reconcile(try snapshot(300..<360, sequence: 40, before: 300))
+        XCTAssertTrue(changes.didReset)
+        XCTAssertFalse(window.hasNewerGap)
+        XCTAssertEqual(window.order, (300..<360).map { "m\($0)" })
+        XCTAssertEqual(window.before, 300)
+    }
+
+    func testARefreshPastTheLoadedRowsKeepsAReadersHistoryBehindTheLatestGap() throws {
+        var window = TimelineWindow()
+        _ = window.replace(try snapshot(100..<160))
+        let changes = window.reconcile(try snapshot(300..<360, sequence: 40, before: 300), protectsHistory: true)
+        XCTAssertFalse(changes.didReset)
+        XCTAssertTrue(window.hasNewerGap)
+        XCTAssertEqual(window.order.first, "m100")
+    }
+
     func testAnEmptyAuthoritativeSnapshotClearsTheWindow() throws {
         var window = TimelineWindow()
         _ = window.replace(try snapshot(0..<60))
