@@ -261,3 +261,60 @@ fn resolution_of_one_request_does_not_unblock_another() {
         "resolved does not mean approved or completed"
     );
 }
+
+/// A live Codex that resumes another conversation inside itself (its TUI's `/resume`) reports
+/// it: the pane's record follows the thread it binds, as restore and Chat read it.
+#[tokio::test]
+async fn a_thread_resumed_inside_codex_is_the_panes_conversation() {
+    let raw = crate::agent_input::chat_tests::raw_fixture().await;
+    let core = &raw.daemon.core;
+    let pane = raw.entry.pane.id;
+    raw.entry.stop_task();
+    *lock(&raw.entry.agent) = Some(AgentRuntime::structured(
+        proto::AgentKind::Codex,
+        pane,
+        crate::agent::adapter(proto::AgentKind::Codex),
+    ));
+    {
+        let mut record = lock(&raw.entry.record);
+        let agent = record.agent.as_mut().unwrap();
+        agent.kind = proto::AgentKind::Codex;
+        agent.session_id = None;
+    }
+    let source = super::super::tests::source();
+    *lock(&raw.entry.codex) = Some(Arc::clone(&source));
+    source.set_owner(core, &raw.entry);
+    source.capture_context(raw.root.path().to_owned(), raw.entry.pane.pty().pid());
+    observe(
+        &source,
+        json!({"id":1,"method":"thread/start"}),
+        Direction::FromTui,
+    );
+    observe(
+        &source,
+        json!({"id":1,"result":{"thread":{"id":"primary"}}}),
+        Direction::FromServer,
+    );
+    observe(
+        &source,
+        json!({"id":2,"method":"thread/resume","params":{"threadId":"other"}}),
+        Direction::FromTui,
+    );
+    observe(
+        &source,
+        json!({"id":2,"result":{"thread":{"id":"other","turns":[]}}}),
+        Direction::FromServer,
+    );
+    observe(
+        &source,
+        json!({"method":"turn/started","params":{"threadId":"other","turn":{"id":"turn","status":"inProgress"}}}),
+        Direction::FromServer,
+    );
+    let recorded = lock(&raw.entry.record)
+        .agent
+        .as_ref()
+        .unwrap()
+        .session_id
+        .clone();
+    assert_eq!(recorded.as_deref(), Some("other"));
+}
