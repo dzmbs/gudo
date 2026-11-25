@@ -271,17 +271,25 @@ fn source(core: &Core, pane: PaneId) -> Result<Source, WsError> {
             session
                 .and_then(|session| session.native_id.as_ref())
                 .map(ToString::to_string)
-                .or(agent.session_id),
+                .or_else(|| agent.session_id.clone()),
             session.and_then(|session| session.transcript.clone()),
         )
     };
     let hook_path = hook_path.or_else(|| {
         agent.transcript.filter(|saved| {
-            native_session
-                .as_deref()
-                .is_some_and(|session| saved.file_stem() == Some(std::ffi::OsStr::new(session)))
+            native_session.as_deref().is_some_and(|session| {
+                saved.file_stem() == Some(std::ffi::OsStr::new(session))
+                    || (agent.session_id.as_deref() == Some(session)
+                        && !saved.with_file_name(format!("{session}.jsonl")).exists())
+            })
         })
     });
+    // A Claude Code that resumed another conversation from inside keeps its own session id in
+    // its hooks but writes that conversation's transcript, whose entries carry its id.
+    let native_session = hook_path
+        .as_deref()
+        .and_then(crate::claude_session::transcript_session)
+        .or(native_session);
     let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
     let context = core.ws.accounts.context(agent.kind, account);
     if context.is_none() && account != proto::SYSTEM_ACCOUNT {

@@ -1849,6 +1849,14 @@ async fn a_claude_that_cannot_resume_comes_back_running() {
         &[UNUSED_ID, UNRESUMABLE_ID, SWITCHED_ID, RESUMED_INSIDE_ID],
         &log,
     );
+    // Chat shows the conversation the agent writes, not the session it started with.
+    let chat = client
+        .client
+        .timeline_watch(resumed_inside)
+        .await
+        .unwrap_or_else(|error| panic!("Chat: {error}\n{}", hostd.log()));
+    assert_eq!(chat.session.native_session, RESUMED_INSIDE_ID);
+    assert!(!chat.items.is_empty(), "{}", hostd.log());
     let claude_pid: u32 = printed(&client.text(never_used), "claude-pid")
         .unwrap()
         .parse()
