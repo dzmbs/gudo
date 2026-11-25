@@ -122,6 +122,10 @@ async fn start_daemon(dir: &Path, shell: &Path) -> Daemon {
                 "PI_CODING_AGENT_DIR".into(),
                 home.join(".pi").to_string_lossy().into_owned(),
             ),
+            (
+                "PI_CODING_AGENT_SESSION_DIR".into(),
+                home.join(".pi-sessions").to_string_lossy().into_owned(),
+            ),
         ]);
     })
     .await
@@ -361,9 +365,9 @@ async fn typed_codex_and_pi_run_through_their_launch() {
         let started = up_line(&mut owner, pi, "PI-UP").await;
         assert!(started.contains("--extension"), "{shell:?}: {started}");
         let plain = shell_pane(&mut owner, &work).await;
-        owner.type_line(plain, "pi --model x");
+        owner.type_line(plain, "pi --mode json");
         let typed = up_line(&mut owner, plain, "PI-UP").await;
-        assert_eq!(typed.trim(), "PI-UP --model x", "{shell:?}");
+        assert_eq!(typed.trim(), "PI-UP --mode json", "{shell:?}");
         daemon.shutdown().await;
     }
 }
@@ -496,5 +500,284 @@ async fn the_first_send_takes_over_a_claude_started_by_hand() {
         .filter(|line| line.starts_with("GOT:") && line.contains("hello there"))
         .count();
     assert_eq!(arrived, 1, "{}", owner.text(pane));
+    daemon.shutdown().await;
+}
+
+const CODEX_FIRST: &str = "0199a213-1111-7800-8aa1-bbab2a035a53";
+const PI_FIRST: &str = "0199b000-aaaa";
+const PI_SWITCHED: &str = "0199b000-bbbb";
+
+/// Codex or pi as the real ones show themselves to the process table (`codex …`, `pi …`),
+/// writing their conversation where they do: Codex holds its rollout open, pi appends to its
+/// session file. Each prints its options, turns bracketed paste on and prints each line it
+/// reads; a line `switch` makes pi write another session, as its `/resume` does.
+const RUNNING_AGENT: &str = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+int main(int argc, char **argv) {
+    const char *name = strrchr(argv[0], '/') ? strrchr(argv[0], '/') + 1 : argv[0];
+    int codex = !strcmp(name, "codex");
+    if (argc > 1 && !strcmp(argv[1], "--version")) {
+        printf(codex ? "codex-cli 0.1.0\n" : "0.1.0\n");
+        return 0;
+    }
+    const char *session = codex ? CODEX_FIRST : PI_FIRST;
+    printf("AGENT-UP");
+    for (int i = 1; i < argc; i++) {
+        printf(" %s", argv[i]);
+        if (i + 1 < argc && !strcmp(argv[i], codex ? "resume" : "--session")) {
+            session = argv[i + 1];
+        }
+    }
+    printf("\n");
+    fflush(stdout);
+    char path[4096], command[8192];
+    FILE *written;
+    if (codex) {
+        snprintf(path, sizeof path, "%s/sessions/2026/11/25", getenv("CODEX_HOME"));
+        snprintf(command, sizeof command, "mkdir -p '%s'", path);
+        system(command);
+        snprintf(path + strlen(path), sizeof path - strlen(path),
+            "/rollout-2026-11-25T10-00-00-%s.jsonl", session);
+        written = fopen(path, "a");
+        fprintf(written, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"%s\",\"history_mode\":\"paginated\"}}\n", session);
+    } else {
+        const char *folder = getenv("PI_CODING_AGENT_SESSION_DIR");
+        snprintf(command, sizeof command, "mkdir -p '%s'", folder);
+        system(command);
+        snprintf(path, sizeof path, "%s/2026-11-25T10-00-00-000Z_%s.jsonl", folder, session);
+        written = fopen(path, "a");
+        fprintf(written, "{\"type\":\"session\",\"version\":3,\"id\":\"%s\"}\n", session);
+    }
+    fflush(written);
+    printf("\033[?2004h");
+    fflush(stdout);
+    char line[8192];
+    while (fgets(line, sizeof line, stdin)) {
+        printf("GOT: %s", line);
+        fflush(stdout);
+        if (!codex && !strncmp(line, "switch", 6)) {
+            fclose(written);
+            snprintf(path, sizeof path, "%s/2026-11-25T10-00-00-000Z_%s.jsonl",
+                getenv("PI_CODING_AGENT_SESSION_DIR"), PI_SWITCHED);
+            written = fopen(path, "a");
+            printf("PI-SWITCHED\n");
+            fflush(stdout);
+        }
+        fprintf(written, "{\"type\":\"message\"}\n");
+        fflush(written);
+    }
+    return 0;
+}
+"#;
+
+/// Builds `RUNNING_AGENT` as `codex` and `pi` in the daemon's programs folder, over the scripts.
+fn build_running_agents(dir: &Path) {
+    let source = dir.join("agent.c");
+    std::fs::write(&source, RUNNING_AGENT).unwrap();
+    for name in ["codex", "pi"] {
+        let built = std::process::Command::new("cc")
+            .arg(format!("-DCODEX_FIRST=\"{CODEX_FIRST}\""))
+            .arg(format!("-DPI_FIRST=\"{PI_FIRST}\""))
+            .arg(format!("-DPI_SWITCHED=\"{PI_SWITCHED}\""))
+            .arg("-o")
+            .arg(dir.join("programs").join(name))
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{built:?}");
+    }
+}
+
+/// Waits until Chat offers the pane a send that takes its agent over.
+async fn offers_takeover(owner: &TestClient, pane: PaneId) {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let watch = owner.client.timeline_watch_capabilities(pane).await;
+        if let Ok(watch) = &watch
+            && watch
+                .capabilities
+                .contains(client_core::proto::AgentCapabilities::SEND_AFTER_TAKEOVER)
+        {
+            assert!(
+                !watch
+                    .capabilities
+                    .contains(client_core::proto::AgentCapabilities::SEND),
+                "{:?}",
+                watch.capabilities
+            );
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never offered a send after takeover ({:?}):\n{}",
+            watch.as_ref().map(|watch| watch.capabilities),
+            owner.text(pane)
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Sends `text` from Chat and waits for the agent to print it, once.
+async fn sends_once(owner: &mut TestClient, pane: PaneId, text: &str) {
+    let prepared = owner.client.chat_prepare(pane).await.unwrap();
+    let client_core::proto::ChatSendStatus::Prepared { ticket, .. } = prepared else {
+        panic!("{prepared:?}\n{}", owner.text(pane))
+    };
+    let sent = owner
+        .client
+        .chat_send(pane, ticket, text.into(), None)
+        .await;
+    let deadline = Instant::now() + TIMEOUT;
+    while !owner.flat_text(pane).contains(text) {
+        assert!(
+            Instant::now() < deadline,
+            "{sent:?}: never arrived:\n{}",
+            owner.text(pane)
+        );
+        owner.until("pane output", |_| true).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    owner.until("pending output", |_| true).await;
+    let arrived = owner
+        .text(pane)
+        .lines()
+        .filter(|line| line.starts_with("GOT:") && line.contains(text))
+        .count();
+    assert_eq!(arrived, 1, "{}", owner.text(pane));
+}
+
+/// A Codex and a pi started by hand with their own options: the first Chat send restarts each
+/// through its launch on its conversation, with those options, and the message arrives once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_first_send_takes_over_a_codex_and_a_pi_started_by_hand() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let daemon = start_daemon(dir.path(), Path::new("/bin/zsh")).await;
+    build_running_agents(dir.path());
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    for (typed, kept, session) in [
+        (
+            "command codex -m o3",
+            "--model o3",
+            format!("resume {CODEX_FIRST}"),
+        ),
+        (
+            "command pi --model sonnet",
+            "--model sonnet",
+            format!("--session {PI_FIRST}"),
+        ),
+    ] {
+        let pane = shell_pane(&mut owner, &work).await;
+        owner.type_line(pane, typed);
+        started_with(&mut owner, pane, "").await;
+        offers_takeover(&owner, pane).await;
+        sends_once(&mut owner, pane, "hello there").await;
+        let restarted = started_with(&mut owner, pane, kept).await;
+        assert!(restarted.contains(&session), "{typed}: {restarted}");
+        assert!(
+            owner
+                .flat_text(pane)
+                .contains("Restarted here so Chat can send to it."),
+            "{}",
+            owner.text(pane)
+        );
+    }
+    daemon.shutdown().await;
+}
+
+/// A pi that resumes another session inside itself is followed: a cold restart brings back the
+/// one it writes, with the options it was typed with.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_pi_that_switched_sessions_comes_back_on_the_one_it_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let daemon = start_daemon(dir.path(), Path::new("/bin/zsh")).await;
+    build_running_agents(dir.path());
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let pane = shell_pane(&mut owner, &work).await;
+    owner.type_line(pane, "command pi --model sonnet --thinking high");
+    started_with(&mut owner, pane, "").await;
+    let layout = dir.path().join("state/layout.json");
+    let saved = |session: &str| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let text = std::fs::read_to_string(&layout).unwrap_or_default();
+            if text.contains(&format!("\"session_id\": \"{session}\"")) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{session} never saved:\n{text}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    saved(PI_FIRST);
+    // pi writes the other session once it takes a message there.
+    std::thread::sleep(Duration::from_millis(50));
+    owner.type_line(pane, "switch");
+    owner.wait_text(pane, "PI-SWITCHED").await;
+    owner.type_line(pane, "on the other one");
+    saved(PI_SWITCHED);
+    daemon.shutdown().await;
+
+    let daemon = start_daemon(dir.path(), Path::new("/bin/zsh")).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner.until("layout", |owner| owner.layout.is_some()).await;
+    owner.follow(pane).await;
+    let restored = started_with(&mut owner, pane, "--session").await;
+    assert!(
+        restored.contains(PI_SWITCHED) && restored.contains("--model sonnet --thinking high"),
+        "{restored}"
+    );
+    daemon.shutdown().await;
+}
+
+/// A Codex typed with options runs through its launch with them, and a restore brings it back
+/// with the same options on its conversation; the prompt it was typed with is not sent again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_typed_codex_keeps_its_options_across_a_restore() {
+    let dir = tempfile::tempdir().unwrap();
+    let work = dir.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let daemon = start_daemon(dir.path(), Path::new("/bin/zsh")).await;
+    build_running_agents(dir.path());
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.attach_and_follow().await;
+    let pane = shell_pane(&mut owner, &work).await;
+    owner.type_line(pane, "codex -m o3 --search 'fix the parser'");
+    let first = started_with(&mut owner, pane, "--model o3").await;
+    assert!(
+        first.contains("--search") && first.contains("fix the parser") && first.contains("tui."),
+        "{first}"
+    );
+    let layout = dir.path().join("state/layout.json");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !std::fs::read_to_string(&layout)
+        .unwrap_or_default()
+        .contains(&format!("\"session_id\": \"{CODEX_FIRST}\""))
+    {
+        assert!(Instant::now() < deadline, "the rollout never saved");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    daemon.shutdown().await;
+
+    let daemon = start_daemon(dir.path(), Path::new("/bin/zsh")).await;
+    let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+    owner.client.attach(None);
+    owner.until("layout", |owner| owner.layout.is_some()).await;
+    owner.follow(pane).await;
+    let restored = started_with(&mut owner, pane, "resume").await;
+    assert!(
+        restored.contains("--model o3")
+            && restored.contains("--search")
+            && restored.contains(CODEX_FIRST)
+            && !restored.contains("fix the parser"),
+        "{restored}"
+    );
     daemon.shutdown().await;
 }

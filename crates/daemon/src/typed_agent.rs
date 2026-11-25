@@ -143,8 +143,8 @@ pub(crate) fn serve(core: &Arc<Core>, call: TypedAgentCall) -> TypedAgentReply {
             )
             .map_err(|error| error.to_string())
         }),
-        "codex" => parse_codex(&args).map(|resume| start_codex(core, &entry, &context, resume)),
-        "pi" => parse_pi(&args).map(|session| start_pi(core, &entry, &context, session)),
+        "codex" => parse_codex(&args).map(|typed| start_codex(core, &entry, &context, typed)),
+        "pi" => parse_pi(&args).map(|typed| start_pi(core, &entry, &context, typed)),
         _ => None,
     };
     match started {
@@ -163,16 +163,134 @@ pub(crate) fn serve(core: &Arc<Core>, call: TypedAgentCall) -> TypedAgentReply {
     }
 }
 
-/// A Codex typed as `codex` or `codex resume <id>`: the session it resumes. Its own options
-/// and subcommands run as typed; Chat sets the model and modes of one it launches.
-pub(crate) fn parse_codex(args: &[String]) -> Option<Option<String>> {
-    match args {
-        [] => Some(None),
-        [resume, id] if resume == "resume" && crate::resumable::is_session_id(id) => {
-            Some(Some(id.clone()))
+/// A Codex typed with options the daemon starts it with: the session it resumes, the options it
+/// keeps at every start, and the prompt it starts with once.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct TypedCodex {
+    pub resume: Option<String>,
+    pub options: Vec<String>,
+    pub prompt: Option<String>,
+}
+
+/// Codex's options that take a value: `(short, long)`, as `codex --help` names them.
+const CODEX_VALUE_OPTIONS: &[(Option<&str>, &str)] = &[
+    (Some("-m"), "--model"),
+    (Some("-s"), "--sandbox"),
+    (Some("-a"), "--ask-for-approval"),
+    (Some("-c"), "--config"),
+    (Some("-C"), "--cd"),
+    (Some("-p"), "--profile"),
+    (None, "--add-dir"),
+    (None, "--enable"),
+    (None, "--disable"),
+    (None, "--local-provider"),
+];
+
+/// Codex's subcommands but `resume`, as `codex --help` lists them: they run as typed.
+const CODEX_SUBCOMMANDS: &[&str] = &[
+    "agents",
+    "exec",
+    "e",
+    "review",
+    "login",
+    "logout",
+    "mcp",
+    "plugin",
+    "app-server",
+    "remote-control",
+    "app",
+    "completion",
+    "update",
+    "doctor",
+    "sandbox",
+    "debug",
+    "apply",
+    "a",
+    "queue",
+    "archive",
+    "delete",
+    "migrate-rollouts",
+    "migrate-nfs-db",
+    "unarchive",
+    "fork",
+    "cloud",
+    "exec-server",
+    "features",
+    "help",
+];
+
+/// Codex's options without a value that the daemon starts it with.
+const CODEX_SWITCHES: &[&str] = &[
+    "--search",
+    "--full-auto",
+    "--yolo",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--oss",
+    "--no-alt-screen",
+];
+
+/// What `codex <args>` asks for when it is an interactive session the daemon can start: no
+/// subcommand but `resume <id>`, options it knows, and at most one prompt. Anything else (a
+/// subcommand, the resume picker, an unknown option) runs as typed.
+pub(crate) fn parse_codex(args: &[String]) -> Option<TypedCodex> {
+    let mut typed = TypedCodex::default();
+    let mut resuming = false;
+    let mut positionals = Vec::new();
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            positionals.extend(arguments.by_ref().cloned());
+            break;
         }
-        _ => None,
+        if argument.starts_with('-') {
+            let (flag, inline) = match argument.split_once('=') {
+                Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+                _ => (argument.as_str(), None),
+            };
+            if let Some((_, long)) = CODEX_VALUE_OPTIONS
+                .iter()
+                .find(|(short, long)| *short == Some(flag) || *long == flag)
+            {
+                let value = match inline {
+                    Some(value) => value.to_owned(),
+                    None => arguments.next()?.clone(),
+                };
+                if value.is_empty() || value.starts_with('-') {
+                    return None;
+                }
+                typed.options.extend([(*long).to_owned(), value]);
+                continue;
+            }
+            if inline.is_none() && CODEX_SWITCHES.contains(&flag) {
+                typed.options.push(flag.to_owned());
+                continue;
+            }
+            return None;
+        }
+        if positionals.is_empty() && !resuming {
+            if argument == "resume" {
+                resuming = true;
+                continue;
+            }
+            if CODEX_SUBCOMMANDS.contains(&argument.as_str()) {
+                return None;
+            }
+        }
+        positionals.push(argument.clone());
     }
+    let mut positionals = positionals.into_iter();
+    if resuming {
+        let id = positionals.next()?;
+        if !crate::resumable::is_session_id(&id) {
+            return None;
+        }
+        typed.resume = Some(id);
+    }
+    typed.prompt = positionals.next();
+    if positionals.next().is_some() || typed.prompt.as_deref() == Some("") {
+        return None;
+    }
+    Some(typed)
 }
 
 /// How a typed pi starts: on its session, the newest in its directory, or a new one.
@@ -183,25 +301,93 @@ pub(crate) enum PiStart {
     Continue,
 }
 
-/// A pi typed with no options, `--session <id>` or `--continue`; anything else runs as typed.
-pub(crate) fn parse_pi(args: &[String]) -> Option<PiStart> {
-    let session =
-        |id: &str| crate::resumable::is_session_id(id).then(|| PiStart::Session(id.to_owned()));
-    match args {
-        [] => Some(PiStart::New),
-        [flag] if flag == "-c" || flag == "--continue" => Some(PiStart::Continue),
-        [flag, id] if flag == "--session" => session(id),
-        [flag] => session(flag.strip_prefix("--session=")?),
-        _ => None,
+/// A pi typed with options the daemon starts it with: how it starts, the options it keeps at
+/// every start, and the messages it starts with once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TypedPi {
+    pub start: PiStart,
+    pub options: Vec<String>,
+    pub messages: Vec<String>,
+}
+
+/// pi's options that take a value and that every start of it keeps, as `pi --help` names them.
+const PI_VALUE_OPTIONS: &[&str] = &["--model", "--provider", "--thinking", "--models"];
+
+/// What `pi <args>` asks for when it is an interactive session the daemon can start: its
+/// session (`--session`, `--continue`), the options it knows and the messages it starts with.
+/// Anything else (a subcommand, print mode, an unknown option) runs as typed.
+pub(crate) fn parse_pi(args: &[String]) -> Option<TypedPi> {
+    const SUBCOMMANDS: &[&str] = &[
+        "install",
+        "remove",
+        "uninstall",
+        "update",
+        "list",
+        "config",
+        "auth",
+        "mcp",
+    ];
+    let mut start = None;
+    let mut options = Vec::new();
+    let mut messages = Vec::new();
+    let mut arguments = args.iter();
+    while let Some(argument) = arguments.next() {
+        if argument == "--" {
+            messages.extend(arguments.by_ref().cloned());
+            break;
+        }
+        if !argument.starts_with('-') {
+            if messages.is_empty() && SUBCOMMANDS.contains(&argument.as_str()) {
+                return None;
+            }
+            messages.push(argument.clone());
+            continue;
+        }
+        let (flag, inline) = match argument.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value)),
+            _ => (argument.as_str(), None),
+        };
+        let mut value = || {
+            let value = match inline {
+                Some(value) => value.to_owned(),
+                None => arguments.next()?.clone(),
+            };
+            (!value.is_empty() && !value.starts_with('-')).then_some(value)
+        };
+        let chosen = match flag {
+            "-c" | "--continue" if inline.is_none() => PiStart::Continue,
+            "--session" => {
+                let id = value()?;
+                PiStart::Session(crate::resumable::is_session_id(&id).then_some(id)?)
+            }
+            option if PI_VALUE_OPTIONS.contains(&option) => {
+                options.extend([option.to_owned(), value()?]);
+                continue;
+            }
+            _ => return None,
+        };
+        if start.replace(chosen).is_some() {
+            return None;
+        }
     }
+    Some(TypedPi {
+        start: start.unwrap_or(PiStart::New),
+        options,
+        messages,
+    })
 }
 
 pub(crate) fn start_codex(
     core: &Arc<Core>,
     entry: &Arc<PaneEntry>,
     context: &agents::LaunchContext,
-    resume: Option<String>,
+    typed: TypedCodex,
 ) -> Result<String, String> {
+    let TypedCodex {
+        resume,
+        options,
+        prompt,
+    } = typed;
     let mode = match &resume {
         Some(id) => agents::LaunchMode::Resume {
             session_id: agents::NativeSessionId::new(id.clone()),
@@ -209,14 +395,14 @@ pub(crate) fn start_codex(
         None => agents::LaunchMode::Fresh { session_id: None },
     };
     let (source, spec) = if core.cfg.codex_chat {
-        let (source, spec) = crate::agent_driver::codex::Live::start(context, &mode)
-            .map_err(|error| error.to_string())?;
+        let (source, spec) =
+            crate::agent_driver::codex::Live::start(context, &mode, &options, prompt.as_deref())
+                .map_err(|error| error.to_string())?;
         (Some(source), spec)
     } else {
-        (
-            None,
-            agents::AgentAdapter::launch(&agents::Codex::new(), context, &mode),
-        )
+        let mut spec = agents::AgentAdapter::launch(&agents::Codex::new(), context, &mode);
+        agents::Codex::apply_options(&mut spec, &options, prompt.as_deref());
+        (None, spec)
     };
     let pane = entry.pane.id;
     let launch = crate::agent::new_uuid();
@@ -233,7 +419,7 @@ pub(crate) fn start_codex(
         account: Some(proto::SYSTEM_ACCOUNT.into()),
         transcript: None,
         config: None,
-        args: Vec::new(),
+        args: options,
     });
     let adapter = crate::agent::adapter(proto::AgentKind::Codex);
     *lock(&entry.agent) = Some(match &source {
@@ -254,8 +440,13 @@ pub(crate) fn start_pi(
     core: &Core,
     entry: &PaneEntry,
     context: &agents::LaunchContext,
-    start: PiStart,
+    typed: TypedPi,
 ) -> Result<String, String> {
+    let TypedPi {
+        start,
+        options,
+        messages,
+    } = typed;
     let program = ResumableProgram::Pi;
     let session = match &start {
         PiStart::Session(id) => Some(id.clone()),
@@ -269,10 +460,15 @@ pub(crate) fn start_pi(
     }
     let extension = crate::agent_driver::pi::bridge::install(&context.state_dir)
         .map_err(|error| error.to_string())?;
+    argv.extend(options.iter().cloned());
     argv.extend([
         "--extension".to_owned(),
         extension.to_string_lossy().into_owned(),
     ]);
+    if !messages.is_empty() {
+        argv.push("--".to_owned());
+        argv.extend(messages);
+    }
     let launch = crate::agent::new_uuid();
     *lock(&entry.typed_start) = Some(TypedStart {
         launch: launch.clone(),
@@ -288,6 +484,7 @@ pub(crate) fn start_pi(
         program,
         session_id: session,
         cwd: Some(context.cwd.to_string_lossy().into_owned()),
+        args: options,
     });
     core.mark_dirty();
     core.emit(Event::PaneMeta(entry.pane.id));
@@ -405,37 +602,85 @@ mod tests {
     }
 
     #[test]
-    fn codex_and_pi_sessions_run_through_their_launch_and_the_rest_as_typed() {
+    fn codex_with_the_options_it_knows_runs_through_its_launch() {
         let rollout = "0199a213-81c0-7800-8aa1-bbab2a035a53";
-        assert_eq!(parse_codex(&args(&[])), Some(None));
+        assert_eq!(parse_codex(&args(&[])), Some(TypedCodex::default()));
+        let typed = parse_codex(&args(&[
+            "-m",
+            "o3",
+            "--sandbox=workspace-write",
+            "-c",
+            "model_reasoning_effort=\"high\"",
+            "--search",
+            "resume",
+            rollout,
+            "fix the parser",
+        ]))
+        .unwrap();
+        assert_eq!(typed.resume.as_deref(), Some(rollout));
         assert_eq!(
-            parse_codex(&args(&["resume", rollout])),
-            Some(Some(rollout.into()))
+            typed.options,
+            [
+                "--model",
+                "o3",
+                "--sandbox",
+                "workspace-write",
+                "--config",
+                "model_reasoning_effort=\"high\"",
+                "--search"
+            ]
+        );
+        assert_eq!(typed.prompt.as_deref(), Some("fix the parser"));
+        assert_eq!(
+            parse_codex(&args(&["fix the bug"]))
+                .unwrap()
+                .prompt
+                .as_deref(),
+            Some("fix the bug")
         );
         for typed in [
             &["exec", "fix it"][..],
-            &["resume", "--last"],
-            &["-m", "o3"],
-            &["fix the bug"],
             &["login"],
+            &["resume"],
+            &["resume", "--last"],
+            &["-m"],
+            &["--unknown"],
+            &["one", "two"],
+            &["-i", "picture.png"],
         ] {
             assert_eq!(parse_codex(&args(typed)), None, "{typed:?}");
         }
-        assert_eq!(parse_pi(&args(&[])), Some(PiStart::New));
-        assert_eq!(parse_pi(&args(&["-c"])), Some(PiStart::Continue));
+    }
+
+    #[test]
+    fn pi_with_the_options_it_knows_runs_through_its_launch() {
+        let new = parse_pi(&args(&[])).unwrap();
+        assert_eq!(new.start, PiStart::New);
+        assert_eq!(parse_pi(&args(&["-c"])).unwrap().start, PiStart::Continue);
         assert_eq!(
-            parse_pi(&args(&["--session", "0199-aaaa"])),
-            Some(PiStart::Session("0199-aaaa".into()))
+            parse_pi(&args(&["--session=0199-aaaa"])).unwrap().start,
+            PiStart::Session("0199-aaaa".into())
         );
-        assert_eq!(
-            parse_pi(&args(&["--session=0199-aaaa"])),
-            Some(PiStart::Session("0199-aaaa".into()))
-        );
+        let typed = parse_pi(&args(&[
+            "--model",
+            "sonnet",
+            "--thinking",
+            "high",
+            "--session",
+            "0199-aaaa",
+            "list the files",
+        ]))
+        .unwrap();
+        assert_eq!(typed.start, PiStart::Session("0199-aaaa".into()));
+        assert_eq!(typed.options, ["--model", "sonnet", "--thinking", "high"]);
+        assert_eq!(typed.messages, ["list the files"]);
         for typed in [
             &["-p", "hi"][..],
             &["--session", "--model"],
-            &["--model", "x"],
-            &["hello"],
+            &["install", "x"],
+            &["--model"],
+            &["--unknown"],
+            &["-c", "--session", "0199-aaaa"],
         ] {
             assert_eq!(parse_pi(&args(typed)), None, "{typed:?}");
         }

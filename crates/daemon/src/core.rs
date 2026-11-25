@@ -294,6 +294,8 @@ pub(crate) struct PaneEntry {
     pub claude_launch: Mutex<Option<crate::agent_config::ClaudeLaunch>>,
     /// What a Codex or pi typed at the prompt starts with, until its shell function takes it.
     pub typed_start: Mutex<Option<crate::typed_agent::TypedStart>>,
+    /// A Chat send is restarting the pane's agent started by hand (`takeover`).
+    pub taking_over: AtomicBool,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Serializes policy decisions, request replacement and actual PTY resizes.
@@ -1883,6 +1885,7 @@ impl Core {
                     program: ResumableProgram::Pi,
                     session_id: resume,
                     cwd: None,
+                    args: Vec::new(),
                 };
                 (PaneLaunch::Shell { cwd }, Some(agent), true)
             }
@@ -1995,11 +1998,15 @@ impl Core {
         match &launch {
             PaneLaunch::Shell { .. } | PaneLaunch::Reopen { .. } => {
                 let resume_line = resumable.as_ref().map(|agent| {
-                    if launches_pi || starts_afresh {
+                    let line = if launches_pi || starts_afresh {
                         agent.program.launch_line(agent.session_id.as_deref())
                     } else {
                         agent.program.resume_line(agent.session_id.as_deref())
-                    }
+                    };
+                    std::iter::once(line)
+                        .chain(agent.args.iter().map(|arg| shell_quote(arg)))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 });
                 match (&resume_line, &pre_command) {
                     (Some(resume_line), pre_command)
@@ -2170,7 +2177,7 @@ impl Core {
                 let native_chat = self.cfg.hook_bin_runs();
                 let mut spec = if native_chat && self.cfg.codex_chat && *kind == AgentKind::Codex {
                     let (source, spec) =
-                        crate::agent_driver::codex::Live::start(&context, &mode)
+                        crate::agent_driver::codex::Live::start(&context, &mode, &agent_args, None)
                             .map_err(|error| (OpError::SpawnFailed, error.to_string()))?;
                     codex = Some(source);
                     spec
@@ -2195,6 +2202,9 @@ impl Core {
                 };
                 if let Some(config) = agent_config.as_ref().filter(|_| *kind == AgentKind::Claude) {
                     agents::ClaudeCode::apply_config(&mut spec, config);
+                }
+                if *kind == AgentKind::Codex && codex.is_none() {
+                    agents::Codex::apply_options(&mut spec, &agent_args, None);
                 }
                 if *kind == AgentKind::Claude {
                     crate::agent_config::insert_options(&mut spec, &agent_args);
@@ -2402,6 +2412,7 @@ impl Core {
             created_at,
             resumable_process: Mutex::new(None),
             typed_start: Mutex::new(None),
+            taking_over: AtomicBool::new(false),
             reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
@@ -2566,6 +2577,7 @@ impl Core {
             created_at,
             resumable_process: Mutex::new(None),
             typed_start: Mutex::new(None),
+            taking_over: AtomicBool::new(false),
             reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
@@ -3754,6 +3766,14 @@ fn track_resumable_agent(core: &Core, entry: &PaneEntry, foreground: &pty::Foreg
                 session_id: program.session_from_argv(&foreground.argv),
                 cwd: crate::procinfo::process_cwd(foreground.pid)
                     .map(|cwd| cwd.to_string_lossy().into_owned()),
+                // A pi typed with options it keeps comes back with them.
+                args: (program == ResumableProgram::Pi)
+                    .then(|| {
+                        crate::typed_agent::parse_pi(foreground.argv.get(1..).unwrap_or_default())
+                    })
+                    .flatten()
+                    .map(|typed| typed.options)
+                    .unwrap_or_default(),
             });
             *lock(&entry.resumable_process) =
                 Some((foreground.pid, process_started(foreground.pid)));

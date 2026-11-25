@@ -8,7 +8,7 @@ mod draft;
 mod hooks;
 mod interrupt;
 
-pub(crate) use chat::request as chat_request;
+pub(crate) use chat::{recorded_session, request as chat_request};
 pub(crate) use draft::Receipt;
 pub(crate) use hooks::record as record_hook;
 pub(crate) use interrupt::request as interrupt_request;

@@ -38,12 +38,16 @@ pub(in crate::agent_driver::codex) enum Observation {
 }
 
 impl Live {
+    /// Starts the pane's server and returns its Codex's launch, with the user's own `options`
+    /// and, on its first start, the `prompt` it was typed with.
     pub(crate) fn start(
         context: &agents::LaunchContext,
         mode: &agents::LaunchMode,
+        options: &[String],
+        prompt: Option<&str>,
     ) -> io::Result<(Arc<Self>, agents::LaunchSpec)> {
         let directory = super::process::create_directory()?;
-        match prepare(context, mode, &directory) {
+        match prepare(context, mode, options, prompt, &directory) {
             Ok(result) => Ok(result),
             Err(error) => {
                 let _ = std::fs::remove_dir_all(directory);
@@ -63,6 +67,8 @@ fn listener(path: &Path) -> io::Result<std::os::unix::net::UnixListener> {
 fn prepare(
     context: &agents::LaunchContext,
     mode: &agents::LaunchMode,
+    options: &[String],
+    prompt: Option<&str>,
     directory: &Path,
 ) -> io::Result<(Arc<Live>, agents::LaunchSpec)> {
     let server = directory.join("server.sock");
@@ -72,6 +78,7 @@ fn prepare(
     let environment_listener = listener(&environment)?;
     let mut recipe =
         agents::Codex::live_launch(context, mode, &server, &relay).map_err(io::Error::other)?;
+    agents::Codex::apply_options(&mut recipe.tui, options, prompt);
     recipe.tui.args.insert(0, environment.into_os_string());
     recipe.tui.args.insert(0, "codex-remote".into());
     recipe.tui.program = context.hook_bin.clone().into_os_string();
@@ -98,7 +105,8 @@ fn prepare(
     let control = tokio::spawn(control::run(weak.clone(), commands));
     *lock(&source.control_task) = Some(control.abort_handle());
     let expected = agents::pane_env(context);
-    let fallback = agents::AgentAdapter::launch(&agents::Codex::new(), context, mode);
+    let mut fallback = agents::AgentAdapter::launch(&agents::Codex::new(), context, mode);
+    agents::Codex::apply_options(&mut fallback, options, prompt);
     let observer = weak.clone();
     tokio::spawn(observe(observer, receiver));
     let task = tokio::spawn(async move {

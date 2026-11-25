@@ -27,6 +27,9 @@ pub(crate) struct ResumableAgent {
     /// The agent's own working directory, where it resumes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Options it was typed with that every start of it keeps (pi's `--model`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 /// Reads a saved agent, as `None` when it names one this build does not know: a newer

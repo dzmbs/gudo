@@ -45,13 +45,15 @@ pub(crate) async fn request(
         // decision route, not a pasted prompt interpreted by the dialog as an approval key.
         let (kind, session) = match lock(&entry.agent).as_ref() {
             Some(agent) if agent.is_blocked() => return Err(unavailable()),
+            // A Codex in Terminal reports no thread: its conversation is the one on record.
             Some(agent) => (
                 agent.kind(),
                 agent
                     .session()
                     .native_id
                     .as_ref()
-                    .map(|id| id.as_str().to_owned()),
+                    .map(|id| id.as_str().to_owned())
+                    .or_else(|| recorded_session(&entry)),
             ),
             // Until pi writes its session it is the launch's.
             None => (
@@ -196,4 +198,12 @@ fn prompt_audit(actor: proto::Actor, pane: proto::PaneId, text: &str) -> crate::
 
 fn unavailable() -> WsError {
     WsError::Failed("Chat cannot send to this agent right now. Check the terminal.".into())
+}
+
+/// The conversation the pane's agent record names.
+pub(crate) fn recorded_session(entry: &crate::core::PaneEntry) -> Option<String> {
+    lock(&entry.record)
+        .agent
+        .as_ref()
+        .and_then(|agent| agent.session_id.clone())
 }

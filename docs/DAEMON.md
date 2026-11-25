@@ -504,12 +504,18 @@ changing their policy requires a helper update.
   prompt, a subcommand, `-p`, another option) runs as typed, as does `command claude`. Launch
   lines name `command <program>`, past the function. The added start is two shim calls and the
   daemon's launch, 19 ms in all (median, release build, M-series Mac).
-- `codex` and `pi` typed the same way run through their launch too: `codex` or
-  `codex resume <id>` as a launched Codex (its live Chat where the installed Codex has it), `pi`,
-  `pi --session <id>` or `pi --continue` with the Chat bridge extension. The daemon prepares the
-  program and its environment and `gudo-hook agent-start <launch>` runs it in the function's
-  place, then the exit fence. Other options and subcommands run as typed, so does a shim that
-  answers nothing. Added start: Codex 32 ms, pi 18 ms (median, release build).
+- `codex` and `pi` typed the same way run through their launch too: `codex [resume <id>]` as a
+  launched Codex (its live Chat where the installed Codex has it), `pi` with `--session <id>` or
+  `--continue` with the Chat bridge extension. Codex keeps `-m/--model`, `-s/--sandbox`,
+  `-a/--ask-for-approval`, `-c/--config`, `-C/--cd`, `-p/--profile`, `--add-dir`, `--enable`,
+  `--disable`, `--local-provider`, `--search`, `--full-auto`, `--yolo`,
+  `--dangerously-bypass-approvals-and-sandbox`, `--oss` and `--no-alt-screen`; pi keeps
+  `--model`, `--provider`, `--thinking` and `--models`. Kept options are in the pane's agent
+  record (Codex) or resumable record (pi, also one started by hand) and passed at every start
+  and restore; a prompt typed with the agent goes with its first start only. The daemon
+  prepares the program and its environment and `gudo-hook agent-start <launch>` runs it in the
+  function's place, then the exit fence. Subcommands and other options run as typed, so does a
+  shim that answers nothing. Added start: Codex 32 ms, pi 18 ms (median, release build).
 - Agents started by hand in a shell pane (the foreground process is `claude` or `codex`, also
   under `node`/`bun`) are recorded under the system account, and their session id is learnt
   the same way: Codex's as above; Claude's from `--resume`/`-r`/`--session-id`, else the

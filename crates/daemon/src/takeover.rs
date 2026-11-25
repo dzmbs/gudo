@@ -28,8 +28,8 @@ const NOTICE: &str = "Restarted here so Chat can send to it.";
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Plan {
     Claude(crate::typed_agent::TypedClaude),
-    Codex(String),
-    Pi(PiStart),
+    Codex(crate::typed_agent::TypedCodex),
+    Pi(crate::typed_agent::TypedPi),
 }
 
 impl Plan {
@@ -70,25 +70,31 @@ fn plan(entry: &PaneEntry) -> Result<Plan, WsError> {
             Ok(Plan::Claude(typed))
         }
         Some(AgentKind::Codex) => {
-            crate::typed_agent::parse_codex(options).ok_or_else(unknown)?;
+            let mut typed = crate::typed_agent::parse_codex(options).ok_or_else(unknown)?;
             let session = lock(&entry.record)
                 .agent
                 .as_ref()
                 .filter(|agent| agent.kind == AgentKind::Codex)
                 .and_then(|agent| agent.session_id.clone())
+                // Not learnt yet: the rollout it holds open names it.
+                .or_else(|| crate::codex_session::from_open_files(entry.pane.pty().pid()))
                 .ok_or_else(|| unavailable("Codex has not saved its conversation yet."))?;
-            Ok(Plan::Codex(session))
+            typed.resume = Some(session);
+            // It was sent at the start; the conversation has it.
+            typed.prompt = None;
+            Ok(Plan::Codex(typed))
         }
         _ if ResumableProgram::of(&foreground) == Some(ResumableProgram::Pi) => {
-            let typed = crate::typed_agent::parse_pi(options).ok_or_else(unknown)?;
-            let session = lock(&entry.record)
+            let mut typed = crate::typed_agent::parse_pi(options).ok_or_else(unknown)?;
+            if let Some(session) = lock(&entry.record)
                 .resumable
                 .as_ref()
-                .and_then(|agent| agent.session_id.clone());
-            Ok(Plan::Pi(match (session, typed) {
-                (Some(session), _) => PiStart::Session(session),
-                (None, typed) => typed,
-            }))
+                .and_then(|agent| agent.session_id.clone())
+            {
+                typed.start = PiStart::Session(session);
+            }
+            typed.messages.clear();
+            Ok(Plan::Pi(typed))
         }
         _ => Err(unavailable("Chat cannot send to this program.")),
     }
@@ -97,32 +103,33 @@ fn plan(entry: &PaneEntry) -> Result<Plan, WsError> {
 /// Restarts the pane's hand-started agent through its launch, so the send that asked can go
 /// to it. Returns once the agent is up and Chat may type into it.
 pub(crate) async fn take_over(core: &Arc<Core>, entry: &Arc<PaneEntry>) -> Result<(), WsError> {
-    let pane = entry.pane.id;
-    let _taking = Taking::start(pane)?;
+    let _taking = Taking::start(entry)?;
     restart(core, entry).await
 }
 
-/// The panes whose agent a send is restarting: a second send waits for the first's.
-static TAKING: std::sync::Mutex<Vec<proto::PaneId>> = std::sync::Mutex::new(Vec::new());
+/// Marks the pane's agent as being restarted for as long as it lives: a second send waits for
+/// the first's.
+struct Taking<'a>(&'a PaneEntry);
 
-struct Taking(proto::PaneId);
-
-impl Taking {
-    fn start(pane: proto::PaneId) -> Result<Self, WsError> {
-        let mut taking = lock(&TAKING);
-        if taking.contains(&pane) {
+impl<'a> Taking<'a> {
+    fn start(entry: &'a PaneEntry) -> Result<Self, WsError> {
+        if entry
+            .taking_over
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
             return Err(unavailable(
                 "Chat is restarting the agent. Send again in a moment.",
             ));
         }
-        taking.push(pane);
-        Ok(Self(pane))
+        Ok(Self(entry))
     }
 }
 
-impl Drop for Taking {
+impl Drop for Taking<'_> {
     fn drop(&mut self) {
-        lock(&TAKING).retain(|pane| *pane != self.0);
+        self.0
+            .taking_over
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -155,13 +162,13 @@ async fn restart(core: &Arc<Core>, entry: &Arc<PaneEntry>) -> Result<(), WsError
             )?;
             claude_line(&shim, &launch, fish)
         }
-        Plan::Codex(session) => {
-            let launch = crate::typed_agent::start_codex(core, entry, &context, Some(session))
+        Plan::Codex(typed) => {
+            let launch = crate::typed_agent::start_codex(core, entry, &context, typed)
                 .map_err(WsError::Failed)?;
             start_line(&shim, &launch, fish)
         }
-        Plan::Pi(start) => {
-            let launch = crate::typed_agent::start_pi(core, entry, &context, start)
+        Plan::Pi(typed) => {
+            let launch = crate::typed_agent::start_pi(core, entry, &context, typed)
                 .map_err(WsError::Failed)?;
             start_line(&shim, &launch, fish)
         }
@@ -172,7 +179,8 @@ async fn restart(core: &Arc<Core>, entry: &Arc<PaneEntry>) -> Result<(), WsError
         .try_write(format!("{line}\r").into_bytes())
         .map_err(|error| WsError::Failed(format!("typing the restart: {error}")))?;
     wait_until_up(entry).await?;
-    // It started with an empty input line: nothing typed there for the send to replace.
+    // It started with an empty input line: nothing typed there for the send to replace. The
+    // send names the conversation as Chat's prepare does.
     let session = lock(&entry.agent)
         .as_ref()
         .and_then(|runtime| {
@@ -181,6 +189,13 @@ async fn restart(core: &Arc<Core>, entry: &Arc<PaneEntry>) -> Result<(), WsError
                 .native_id
                 .as_ref()
                 .map(|id| id.as_str().to_owned())
+        })
+        .or_else(|| crate::agent_input::recorded_session(entry))
+        .or_else(|| {
+            lock(&entry.record)
+                .resumable
+                .as_ref()
+                .and_then(|agent| agent.session_id.clone())
         })
         .or_else(|| {
             lock(&entry.pane.agent_input_gate)

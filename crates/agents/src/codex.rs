@@ -445,6 +445,24 @@ impl AgentAdapter for Codex {
     }
 }
 
+impl Codex {
+    /// Starts `launch` with the user's own `options` (before `resume`, which takes them too) and,
+    /// on its first start only, the `prompt` it was typed with (last, as Codex reads it).
+    pub fn apply_options(launch: &mut LaunchSpec, options: &[String], prompt: Option<&str>) {
+        let at = launch
+            .args
+            .iter()
+            .position(|arg| arg == "resume")
+            .unwrap_or(launch.args.len());
+        launch
+            .args
+            .splice(at..at, options.iter().map(OsString::from));
+        if let Some(prompt) = prompt {
+            launch.args.push(prompt.into());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +579,30 @@ mod tests {
         );
         let argv = spec.display_argv();
         assert_eq!(argv[argv.len() - 2..], ["resume", "0199a213"]);
+    }
+
+    #[test]
+    fn the_users_options_go_before_resume_and_the_prompt_last() {
+        let mut spec = Codex::new().launch(
+            &test_context(),
+            &LaunchMode::Resume {
+                session_id: NativeSessionId::new("0199a213"),
+            },
+        );
+        let options = ["-m".to_owned(), "o3".to_owned(), "--search".to_owned()];
+        Codex::apply_options(&mut spec, &options, Some("fix the parser"));
+        let argv = spec.display_argv();
+        assert_eq!(
+            argv[argv.len() - 6..],
+            [
+                "-m",
+                "o3",
+                "--search",
+                "resume",
+                "0199a213",
+                "fix the parser"
+            ]
+        );
     }
 
     #[test]
