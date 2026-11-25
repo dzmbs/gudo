@@ -223,6 +223,24 @@ final class ChatCollectionTests: XCTestCase {
         XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), 300)
     }
 
+    func testRowsArrivingAboveLeaveTheRowsOnScreenAsTheyAre() async throws {
+        let whole = preparedFrame(200)
+        var newest = whole
+        newest.rows = Array(whole.rows.suffix(30))
+        newest.rowIDs = Set(newest.rows.map(\.id))
+        let (window, controller) = try open(newest)
+        defer { close(window) }
+        try await settle()
+        let shown = Set(controller.collection.visibleCells.map(ObjectIdentifier.init))
+        var next = whole
+        next.revision = newest.revision + 1
+        update(controller, next)
+        try await settle()
+        XCTAssertEqual(controller.collection.numberOfItems(inSection: 0), 200)
+        XCTAssertTrue(shown.isSuperset(of: controller.collection.visibleCells.map(ObjectIdentifier.init)))
+        XCTAssertTrue(controller.collection.indexPathsForVisibleItems.contains(IndexPath(item: 199, section: 0)))
+    }
+
     func testBottomFollowingAndReadingProtection() async throws {
         var frame = preparedFrame(200)
         let (window, controller) = try open(frame)

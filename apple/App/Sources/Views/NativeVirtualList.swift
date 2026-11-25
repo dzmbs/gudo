@@ -267,6 +267,8 @@ private final class NativeCollectionCell: UICollectionViewCell {
 final class NativeCollectionLayout: UICollectionViewLayout {
     var document: NativeListLayout
     var beforePreparingAttributes: (() -> Void)?
+    /// Where the next batch update leaves the content offset.
+    var offsetAfterUpdate: CGPoint?
 
     init(document: NativeListLayout) {
         self.document = document
@@ -285,6 +287,10 @@ final class NativeCollectionLayout: UICollectionViewLayout {
     }
 
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool { true }
+
+    override func targetContentOffset(forProposedContentOffset proposedContentOffset: CGPoint) -> CGPoint {
+        offsetAfterUpdate ?? proposedContentOffset
+    }
 
     override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
         var indices = Set(document.visibleRows(in: rect))

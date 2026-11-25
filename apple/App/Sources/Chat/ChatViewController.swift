@@ -530,6 +530,7 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             document = NativeListLayout()
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
+        let keptTail = keptOrder.map { keptTail(of: frame, after: $0) } ?? 0
         var changed = Set(updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil))
         let revealed = reveal.update(frame, paces: paintsFrames).filter(frame.rowIDs.contains)
         measured.subtract(revealed)
@@ -544,7 +545,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         previousExpanded = expanded
         guard changesOrder || !changed.isEmpty else { isApplying = false; return }
         let reloads = resets || restyles || previousCount == 0
-        measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !reloads)
+        // After an order change the rows under the current bounds are not the ones it lands on.
+        measureBeforeSnapshot(anchor: anchor, following: wasFollowing, includingCurrent: !reloads && !changesOrder)
         onApply?(changed)
         if reloads {
             // No cells need retaining yet: fit and place the destination in one layout pass.
@@ -552,7 +554,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             itemCount = frame.rows.count
             collection.reloadData()
         } else if changesOrder {
-            replaceItems(from: min(keptOrder ?? 0, previousCount), previousCount: previousCount)
+            replaceItems(from: min(keptOrder ?? 0, previousCount), previousCount: previousCount, keepingLast: keptTail,
+                         landingAt: targetOffset(anchor: anchor, following: wasFollowing))
             reconfigureVisible(changed)
         } else {
             reconfigureVisible(changed)
@@ -561,11 +564,17 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         finishSnapshot(anchor: anchor, following: wasFollowing, generation: generation, changesOrder: changesOrder)
     }
 
-    /// The items from `start` on are replaced, so a streamed row never reloads the rows above it.
-    private func replaceItems(from start: Int, previousCount: Int) {
+    /// The items from `start` on are replaced, except the last `kept`: a streamed row never
+    /// reloads the rows above it, and rows arriving above never reload the ones on screen.
+    /// The collection lands at `offset` as it takes the update, so it never lays out the rows
+    /// that were under the old offset.
+    private func replaceItems(from start: Int, previousCount: Int, keepingLast kept: Int, landingAt offset: CGPoint) {
         let start = min(start, previousCount, current.rows.count)
-        let removed = (start..<previousCount).map { IndexPath(item: $0, section: 0) }
-        let inserted = (start..<current.rows.count).map { IndexPath(item: $0, section: 0) }
+        let kept = min(kept, previousCount - start, current.rows.count - start)
+        let removed = (start..<(previousCount - kept)).map { IndexPath(item: $0, section: 0) }
+        let inserted = (start..<(current.rows.count - kept)).map { IndexPath(item: $0, section: 0) }
+        layout.offsetAfterUpdate = offset
+        defer { layout.offsetAfterUpdate = nil }
         UIView.performWithoutAnimation {
             collection.performBatchUpdates {
                 itemCount = current.rows.count
@@ -658,6 +667,16 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
         return zip(frame.rows, documentRowIDs).prefix { $0.id == $1 }.count
     }
 
+    /// How many of the collection's last rows end `frame` too, after its first `kept` rows.
+    private func keptTail(of frame: TimelineFrame, after kept: Int) -> Int {
+        let limit = min(documentRowIDs.count, frame.rows.count) - kept
+        var count = 0
+        while count < limit, documentRowIDs[documentRowIDs.count - 1 - count] == frame.rows[frame.rows.count - 1 - count].id {
+            count += 1
+        }
+        return count
+    }
+
     private func keptRowCount(keptOrder: Int, width: CGFloat, changed: Set<ChatRowID>) -> Int {
         guard document.contentWidth == width, documentRowIDs.count == document.rows.count else { return 0 }
         let firstChanged = changed.lazy.compactMap { self.document.indices[$0.storageKey] }.min()
@@ -689,7 +708,10 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     }
 
     private func visibleCellHeight(_ row: ChatRow, at index: Int) -> CGFloat? {
-        guard isApplying, let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? ChatCollectionCell,
+        // Until the update lands the collection holds fewer items than the layout; asking it for a
+        // cell would lay out rows it does not have yet.
+        guard isApplying, itemCount == document.rows.count,
+              let cell = collection.cellForItem(at: IndexPath(item: index, section: 0)) as? ChatCollectionCell,
               cell.rowID == row.id else { return nil }
         configure(cell, row: row)
         configuredWhileMeasuring.insert(row.id)
