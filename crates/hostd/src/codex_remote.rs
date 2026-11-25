@@ -86,5 +86,14 @@ fn apply_terminal(command: &mut Command, plan: agents::CodexTerminalLaunch) {
 }
 
 fn supports_native(program: &OsStr) -> io::Result<bool> {
-    Ok(super::cli_version::read(program)?.is_some_and(|bytes| bytes == b"codex-cli 0.166.0\n"))
+    // Kept in the helper's state directory, which holds the endpoint file.
+    let cache_dir = brand::var("ENDPOINT_FILE")
+        .map(std::path::PathBuf::from)
+        .and_then(|endpoint| endpoint.parent().map(|state| state.join("cli-versions")))
+        .filter(|cache_dir| std::fs::create_dir_all(cache_dir).is_ok());
+    let version = match cache_dir {
+        Some(cache_dir) => super::cli_version::read_cached(program, &cache_dir)?,
+        None => super::cli_version::read(program)?,
+    };
+    Ok(version.is_some_and(|bytes| bytes == b"codex-cli 0.166.0\n"))
 }
