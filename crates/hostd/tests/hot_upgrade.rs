@@ -254,12 +254,16 @@ async fn running_programs_survive_an_upgrade() {
         })
         .await;
     // A counter, and a program that only sleeps.
+    let counter_pid_file = dir.path().join("counter.pid");
     let counter = new_tab(
         &mut client,
         &[
             "/bin/sh",
             "-c",
-            "echo counter-pid=$$; i=0; while :; do i=$((i+1)); echo n=$i; sleep 0.02; done",
+            &format!(
+                "echo $$ > '{}'; i=0; while :; do i=$((i+1)); echo n=$i; sleep 0.02; done",
+                counter_pid_file.display()
+            ),
         ],
     )
     .await;
@@ -269,14 +273,21 @@ async fn running_programs_survive_an_upgrade() {
     )
     .await;
     follow_all(&mut client, &[shell, counter, sleeper]).await;
-    client.wait_text(counter, "n=20").await;
+    // From the counter's stream and a file, not its screen: 50 lines a second scroll a line off
+    // the screen within moments, and a loaded machine may look later than that.
+    client
+        .until("the counter counting", |client| {
+            counts(&client.streams[&counter].bytes).len() >= 20
+        })
+        .await;
     client.wait_text(sleeper, "sleeper-pid=").await;
     let shell_pid: u32 = printed(&client.text(shell), "shell-pid")
         .unwrap()
         .parse()
         .unwrap();
-    let counter_pid: u32 = printed(&client.text(counter), "counter-pid")
+    let counter_pid: u32 = std::fs::read_to_string(&counter_pid_file)
         .unwrap()
+        .trim()
         .parse()
         .unwrap();
     let sleeper_pid: u32 = printed(&client.text(sleeper), "sleeper-pid")
