@@ -25,7 +25,12 @@ fn fake_claude(tools: &Path) -> Vec<(String, String)> {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    vec![("PATH".to_owned(), path)]
+    // Sessions in a folder of the test's own, which holds none it could tell missing.
+    let config = tools.join("claude-config");
+    vec![
+        ("PATH".to_owned(), path),
+        ("CLAUDE_CONFIG_DIR".to_owned(), config.display().to_string()),
+    ]
 }
 
 fn configure(env: Vec<(String, String)>) -> impl FnOnce(&mut daemon::Config) {

@@ -265,11 +265,16 @@ async fn a_claude_that_saved_no_conversation_starts_afresh_after_a_cold_restart(
     };
     for pane in [hand_claude, launched_claude] {
         owner.follow(pane).await;
-        owner
-            .until("Claude Code started afresh", |owner| {
-                since_restore(owner, pane).contains("claude-running --session-id")
-            })
-            .await;
+        let deadline = Instant::now() + TIMEOUT;
+        while !since_restore(&owner, pane).contains("claude-running --session-id") {
+            assert!(
+                Instant::now() < deadline,
+                "Claude Code never started afresh in pane {pane}:\n{}",
+                owner.text(pane)
+            );
+            owner.until("pane output", |_| true).await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let text = since_restore(&owner, pane);
         assert!(!text.contains("No conversation found"), "{text}");
         owner

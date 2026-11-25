@@ -2206,14 +2206,21 @@ impl Core {
                 // time it exits, the shim asks whether to start it again.
                 let relaunch = match (&session_id, *kind) {
                     (Some(session), AgentKind::Claude) => {
-                        claude_launch = Some(crate::agent_config::ClaudeLaunch::new(
-                            launch_id.clone(),
-                            context.clone(),
-                            session.clone(),
-                            resume.is_some(),
-                            spec.program != "claude",
-                            agent_config.clone().unwrap_or_default(),
-                        ));
+                        claude_launch = Some(
+                            crate::agent_config::ClaudeLaunch::new(
+                                launch_id.clone(),
+                                context.clone(),
+                                session.clone(),
+                                resume.is_some(),
+                                spec.program != "claude",
+                                agent_config.clone().unwrap_or_default(),
+                            )
+                            .starts_afresh_on_failure_until(
+                                Instant::now()
+                                    + agent_delay
+                                    + crate::agent_config::RESUME_FAILURE_WINDOW,
+                            ),
+                        );
                         format!(
                             "; {}",
                             crate::agent_config::relaunch_loop(&shim, &launch_id)
@@ -4002,9 +4009,23 @@ fn resume_where_saved(
     resume: &mut Option<String>,
     cwd: &mut Option<String>,
 ) {
-    let Some(session) = resume.clone() else {
+    let Some(mut session) = resume.clone() else {
         return;
     };
+    if agent.kind == AgentKind::Claude
+        && let Some(written) = agent
+            .transcript
+            .as_deref()
+            .and_then(crate::claude_session::transcript_session)
+            .filter(|written| *written != session)
+    {
+        tracing::info!(
+            %pane, %session, conversation = %written,
+            "Claude Code wrote another conversation than its session; resuming that one"
+        );
+        session = written;
+        *resume = Some(session.clone());
+    }
     let account = agent.account.as_deref().unwrap_or(proto::SYSTEM_ACCOUNT);
     let Some(agent_dir) = account_dir(core, agent.kind, account) else {
         return;

@@ -1732,3 +1732,189 @@ async fn an_app_update_keeps_a_launched_pi_and_its_bridge() {
     assert!(alive(pi_pid));
     bridged(&mut client, pane, &|| hostd.log()).await;
 }
+
+const UNRESUMABLE_ID: &str = "7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f";
+const UNUSED_ID: &str = "e4ea3b84-6daf-4905-9510-2efcd840fd83";
+const SWITCHED_ID: &str = "3d2c1b0a-9f8e-4d7c-8b6a-5f4e3d2c1b0a";
+const RESUMED_INSIDE_ID: &str = "ff4536cc-1a2b-4c3d-9e8f-7a6b5c4d3e2f";
+
+/// Claude Code as the directory it starts in has it. In `used` its conversation is gone, so a
+/// resume fails although its transcript is there. In `unused` it was never sent a message: it
+/// names its session through its hooks but writes no transcript. In `switched` it resumed
+/// another conversation from inside: its hooks keep its own session id and name the
+/// transcript of the conversation it writes. Elsewhere a resume of a saved conversation works.
+const UNRESUMABLE_CLAUDE: &str = r#"#!/bin/bash
+case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; *" --help "*) exit 0 ;; esac
+place="$(basename "$PWD")"
+case "$place" in unused) id=__UNUSED_ID__ ;; switched) id=__SWITCHED_ID__ ;; *) id=__ID__ ;; esac
+arguments="$*"
+while [ $# -gt 0 ]; do
+  case "$1" in --session-id | --resume) id="$2"; shift ;; esac
+  shift
+done
+dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+transcript="$dir/$id.jsonl"
+case " $arguments " in
+  *" --resume "*)
+    if [ "$place" = used ] || [ ! -f "$transcript" ]; then
+      echo "No conversation found with session ID: $id"
+      exit 1
+    fi ;;
+  *)
+    case "$place" in
+      unused) ;;
+      switched) transcript="$dir/__RESUMED_INSIDE_ID__.jsonl"; sed "s/__FIXTURE_ID__/__RESUMED_INSIDE_ID__/g" "__TRANSCRIPT__" > "$transcript" ;;
+      *) sed "s/__FIXTURE_ID__/$id/g" "__TRANSCRIPT__" > "$transcript" ;;
+    esac ;;
+esac
+printf '{"hook_event_name":"SessionStart","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup"}' \
+  "$id" "$transcript" "$PWD" | "${GUDO_HOOK:-__HOOK__}" claude SessionStart
+echo "claude-ready $arguments claude-pid=$$"
+exec -a claude /bin/sleep 600
+"#;
+
+/// The output of `pane` since its restored line.
+fn since_restore(client: &TestClient, pane: PaneId) -> String {
+    client
+        .flat_text(pane)
+        .split_once("Restored after restart")
+        .map(|(_, after)| after.to_owned())
+        .unwrap_or_default()
+}
+
+/// A Claude Code never sent a message keeps running through a hot hand-off, and after a cold
+/// restart starts afresh rather than resume nothing; one whose resume fails anyway starts
+/// afresh once, saying so, rather than leave its pane at a shell; one that resumed another
+/// conversation from inside comes back on that conversation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claude_that_cannot_resume_comes_back_running() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let exe = install(dir.path());
+    let tools = dir.path().join("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let fixture = dir.path().join("fixture.jsonl");
+    std::fs::write(
+        &fixture,
+        CLAUDE_TRANSCRIPT.replace(CLAUDE_ID, "__FIXTURE_ID__"),
+    )
+    .unwrap();
+    let claude = tools.join("claude");
+    std::fs::write(
+        &claude,
+        UNRESUMABLE_CLAUDE
+            .replace("__UNUSED_ID__", UNUSED_ID)
+            .replace("__SWITCHED_ID__", SWITCHED_ID)
+            .replace("__RESUMED_INSIDE_ID__", RESUMED_INSIDE_ID)
+            .replace("__ID__", UNRESUMABLE_ID)
+            .replace("__TRANSCRIPT__", &fixture.display().to_string())
+            .replace("__HOOK__", HOOK),
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let unused = dir.path().join("unused");
+    let used = dir.path().join("used");
+    let switched = dir.path().join("switched");
+    for directory in [&unused, &used, &switched] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let env = [(
+        "PATH",
+        format!(
+            "{}:{}",
+            tools.display(),
+            std::env::var("PATH").unwrap_or_default()
+        ),
+    )];
+    let state = dir.path().join("state");
+    let mut hostd = run_with_env(&exe, &state, &dir.path().join("hostd.log"), &env);
+    std::fs::create_dir_all(state.join("test-home/.claude/projects")).unwrap();
+    let key = ClientConfig::generate_key();
+    let mut client = TestClient::connect(&ticket(&exe, &state), key.clone());
+    client.attach_and_follow().await;
+    let never_used = new_pane(&mut client, shell_in(&unused)).await;
+    client.type_line(never_used, "claude");
+    let failing = new_pane(&mut client, shell_in(&used)).await;
+    client.type_line(failing, "claude");
+    let resumed_inside = new_pane(&mut client, shell_in(&switched)).await;
+    client.type_line(resumed_inside, "claude");
+    for pane in [never_used, failing, resumed_inside] {
+        client.wait_text(pane, "claude-ready").await;
+        is_agent(&mut client, pane).await;
+    }
+    let log = || hostd.log();
+    wait_saved(
+        &state,
+        &[UNUSED_ID, UNRESUMABLE_ID, SWITCHED_ID, RESUMED_INSIDE_ID],
+        &log,
+    );
+    let claude_pid: u32 = printed(&client.text(never_used), "claude-pid")
+        .unwrap()
+        .parse()
+        .unwrap();
+
+    let connections = client.connected;
+    replace(&exe, &std::fs::read(HOSTD).unwrap());
+    let output = restart_command(&exe, &state);
+    assert!(output.status.success(), "{output:?}\n{}", hostd.log());
+    reconnected(&mut client, connections).await;
+    assert!(alive(claude_pid), "{}", hostd.log());
+    is_agent(&mut client, never_used).await;
+
+    drop(client);
+    let daemon_pid = endpoint(&state)["pid"].as_u64().unwrap();
+    // SAFETY: sends SIGTERM to the daemon this test started.
+    unsafe { libc::kill(daemon_pid as libc::pid_t, libc::SIGTERM) };
+    let _ = hostd.child.wait();
+    let hostd = run_with_env(&exe, &state, &dir.path().join("second.log"), &env);
+    let mut client = TestClient::connect(&ticket(&exe, &state), key);
+    client.client.attach(None);
+    client
+        .until("layout", |client| client.layout.is_some())
+        .await;
+    for pane in [never_used, failing, resumed_inside] {
+        client.follow(pane).await;
+    }
+    client
+        .until("the conversation resumed inside comes back", |client| {
+            since_restore(client, resumed_inside)
+                .contains(&format!("claude-ready --resume {RESUMED_INSIDE_ID}"))
+        })
+        .await;
+    client
+        .until("the unused Claude Code starts afresh", |client| {
+            since_restore(client, never_used).contains("claude-ready --session-id")
+        })
+        .await;
+    let restored = since_restore(&client, never_used);
+    assert!(!restored.contains("No conversation found"), "{restored}");
+    client
+        .until("the failing Claude Code starts afresh", |client| {
+            since_restore(client, failing).contains("claude-ready --session-id")
+        })
+        .await;
+    let restored = since_restore(&client, failing);
+    assert!(
+        restored.contains(&format!(
+            "No conversation found with session ID: {UNRESUMABLE_ID}"
+        )),
+        "{restored}"
+    );
+    assert!(
+        restored.contains("Could not resume the conversation"),
+        "{restored}"
+    );
+    for pane in [never_used, failing, resumed_inside] {
+        is_agent(&mut client, pane).await;
+    }
+    let log = hostd.log();
+    assert!(
+        log.contains("could not resume its conversation") && log.contains(UNRESUMABLE_ID),
+        "{log}"
+    );
+    assert!(
+        log.contains("saved no conversation to resume") && log.contains(UNUSED_ID),
+        "{log}"
+    );
+}

@@ -50,6 +50,20 @@ pub(crate) fn find_transcript(config_dir: &Path, session: &str) -> Option<std::p
         .find(|path| path.is_file())
 }
 
+/// The conversation `transcript` holds, as its file name says. A Claude Code that resumed
+/// another conversation from inside (`/resume`) keeps its own session id in its hooks but
+/// writes that conversation's transcript, and only that one can be resumed.
+pub(crate) fn transcript_session(transcript: &Path) -> Option<String> {
+    if transcript.extension()? != "jsonl" {
+        return None;
+    }
+    transcript
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| is_session_id(stem))
+        .map(str::to_ascii_lowercase)
+}
+
 /// The directory the Claude Code that wrote `transcript` started in, as its messages name it.
 pub(crate) fn transcript_cwd(transcript: &Path) -> Option<std::path::PathBuf> {
     use std::io::{BufRead, Read};

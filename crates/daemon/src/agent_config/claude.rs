@@ -19,6 +19,12 @@ use crate::core::{Core, PaneEntry, lock};
 
 /// How long a restarting Claude Code may take to come back before its exit counts as one.
 const RELAUNCH_GRACE: Duration = Duration::from_secs(30);
+/// How long a resumed Claude Code has to report its conversation: one that exits sooner
+/// without doing so could not resume it, and starts once more on a new conversation.
+pub(crate) const RESUME_FAILURE_WINDOW: Duration = Duration::from_secs(20);
+/// What the pane shows when that happens.
+const FRESH_START_NOTICE: &str =
+    "Could not resume the conversation, so Claude Code started a new one.";
 /// How long after a turn ends a change that waited for it applies.
 const TURN_SETTLE: Duration = Duration::from_millis(300);
 /// How long `claude --help` may take.
@@ -59,12 +65,17 @@ pub(crate) struct ClaudeLaunch {
     /// Its pane started it and it has not reported its session yet: until then the pane may
     /// still be waiting to start it, so a change waits too.
     starting: bool,
+    /// Until when an exit before it reports its session starts it again on a new
+    /// conversation; used once.
+    fresh_start_until: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Relaunch {
     args: Vec<String>,
     display: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notice: Option<String>,
 }
 
 /// A launch's restart loop as one helper build hands it to the next.
@@ -106,7 +117,24 @@ impl ClaudeLaunch {
             relaunched_at: None,
             awaits_prompt: false,
             starting: true,
+            fresh_start_until: None,
         }
+    }
+
+    /// A resumed launch that, should it exit before `deadline` without reporting its
+    /// conversation, starts once more on a new one.
+    pub fn starts_afresh_on_failure_until(mut self, deadline: Instant) -> Self {
+        self.fresh_start_until = self.resumed.then_some(deadline);
+        self
+    }
+
+    fn may_start_afresh(&self) -> bool {
+        self.resumed
+            && self.starting
+            && self.relaunch.is_none()
+            && self
+                .fresh_start_until
+                .is_some_and(|deadline| Instant::now() < deadline)
     }
 
     /// What the next build needs to keep restarting it; only a launch in its loop has that.
@@ -137,6 +165,7 @@ impl ClaudeLaunch {
             awaits_prompt: false,
             relaunch: carried.relaunch,
             starting: carried.starting,
+            fresh_start_until: None,
         }
     }
 }
@@ -174,15 +203,23 @@ fn running_session(entry: &PaneEntry) -> Option<String> {
             .as_ref()
             .map(|id| id.as_str().to_owned())
     };
-    reported.or_else(|| {
-        lock(&entry.record)
-            .agent
-            .as_ref()
-            .filter(|agent| agent.kind == proto::AgentKind::Claude)?
+    let record = lock(&entry.record);
+    let agent = record
+        .agent
+        .as_ref()
+        .filter(|agent| agent.kind == proto::AgentKind::Claude);
+    let session = reported.or_else(|| {
+        agent?
             .session_id
             .clone()
             .filter(|id| crate::claude_session::is_session_id(id))
-    })
+    })?;
+    // One that resumed another conversation from inside writes that one's transcript.
+    let written = agent
+        .filter(|agent| agent.session_id.as_deref() == Some(session.as_str()))
+        .and_then(|agent| agent.transcript.as_deref())
+        .and_then(crate::claude_session::transcript_session);
+    Some(written.unwrap_or(session))
 }
 
 /// A restart at the prompt for the Claude Code running in `entry`, starting from what it runs
@@ -250,8 +287,14 @@ pub enum RelaunchReply {
     None,
     /// A restart waits.
     Waiting,
-    /// Start `claude` with `args`, through the display helper when `display`.
-    Launch { args: Vec<String>, display: bool },
+    /// Start `claude` with `args`, through the display helper when `display`, after showing
+    /// `notice`.
+    Launch {
+        args: Vec<String>,
+        display: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
+    },
 }
 
 /// What the installed `claude` accepts, read once.
@@ -499,10 +542,12 @@ fn apply_when_settled(core: &Core, entry: &PaneEntry) {
 }
 
 pub(super) fn is_relaunching(entry: &PaneEntry) -> bool {
-    lock(&entry.claude_launch)
-        .as_ref()
-        .and_then(|launch| launch.relaunched_at)
-        .is_some_and(|at| at.elapsed() < RELAUNCH_GRACE)
+    lock(&entry.claude_launch).as_ref().is_some_and(|launch| {
+        launch.may_start_afresh()
+            || launch
+                .relaunched_at
+                .is_some_and(|at| at.elapsed() < RELAUNCH_GRACE)
+    })
 }
 
 /// Asks Claude Code to exit, with what starts it again waiting: the arguments for the launch
@@ -638,7 +683,11 @@ fn loop_relaunch(
         .skip(usize::from(display))
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
-    Ok(Relaunch { args, display })
+    Ok(Relaunch {
+        args,
+        display,
+        notice: None,
+    })
 }
 
 /// `claude --resume <session>` with the settings, as the user would type it.
@@ -724,6 +773,53 @@ fn type_at_prompt(core: &Core, pane: PaneId, line: String) {
     });
 }
 
+/// A resumed Claude Code exited before it reported its conversation: it could not resume it.
+/// Arms the loop to start it once more, with the same settings, on a new conversation.
+fn start_afresh(core: &Core, entry: &PaneEntry, launch: &mut ClaudeLaunch) {
+    let pane = entry.pane.id;
+    let failed = std::mem::replace(&mut launch.session, crate::agent::new_uuid());
+    launch.fresh_start_until = None;
+    let mode = LaunchMode::Fresh {
+        session_id: Some(agents::NativeSessionId::new(launch.session.clone())),
+    };
+    let relaunch = match loop_relaunch(core, pane, launch, &mode, &launch.started) {
+        Ok(relaunch) => relaunch,
+        Err(error) => {
+            tracing::warn!(%pane, session = %failed, "starting Claude Code afresh: {error}");
+            return;
+        }
+    };
+    tracing::warn!(
+        %pane, program = "claude", session = %failed, fresh_session = %launch.session,
+        "Claude Code could not resume its conversation; starting a new one"
+    );
+    launch.relaunch = Some(Relaunch {
+        notice: Some(FRESH_START_NOTICE.to_owned()),
+        ..relaunch
+    });
+    launch.resumed = false;
+    launch.relaunched_at = Some(Instant::now());
+    {
+        let mut record = lock(&entry.record);
+        if let Some(agent) = record
+            .agent
+            .as_mut()
+            .filter(|agent| agent.kind == proto::AgentKind::Claude)
+        {
+            let account = agent
+                .account
+                .clone()
+                .unwrap_or_else(|| proto::SYSTEM_ACCOUNT.into());
+            core.ws
+                .accounts
+                .pin(proto::AgentKind::Claude, &launch.session, &account);
+            agent.session_id = Some(launch.session.clone());
+            agent.transcript = None;
+        }
+    }
+    core.mark_dirty();
+}
+
 pub(super) fn serve_relaunch(core: &Core, call: RelaunchCall) -> RelaunchReply {
     if !core.hooks.verify(&call.token, &call.pane.0.to_string()) {
         return RelaunchReply::None;
@@ -739,6 +835,9 @@ pub(super) fn serve_relaunch(core: &Core, call: RelaunchCall) -> RelaunchReply {
         else {
             return RelaunchReply::None;
         };
+        if call.claude_relaunch == RelaunchStep::Pending && launch.may_start_afresh() {
+            start_afresh(core, &entry, launch);
+        }
         match (call.claude_relaunch, &launch.relaunch) {
             (_, None) => RelaunchReply::None,
             (RelaunchStep::Pending, Some(_)) => RelaunchReply::Waiting,
@@ -749,6 +848,7 @@ pub(super) fn serve_relaunch(core: &Core, call: RelaunchCall) -> RelaunchReply {
                 RelaunchReply::Launch {
                     args: relaunch.args,
                     display: relaunch.display,
+                    notice: relaunch.notice,
                 }
             }
         }

@@ -18,7 +18,7 @@ use proto::{
 };
 use serde_json::Value;
 
-pub(crate) use claude::{CarriedClaudeLaunch, ClaudeLaunch, relaunch_loop};
+pub(crate) use claude::{CarriedClaudeLaunch, ClaudeLaunch, RESUME_FAILURE_WINDOW, relaunch_loop};
 pub use claude::{RelaunchCall, RelaunchReply, RelaunchStep};
 
 use crate::core::{ConnId, Core, Event, PaneEntry, lock};

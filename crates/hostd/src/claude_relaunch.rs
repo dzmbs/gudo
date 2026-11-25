@@ -24,12 +24,17 @@ pub(super) fn relaunch(arguments: &[String]) -> i32 {
     let error = match ask(arguments, RelaunchStep::Take) {
         Ok(RelaunchReply::Launch {
             args,
-            display: true,
-        }) => return super::claude_display::main(&args),
-        Ok(RelaunchReply::Launch {
-            args,
-            display: false,
-        }) => std::process::Command::new("claude").args(args).exec(),
+            display,
+            notice,
+        }) => {
+            if let Some(notice) = notice {
+                eprintln!("{notice}");
+            }
+            if display {
+                return super::claude_display::main(&args);
+            }
+            std::process::Command::new("claude").args(args).exec()
+        }
         Ok(_) => return 1,
         Err(error) => error,
     };
