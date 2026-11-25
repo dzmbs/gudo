@@ -57,6 +57,7 @@ pub fn run_hook(arguments: &[String]) {
         }
         Some("claude-relaunch") => std::process::exit(claude_relaunch::relaunch(&arguments[1..])),
         Some("agent-typed") => std::process::exit(typed_agent::main(&arguments[1..])),
+        Some("agent-start") => std::process::exit(typed_agent::start(&arguments[1..])),
         Some("agent-input-arm") => std::process::exit(agent_exit_fence::main(
             &arguments[1..],
             agent_exit_fence::FenceAction::Arm,

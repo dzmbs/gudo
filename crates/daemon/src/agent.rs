@@ -1035,6 +1035,13 @@ async fn serve_hook(core: &Arc<Core>, stream: UnixStream) -> io::Result<()> {
         write.write_all(&encoded).await?;
         return write.shutdown().await;
     }
+    if let Ok(call) = serde_json::from_str::<crate::typed_agent::TypedStartCall>(&line) {
+        let reply = crate::typed_agent::serve_start(core, call);
+        let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;
+        encoded.push(b'\n');
+        write.write_all(&encoded).await?;
+        return write.shutdown().await;
+    }
     if let Ok(call) = serde_json::from_str::<crate::agent_config::RelaunchCall>(&line) {
         let reply = crate::agent_config::serve_relaunch(core, call);
         let mut encoded = serde_json::to_vec(&reply).map_err(io::Error::other)?;

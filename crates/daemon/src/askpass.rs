@@ -625,13 +625,13 @@ struct Wraps {
     sudo: bool,
 }
 
-/// `claude` typed at the prompt runs through its launch (`typed_agent`), so Chat drives it as
-/// one started with New agent. The function asks the daemon once; if it declines, or the pane
-/// has no shim, Claude Code runs as typed. The fence after it keeps unread Chat input from the
-/// shell, as after a launch, and ends the shell if it fails.
+/// `claude`, `codex` and `pi` typed at the prompt run through their launch (`typed_agent`), so
+/// Chat drives them as ones started with New agent. Each function asks the daemon once; if it
+/// declines, or the pane has no shim, the agent runs as typed. The fence after it keeps unread
+/// Chat input from the shell, as after a launch, and ends the shell if it fails.
 const AGENT_SH: &str = r#"claude() {
   local __gudo_launch
-  if [ -x "${GUDO_HOOK-}" ] && __gudo_launch=$("$GUDO_HOOK" agent-typed claude "$@" </dev/null 2>/dev/null); then
+  if [ -x "${GUDO_HOOK-}" ] && __gudo_launch=$("$GUDO_HOOK" agent-typed claude "$@" </dev/null 2>/dev/null) && [ -n "$__gudo_launch" ]; then
     "$GUDO_HOOK" claude-relaunch "$__gudo_launch"
     while "$GUDO_HOOK" claude-relaunch-pending "$__gudo_launch" </dev/null; do
       "$GUDO_HOOK" claude-relaunch "$__gudo_launch"
@@ -641,11 +641,22 @@ const AGENT_SH: &str = r#"claude() {
     command claude "$@"
   fi
 }
+__gudo_typed_agent() {
+  local __gudo_launch
+  if [ -x "${GUDO_HOOK-}" ] && __gudo_launch=$("$GUDO_HOOK" agent-typed "$@" </dev/null 2>/dev/null) && [ -n "$__gudo_launch" ]; then
+    "$GUDO_HOOK" agent-start "$__gudo_launch"
+    "$GUDO_HOOK" agent-exit-fence "$__gudo_launch" || exit
+  else
+    command "$@"
+  fi
+}
+codex() { __gudo_typed_agent codex "$@"; }
+pi() { __gudo_typed_agent pi "$@"; }
 "#;
 
 const AGENT_FISH: &str = r#"if status is-interactive
     function claude --wraps claude
-        if set -q GUDO_HOOK; and test -x "$GUDO_HOOK"; and set -l __gudo_launch ("$GUDO_HOOK" agent-typed claude $argv </dev/null 2>/dev/null)
+        if set -q GUDO_HOOK; and test -x "$GUDO_HOOK"; and set -l __gudo_launch ("$GUDO_HOOK" agent-typed claude $argv </dev/null 2>/dev/null); and test -n "$__gudo_launch"
             "$GUDO_HOOK" claude-relaunch $__gudo_launch
             while "$GUDO_HOOK" claude-relaunch-pending $__gudo_launch </dev/null
                 "$GUDO_HOOK" claude-relaunch $__gudo_launch
@@ -654,6 +665,20 @@ const AGENT_FISH: &str = r#"if status is-interactive
         else
             command claude $argv
         end
+    end
+    function __gudo_typed_agent
+        if set -q GUDO_HOOK; and test -x "$GUDO_HOOK"; and set -l __gudo_launch ("$GUDO_HOOK" agent-typed $argv </dev/null 2>/dev/null); and test -n "$__gudo_launch"
+            "$GUDO_HOOK" agent-start $__gudo_launch
+            "$GUDO_HOOK" agent-exit-fence $__gudo_launch; or exit
+        else
+            command $argv
+        end
+    end
+    function codex --wraps codex
+        __gudo_typed_agent codex $argv
+    end
+    function pi --wraps pi
+        __gudo_typed_agent pi $argv
     end
 end
 "#;

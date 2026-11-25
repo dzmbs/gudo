@@ -85,8 +85,12 @@ impl ResumableProgram {
     /// The shell line that starts the agent fresh, or in `session_id`.
     pub fn launch_line(self, session_id: Option<&str>) -> String {
         match session_id.filter(|id| is_session_id(id)) {
-            Some(id) => format!("{} --session {}", self.executable(), shell_quote(id)),
-            None => self.executable().to_owned(),
+            Some(id) => format!(
+                "command {} --session {}",
+                self.executable(),
+                shell_quote(id)
+            ),
+            None => format!("command {}", self.executable()),
         }
     }
 
@@ -98,7 +102,7 @@ impl ResumableProgram {
             Some(id) => format!("--session {}", shell_quote(id)),
             None => "--continue".to_owned(),
         };
-        format!("{} {flags}", self.executable())
+        format!("command {} {flags}", self.executable())
     }
 
     /// The session an agent started at `started` in `cwd` writes: the newest one there written
@@ -309,14 +313,20 @@ mod tests {
     fn resume_runs_the_session_or_the_newest_one() {
         assert_eq!(
             ResumableProgram::Pi.resume_line(Some("01a1")),
-            "pi --session 01a1"
+            "command pi --session 01a1"
         );
-        assert_eq!(ResumableProgram::Pi.resume_line(None), "pi --continue");
+        assert_eq!(
+            ResumableProgram::Pi.resume_line(None),
+            "command pi --continue"
+        );
         assert_eq!(
             ResumableProgram::Kimi.resume_line(Some("session_b74e")),
-            "kimi --session session_b74e"
+            "command kimi --session session_b74e"
         );
-        assert_eq!(ResumableProgram::Kimi.resume_line(None), "kimi --continue");
+        assert_eq!(
+            ResumableProgram::Kimi.resume_line(None),
+            "command kimi --continue"
+        );
     }
 
     #[test]
@@ -341,7 +351,7 @@ mod tests {
         }
         assert_eq!(
             pi.resume_line(Some("--dangerously-skip-permissions")),
-            "pi --continue"
+            "command pi --continue"
         );
         assert_eq!(
             ResumableProgram::Kimi.session_from_argv(&argv(&["kimi", "-S", "session_1"])),

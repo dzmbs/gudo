@@ -292,6 +292,8 @@ pub(crate) struct PaneEntry {
     pub pi: Mutex<Option<Arc<crate::agent_driver::pi::bridge::Bridge>>>,
     /// The Claude Code the daemon launched here, which Chat can restart with new settings.
     pub claude_launch: Mutex<Option<crate::agent_config::ClaudeLaunch>>,
+    /// What a Codex or pi typed at the prompt starts with, until its shell function takes it.
+    pub typed_start: Mutex<Option<crate::typed_agent::TypedStart>>,
     /// Wakes the pane task when an agent attaches from outside it (a hook), so its timers run.
     pub agent_attached: Notify,
     /// Serializes policy decisions, request replacement and actual PTY resizes.
@@ -2399,6 +2401,7 @@ impl Core {
             launched_at: SystemTime::now(),
             created_at,
             resumable_process: Mutex::new(None),
+            typed_start: Mutex::new(None),
             reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));
@@ -2562,6 +2565,7 @@ impl Core {
             launched_at: carried.launched_at,
             created_at,
             resumable_process: Mutex::new(None),
+            typed_start: Mutex::new(None),
             reports_commands: AtomicBool::new(false),
         });
         let task = tokio::spawn(pane_task(Arc::clone(self), Arc::clone(&entry), vt_events));

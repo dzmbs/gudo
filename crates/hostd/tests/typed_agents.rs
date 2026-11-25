@@ -42,6 +42,28 @@ while IFS= read -r line; do :; done
     )
 }
 
+/// A Codex too old for its live Chat, so the helper starts it in Terminal: it prints its
+/// arguments and waits.
+const FAKE_CODEX: &str = r#"#!/bin/sh
+case "$1" in --version) echo "codex-cli 0.1.0"; exit 0 ;; esac
+if [ -n "$STARTED_AT" ]; then
+  perl -MTime::HiRes=time -e 'printf "STARTED %.6f\n", time'
+  exit 0
+fi
+echo "CODEX-UP $*"
+while IFS= read -r line; do :; done
+"#;
+
+/// pi: prints its arguments and waits.
+const FAKE_PI: &str = r#"#!/bin/sh
+if [ -n "$STARTED_AT" ]; then
+  perl -MTime::HiRes=time -e 'printf "STARTED %.6f\n", time'
+  exit 0
+fi
+echo "PI-UP $*"
+while IFS= read -r line; do :; done
+"#;
+
 /// The shells with an integration this host has.
 fn shells() -> Vec<PathBuf> {
     [
@@ -74,6 +96,11 @@ async fn start_daemon(dir: &Path, shell: &Path) -> Daemon {
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(&program, fake_claude(env!("CARGO_BIN_EXE_gudo-hook"))).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (name, script) in [("codex", FAKE_CODEX), ("pi", FAKE_PI)] {
+            let path = bin.join(name);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
     }
     let path = format!("{}:/usr/bin:/bin", bin.display());
     let shell = shell.to_owned();
@@ -86,6 +113,14 @@ async fn start_daemon(dir: &Path, shell: &Path) -> Daemon {
             (
                 "CLAUDE_CONFIG_DIR".into(),
                 home.join(".claude").to_string_lossy().into_owned(),
+            ),
+            (
+                "CODEX_HOME".into(),
+                home.join(".codex").to_string_lossy().into_owned(),
+            ),
+            (
+                "PI_CODING_AGENT_DIR".into(),
+                home.join(".pi").to_string_lossy().into_owned(),
             ),
         ]);
     })
@@ -227,12 +262,19 @@ async fn typed_launch_start_latency() {
     let pane = shell_pane(&mut owner, &work).await;
     owner.type_line(pane, "zmodload zsh/datetime; export STARTED_AT=1; clear");
     const RUNS: usize = 20;
-    for (label, program) in [("typed", "command claude"), ("launch", "claude")] {
+    for (label, program, options) in [
+        ("claude as typed", "command claude", "--verbose"),
+        ("claude through its launch", "claude", "--verbose"),
+        ("codex as typed", "command codex", ""),
+        ("codex through its launch", "codex", ""),
+        ("pi as typed", "command pi", ""),
+        ("pi through its launch", "pi", ""),
+    ] {
         let mut samples = Vec::with_capacity(RUNS);
         for run in 0..RUNS {
             owner.type_line(
                 pane,
-                &format!("clear; printf 'BEGAN %s\\n' $EPOCHREALTIME; {program} --verbose; echo DONE-{run}"),
+                &format!("clear; printf 'BEGAN %s\\n' $EPOCHREALTIME; {program} {options}; echo DONE-{run}"),
             );
             owner
                 .until("a run", |client| {
@@ -259,4 +301,69 @@ async fn typed_launch_start_latency() {
         );
     }
     daemon.shutdown().await;
+}
+
+/// The last line from a fake agent that starts with `marker`, once one prints.
+async fn up_line(owner: &mut TestClient, pane: PaneId, marker: &str) -> String {
+    owner
+        .until(&format!("{marker} in pane {pane}"), |client| {
+            client
+                .text(pane)
+                .lines()
+                .any(|line| line.starts_with(marker))
+        })
+        .await;
+    owner
+        .text(pane)
+        .lines()
+        .rfind(|line| line.starts_with(marker))
+        .expect("waited for above")
+        .to_owned()
+}
+
+async fn is_agent(owner: &mut TestClient, pane: PaneId) {
+    owner
+        .until("the pane runs an agent", |client| {
+            client
+                .metas
+                .get(&pane)
+                .is_some_and(|meta| meta.agent.is_some())
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn typed_codex_and_pi_run_through_their_launch() {
+    for shell in shells() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = dir.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let daemon = start_daemon(dir.path(), &shell).await;
+        let mut owner = TestClient::connect(&ticket(&daemon), ClientConfig::generate_key());
+        owner.attach_and_follow().await;
+
+        let codex = shell_pane(&mut owner, &work).await;
+        owner.type_line(codex, "codex");
+        let started = up_line(&mut owner, codex, "CODEX-UP").await;
+        assert!(started.contains("tui.notification"), "{shell:?}: {started}");
+        is_agent(&mut owner, codex).await;
+        let plain = shell_pane(&mut owner, &work).await;
+        owner.type_line(plain, "command codex");
+        let typed = up_line(&mut owner, plain, "CODEX-UP").await;
+        assert!(!typed.contains("tui.notification"), "{shell:?}: {typed}");
+        let exec = shell_pane(&mut owner, &work).await;
+        owner.type_line(exec, "codex exec hello");
+        let typed = up_line(&mut owner, exec, "CODEX-UP").await;
+        assert_eq!(typed.trim(), "CODEX-UP exec hello", "{shell:?}");
+
+        let pi = shell_pane(&mut owner, &work).await;
+        owner.type_line(pi, "pi");
+        let started = up_line(&mut owner, pi, "PI-UP").await;
+        assert!(started.contains("--extension"), "{shell:?}: {started}");
+        let plain = shell_pane(&mut owner, &work).await;
+        owner.type_line(plain, "pi --model x");
+        let typed = up_line(&mut owner, plain, "PI-UP").await;
+        assert_eq!(typed.trim(), "PI-UP --model x", "{shell:?}");
+        daemon.shutdown().await;
+    }
 }
