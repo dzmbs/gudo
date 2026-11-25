@@ -94,6 +94,10 @@ actor TimelineRenderWorker {
     static let newestFirstItems = 96
     /// How far before those items a turn's start is looked for; past it the page renders whole.
     static let turnStartSearch = 512
+    /// Older history past the rendered budget lets the newest items go a page at a time, at
+    /// most a whole window's worth (3,000 items).
+    static let historyTrimItems = 100
+    static let historyTrimAttempts = 30
 
     private var window: TimelineWindow
     private let builder: RowBuilder
@@ -163,8 +167,13 @@ actor TimelineRenderWorker {
         let renderedHeldBack = !didReset && !heldBack.isEmpty
         if renderedHeldBack { changed.formUnion(heldBack.lazy.filter { next.items[$0] != nil }) }
         heldBack.removeAll()
-        let prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset,
+        var prepared = try prepareRows(in: next, changed: changed, removed: removed, resetting: didReset,
                                        from: newestStart ?? 0)
+        if prepared == nil, consumedHistory, !consumedSnapshot, !hasLiveChanges, !didReset,
+           let fitted = try fitHistory(in: next, changed: &changed, removed: &removed, protecting: historyAnchor) {
+            next = fitted.window
+            prepared = fitted.page
+        }
         var changedRows: [ChatRow]
         if let prepared {
             window = next
@@ -253,6 +262,27 @@ actor TimelineRenderWorker {
         while index >= earliest {
             if isPrompt(index), !isPrompt(index - 1) { return index }
             index -= 1
+        }
+        return nil
+    }
+
+    /// Lets the newest items go, a page at a time, until the window with its older history fits
+    /// the rendered budget; nil when it cannot without losing `protected`.
+    private func fitHistory(in window: TimelineWindow, changed: inout Set<String>, removed: inout Set<String>,
+                            protecting protected: String?) throws -> (window: TimelineWindow, page: RenderedPage)? {
+        var trimmed = window
+        var trimmedChanged = changed
+        var trimmedRemoved = removed
+        for _ in 0..<Self.historyTrimAttempts {
+            let dropped = trimmed.dropNewest(Self.historyTrimItems, protecting: protected)
+            guard !dropped.isEmpty else { return nil }
+            trimmedRemoved.formUnion(dropped)
+            trimmedChanged.subtract(dropped)
+            if let page = try prepareRows(in: trimmed, changed: trimmedChanged, removed: trimmedRemoved, resetting: false, from: 0) {
+                changed = trimmedChanged
+                removed = trimmedRemoved
+                return (trimmed, page)
+            }
         }
         return nil
     }

@@ -89,6 +89,22 @@ final class TimelineModelTests: XCTestCase {
         XCTAssertFalse(rejected.needsHistoryCursor)
     }
 
+    /// Reading far back: an older page past the rendered budget lets the newest rows go behind
+    /// the newer gap, instead of stopping the reader at a Terminal fallback.
+    func testOlderHistoryPastTheRenderedBudgetLetsTheNewestRowsGo() async throws {
+        let worker = TimelineRenderWorker(pane: 7)
+        _ = try await worker.apply([.snapshot(paragraphPage(100..<350, before: 100))], resetsSnapshot: true, protectsHistory: false)
+        let older = try await worker.apply([.older(paragraphPage(0..<100, before: nil))], resetsSnapshot: false,
+                                           protectsHistory: true, historyAnchor: "m120")
+        XCTAssertNil(older.frame.note)
+        XCTAssertEqual(older.frame.rows.first?.id.item, "m0")
+        XCTAssertTrue(older.frame.hasNewerGap)
+        XCTAssertTrue(older.frame.rows.contains { $0.id.item == "m120" })
+        XCTAssertFalse(older.frame.rows.contains { $0.id.item == "m349" })
+        XCTAssertLessThanOrEqual(older.frame.rows.count, ChatRenderLimits.rowsPerPage)
+        XCTAssertNil(older.frame.before)
+    }
+
     func testAutomaticHistoryRequestsStopAtTheRenderedBudgetFallback() async throws {
         let resolutions = OSAllocatedUnfairLock(initialState: 0)
         let hub = DaemonWorkspace(hostId: "render-budget", events: WorkspaceEventHub(), resolve: {
@@ -470,6 +486,18 @@ final class TimelineModelTests: XCTestCase {
         var page = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(TimelineFixtureJSON.snapshot(0..<0).utf8)) as? [String: Any])
         page["items"] = items
         return try TimelineFixtureJSON.json(page)
+    }
+
+    /// Items of ten paragraphs each: ten rows an item.
+    private func paragraphPage(_ range: Range<Int>, before: UInt64?) throws -> String {
+        var page = try TimelineJSON.decode(TimelineSnapshot.self, from: TimelineFixtureJSON.snapshot(range, before: before))
+        let text = (0..<10).map { "Paragraph \($0)." }.joined(separator: "\n\n")
+        for index in page.items.indices {
+            guard case .assistant(var value) = page.items[index].body else { throw CancellationError() }
+            value.text = text
+            page.items[index].body = .assistant(value)
+        }
+        return String(decoding: try TimelineJSON.encode(page), as: UTF8.self)
     }
 
     private func expandedPage(_ range: Range<Int>, sequence: UInt64 = 0) throws -> String {

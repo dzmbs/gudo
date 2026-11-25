@@ -158,6 +158,19 @@ nonisolated struct TimelineWindow: Sendable {
         return changes
     }
 
+    /// Drops up to `count` of the newest items, never `protected`, so older history fits; the
+    /// latest wait behind the newer gap.
+    mutating func dropNewest(_ count: Int, protecting protected: String?) -> Set<String> {
+        var dropped: Set<String> = []
+        while dropped.count < count, let identifier = order.last, identifier != protected {
+            discard(identifier)
+            order.removeLast()
+            dropped.insert(identifier)
+        }
+        if !dropped.isEmpty { hasNewerGap = true }
+        return dropped
+    }
+
     mutating func rejectRenderedPage(from candidate: TimelineWindow, preservingHistory: Bool, markNewerGap: Bool) {
         cursor = candidate.cursor
         session = candidate.session
