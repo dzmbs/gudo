@@ -1067,6 +1067,10 @@ fn control_supported(
             ..
         } => more_features.contains(proto::MoreDaemonFeatures::CHAT_FILE_SEARCH),
         ClientCtl::Workspace {
+            req: proto::WorkspaceRequest::PasteImage { .. },
+            ..
+        } => more_features.contains(proto::MoreDaemonFeatures::PANE_IMAGES),
+        ClientCtl::Workspace {
             req: proto::WorkspaceRequest::TimelineWatchCapabilities { .. },
             ..
         } => features.contains(proto::DaemonFeatures::AGENT_CAPABILITIES),
@@ -1993,6 +1997,27 @@ mod tests {
             &tool_diff,
             proto::DaemonFeatures::TIMELINE_TOOL_DIFF,
             proto::MoreDaemonFeatures::EMPTY
+        ));
+    }
+
+    #[test]
+    fn old_daemons_are_not_sent_pasted_images() {
+        let paste = ClientCtl::Workspace {
+            req_id: 1,
+            req: proto::WorkspaceRequest::PasteImage {
+                pane_id: PaneId(7),
+                image: proto::PngSource::Inline(vec![1]),
+            },
+        };
+        assert!(!control_supported(
+            &paste,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::CHAT_IMAGES | proto::MoreDaemonFeatures::CHAT_FILE_SEARCH
+        ));
+        assert!(control_supported(
+            &paste,
+            proto::DaemonFeatures::default(),
+            proto::MoreDaemonFeatures::PANE_IMAGES
         ));
     }
 

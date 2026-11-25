@@ -303,6 +303,31 @@ impl DaemonClient {
             .daemon_offers(proto::MoreDaemonFeatures::CHAT_FILE_SEARCH)
     }
 
+    /// Hands a pasted or dropped picture (PNG or JPEG, its metadata removed on the way) to
+    /// the agent in `pane_id`; the host pastes its copy's path into the agent's input without
+    /// Enter. Returns that path. Only when [`offers_pane_images`](Self::offers_pane_images).
+    ///
+    /// # Errors
+    ///
+    /// The daemon's [`WorkspaceError`]: `Unavailable` when the pane runs no agent or the agent
+    /// waits for an answer, `Invalid` for anything but a PNG or JPEG or one too large, `Denied`
+    /// for a guest who may not prompt the pane.
+    pub async fn paste_image(&self, pane_id: u64, image: Bytes) -> Result<String, WorkspaceError> {
+        self.ws_call(|client| async move {
+            client
+                .paste_image(proto::PaneId(pane_id), image.into())
+                .await
+                .map(|pasted| pasted.path)
+        })
+        .await
+    }
+
+    /// Whether the daemon answers [`paste_image`](Self::paste_image).
+    pub fn offers_pane_images(&self) -> bool {
+        self.inner
+            .daemon_offers(proto::MoreDaemonFeatures::PANE_IMAGES)
+    }
+
     /// Whether the daemon answers [`repo_root`](Self::repo_root).
     pub fn offers_repo_root(&self) -> bool {
         self.inner

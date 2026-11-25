@@ -273,6 +273,7 @@ prefixed so they do not shadow Swift names: `DrawElement`, `DrawElementKind`
 | `place(request:)`, `placePng(request:png:)`, `unplace(placementId:)`, `listPlacements(paneId:)`, `placements(paneId:)` | inline placements (`PlaceRequest(paneId:artifactId:version:anchor:col:cols:rows:replace:)`); `placements` is the pushed state, no round trip |
 | `importToPane(paneId:name:data:) -> Placement` | pasted / dropped image or `.excalidraw` file |
 | `sendToAgent(paneId:artifactId:version:png:) -> SentToAgent` | `ArtifactError.NotAgentPane` for a pane without an agent |
+| `pasteImage(paneId:image:) -> String`, `offersPaneImages()` | a pasted picture into the agent's input (DAEMON.md §7.4.1); `WorkspaceError.Unavailable` for a pane without an agent |
 | `canvasPanes(sessionId:)` | canvas leaves, as last pushed (`.canvases`) |
 | `op(op: .split(paneId:axis:launch: .canvas(artifactId:)))` | a canvas split (`PaneLaunch.canvas`; `nil` = a new Excalidraw scene) |
 

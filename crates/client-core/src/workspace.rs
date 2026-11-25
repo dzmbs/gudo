@@ -633,6 +633,38 @@ impl Client {
             WorkspaceResponse::ChatFiles(files) => files)
     }
 
+    /// Hands a pasted or dropped picture (PNG or JPEG) to the agent in `pane_id`: its location
+    /// and other metadata are removed here, it is sent inline up to 1 MiB (else uploaded
+    /// first), and the host pastes its copy's path into the agent's input without Enter.
+    pub async fn paste_image(
+        &self,
+        pane_id: PaneId,
+        image: Vec<u8>,
+    ) -> Result<proto::PastedImage, WsError> {
+        if !self.daemon_offers(proto::MoreDaemonFeatures::PANE_IMAGES) {
+            return Err(WsError::Unavailable(
+                "Update the helper on this host to paste images into its agents.".into(),
+            ));
+        }
+        let image = drawing::strip_metadata(&image)
+            .ok_or_else(|| WsError::Invalid("not a PNG or JPEG image".into()))?;
+        let image = if image.len() <= 1 << 20 {
+            proto::PngSource::Inline(image)
+        } else {
+            let session = self
+                .session_of(pane_id)
+                .map_err(|error| WsError::Invalid(error.to_string()))?;
+            let uploaded = self
+                .blob_upload(session, image)
+                .await
+                .map_err(|error| WsError::Failed(error.to_string()))?;
+            proto::PngSource::Blob(uploaded.hash)
+        };
+        let request = WorkspaceRequest::PasteImage { pane_id, image };
+        expect!(self.workspace_with_timeout(request, Duration::from_secs(30)).await?,
+            WorkspaceResponse::ImagePasted(pasted) => pasted)
+    }
+
     /// The repository root holding `path` (`None` outside one), without running git.
     pub async fn repo_root(&self, path: String) -> Result<Option<String>, WsError> {
         expect!(self.workspace(WorkspaceRequest::RepoRoot { path }).await?,
