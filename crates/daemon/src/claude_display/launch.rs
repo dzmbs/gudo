@@ -14,7 +14,7 @@ pub(crate) fn prepare(
         if let Some(parent) = file.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        crate::fsutil::write_atomic(&file.path, file.contents.as_bytes())
+        crate::fsutil::write_replacing_unsynced(&file.path, file.contents.as_bytes())
     })();
     match result {
         Ok(()) => Some(launch),

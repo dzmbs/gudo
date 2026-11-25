@@ -13,6 +13,23 @@ use std::time::{Duration, Instant};
 /// then `fsync` of the directory, so a crash leaves either the old or the new contents.
 /// The file is created with mode 0600.
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_replacing(path, data, Durability::Synced)
+}
+
+/// Like [`write_atomic`] for a file every launch writes again (an agent's settings): a reader
+/// sees the old file or the new one, but nothing waits for the disk. Each sync is a full flush
+/// on macOS, about 10 ms, and a launch waits for it.
+pub(crate) fn write_replacing_unsynced(path: &Path, data: &[u8]) -> io::Result<()> {
+    write_replacing(path, data, Durability::Unsynced)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    Synced,
+    Unsynced,
+}
+
+fn write_replacing(path: &Path, data: &[u8], durability: Durability) -> io::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
@@ -35,10 +52,15 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
             .mode(0o600)
             .open(&temp_path)?;
         file.write_all(data)?;
-        file.sync_all()?;
+        if durability == Durability::Synced {
+            file.sync_all()?;
+        }
     }
     fs::rename(&temp_path, path)?;
-    File::open(dir)?.sync_all()
+    match durability {
+        Durability::Synced => File::open(dir)?.sync_all(),
+        Durability::Unsynced => Ok(()),
+    }
 }
 
 /// Runs `update` holding an exclusive lock on `<path>.lock` (`pairing.json` →

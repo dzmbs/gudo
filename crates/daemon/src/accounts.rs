@@ -104,6 +104,16 @@ impl Accounts {
         }
     }
 
+    /// Saves a new session pin. Every agent launch pins its session, and the flush to disk
+    /// would hold the launch up; a pin lost with power is the system account's, as an unpinned
+    /// session is.
+    fn save_pin(&self, state: &File) {
+        let bytes = serde_json::to_vec_pretty(state).expect("accounts serialize");
+        if let Err(error) = crate::fsutil::write_replacing_unsynced(&self.file, &bytes) {
+            tracing::warn!("saving accounts: {error}");
+        }
+    }
+
     /// The directory of account `id` (not the system account's).
     pub fn dir(&self, agent: AgentKind, id: &str) -> PathBuf {
         self.root.join(agent_dir_name(agent)).join(id)
@@ -197,7 +207,7 @@ impl Accounts {
         });
         let excess = state.sessions.len().saturating_sub(SESSION_PINS);
         state.sessions.drain(..excess);
-        self.save(&state);
+        self.save_pin(&state);
     }
 }
 
