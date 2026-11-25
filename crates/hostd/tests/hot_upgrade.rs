@@ -21,6 +21,7 @@ use client_core::{ClientConfig, ClientEvent, DaemonBuild};
 use support::TestClient;
 
 const HOSTD: &str = env!("CARGO_BIN_EXE_gudo-hostd");
+const HOOK: &str = env!("CARGO_BIN_EXE_gudo-hook");
 
 /// The daemon process, killed with its process group when the test ends however it ends.
 struct Hostd {
@@ -730,7 +731,8 @@ const CLAUDE_TRANSCRIPT: &str =
     include_str!("../../daemon/tests/fixtures/timeline/claude-2.1.318.jsonl");
 
 /// Writes its transcript where Claude Code does, reports it through the hooks a hand-started
-/// Claude Code runs, and waits as `claude`.
+/// Claude Code runs, and waits as `claude`. A release's shell pane may name no hook shim; there
+/// it runs this build's, as the shim Claude Code's settings would name.
 const FAKE_CLAUDE: &str = r#"#!/bin/bash
 cd "${CLAUDE_START_DIR:-.}"
 dir="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
@@ -739,7 +741,7 @@ transcript="$dir/__ID__.jsonl"
 cp "__TRANSCRIPT__" "$transcript"
 for event in SessionStart UserPromptSubmit; do
   printf '{"hook_event_name":"%s","session_id":"__ID__","transcript_path":"%s","cwd":"%s","source":"startup","prompt":"hi"}' \
-    "$event" "$transcript" "$PWD" | "$GUDO_HOOK" claude "$event"
+    "$event" "$transcript" "$PWD" | "${GUDO_HOOK:-__HOOK__}" claude "$event"
 done
 echo claude-ready
 exec -a claude /bin/sleep 600
@@ -779,7 +781,8 @@ async fn update_keeps_chat_for_a_claude_started_by_hand(command_prefix: &str) {
         &claude,
         FAKE_CLAUDE
             .replace("__ID__", CLAUDE_ID)
-            .replace("__TRANSCRIPT__", &transcript.display().to_string()),
+            .replace("__TRANSCRIPT__", &transcript.display().to_string())
+            .replace("__HOOK__", HOOK),
     )
     .unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -878,7 +881,8 @@ async fn an_app_update_keeps_a_launched_claude_and_its_chat() {
     let body = FAKE_CLAUDE
         .trim_start_matches("#!/bin/bash\n")
         .replace("__ID__", CLAUDE_ID)
-        .replace("__TRANSCRIPT__", &transcript.display().to_string());
+        .replace("__TRANSCRIPT__", &transcript.display().to_string())
+        .replace("__HOOK__", HOOK);
     std::fs::write(&claude, format!("{LAUNCHED_CLAUDE}{body}")).unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
     let work = dir.path().join("work");
@@ -958,6 +962,7 @@ const MATRIX_PI_ID: &str = "019a1b2c-4e5f-7061-8b7c-8d9e0f1a2b3c";
 
 /// Claude Code typed by hand or launched by the helper (in a directory named `launched`): it
 /// answers the launch's version check, writes its transcript and reports it through its hooks.
+/// Its hooks run as `FAKE_CLAUDE`'s do.
 const MATRIX_CLAUDE: &str = r#"#!/bin/bash
 case " $* " in *" --version "*) echo "2.1.318 (Claude Code)"; exit 0 ;; *" --help "*) exit 0 ;; esac
 case "$(basename "$PWD")" in launched) id=__LAUNCHED_ID__ ;; *) id=__ID__ ;; esac
@@ -974,7 +979,7 @@ sed "s/__FIXTURE_ID__/$id/g" "__TRANSCRIPT__" > "$transcript"
 case "$(basename "$PWD")" in launched) events=SessionStart ;; *) events="SessionStart UserPromptSubmit" ;; esac
 for event in $events; do
   printf '{"hook_event_name":"%s","session_id":"%s","transcript_path":"%s","cwd":"%s","source":"startup","prompt":"hi"}' \
-    "$event" "$id" "$transcript" "$PWD" | "$GUDO_HOOK" claude "$event"
+    "$event" "$id" "$transcript" "$PWD" | "${GUDO_HOOK:-__HOOK__}" claude "$event"
 done
 echo "claude-ready $arguments"
 exec -a claude /bin/sleep 600
@@ -1224,7 +1229,8 @@ async fn release_updates(update: Update, workload: Workload) {
             MATRIX_CLAUDE
                 .replace("__LAUNCHED_ID__", MATRIX_LAUNCHED_ID)
                 .replace("__ID__", MATRIX_CLAUDE_ID)
-                .replace("__TRANSCRIPT__", &fixture.display().to_string()),
+                .replace("__TRANSCRIPT__", &fixture.display().to_string())
+                .replace("__HOOK__", HOOK),
         ),
         ("codex", MATRIX_CODEX.replace("__ID__", MATRIX_CODEX_ID)),
         ("pi", MATRIX_PI.replace("__ID__", MATRIX_PI_ID)),
