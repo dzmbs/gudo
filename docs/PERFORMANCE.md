@@ -186,10 +186,29 @@ between visible updates ≤ 34 ms.
 | Mac after | 104 ms | 1.05 ms | 6.6 ms | 7 ms | +18 MB | 0.76 | 20 / 23 ms |
 | iOS simulator before | 299 ms | 7.6 ms | 27 ms | 59 ms | +3 MB | | |
 | iOS simulator after | 299 ms | 6.9 ms | 32 ms (first apply after scrolling) | 73 ms scrolling, 34 ms streaming | +4 MB | 0.83 | 17 / 31 ms |
+| iOS simulator, main again (3 runs) | 152-179 ms | 2.7-3.8 ms | 5.0-12 ms | 31-40 ms scrolling | +4-5 MB | 0.68-0.70 | 17 / 31 ms |
+| iOS simulator, newest first, cells by kind, measuring ahead (3 runs) | 130-138 ms | 2.75-2.82 ms | 5.0-5.8 ms | 9-15 ms scrolling | +4-5 MB | 0.77-0.78 | 17 / 32 ms |
 
 The Mac smoothness run commits on the timer because the screen was locked (`pacesWhileHidden`).
-iOS still misses its budget: each streamed apply lays the changed row out in SwiftUI twice (the
-sizing host, then the cell) and scrolling measures each revealed row the same way.
+The two iOS rows before last were measured side by side on the same machine with the simulator
+already booted: a run that boots it, or a machine busy with other builds, roughly doubles every
+figure. What moved iOS inside its budget:
+
+- **First rows.** On iOS a reset page longer than 96 items renders and folds its newest turns
+  first and the rest in the worker's next apply, and the transcript applies its first rows without
+  waiting for a display refresh: the first frame's worker time fell from 37-95 ms to 15-21 ms,
+  nearly all of it decoding the snapshot, the one step that still grows with the session. The Mac
+  renders a page whole: it met its budget that way (101-109 ms), and the two steps, tried there,
+  opened in 65-84 ms but held 21 MB instead of 18 MB at open.
+- **Scrolling.** Cells and sizing hosts are kept per kind of row, so measuring or showing a row
+  updates the SwiftUI views the last row of its kind built: measuring the rows a frame reveals
+  fell from 8-10 ms to 1-1.5 ms. While idle, rows within a screen of the viewport are measured
+  and the screen above is laid out once off screen, so the first scroll finds them measured and
+  their cells built.
+- **Streaming applies.** The first apply after scrolling no longer lays out the bottom rows from
+  nothing (up to 12 ms before on a quiet machine, 28 ms on a busy one; under 6 ms after). A
+  streamed apply still lays the growing row out twice, through its cell and then at its new
+  height, which is most of its 2.8 ms.
 
 ### Instant start (M5 Max, debug builds; docs/APP-ARCHITECTURE.md §26)
 

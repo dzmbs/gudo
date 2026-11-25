@@ -377,8 +377,11 @@ that clock. Inactive presentation parks it and retains only the latest pending f
 window length. Parent revisions detect a skipped render frame and force full reconciliation.
 A render generation also invalidates cached values when two connections reuse IDs and cursors.
 
-Visible rows use cached native fitting heights from one detached sizing host, independent of
-reused cells' stale intrinsic sizes. Exact width, Dynamic Type and legibility changes invalidate
+Visible rows use cached native fitting heights from a detached sizing host per kind of row
+(`ChatCellKind`: paragraph, list, code, prompt, tool line and so on), independent of reused cells'
+stale intrinsic sizes. Cells are reused within the same kinds, so measuring a row or showing it in
+a reused cell updates the SwiftUI views the last row of its kind built instead of building another
+kind's. Exact width, Dynamic Type and legibility changes invalidate
 those measurements. Measurement markers are pruned to retained row IDs after order changes;
 the 500-entry height LRU also charges identifier/metric metadata against a 4 MiB allowance.
 Before a timeline snapshot is submitted, its current and destination viewports receive native
@@ -401,6 +404,20 @@ following stops as soon as a drag begins, and no update moves the list while a f
 ending a drag within 40 pt of the bottom resumes following. A failed history page leaves Chat open
 with a note; the next drag may try again.
 The New capsule remains separate from the reusable cells.
+
+On iOS a long page opens newest first, so its first rows cost the same however long the session is
+(`TimelineModel.showsNewestFirst`; the Mac lays a whole page out within its budget, and the two
+steps cost it 3 MB at open). The render worker renders the newest turns of a reset page longer than
+96 items (from the first prompt of a turn at least 96 items from the end, so they fold exactly as
+in the whole page, looking at most 512 items further back) and publishes them; its next apply
+renders the rest. The transcript applies its first rows as soon as it has them, not on the next
+display refresh. The rows that arrive above land in one batch update that keeps the cells on
+screen, and the collection takes the update at the reading position
+(`NativeCollectionLayout.offsetAfterUpdate`), so it never lays out the rows under the old offset.
+While the display is idle, rows within a screen of the viewport are measured, nearest first, at
+most 8 rows and 2 ms per frame, and the collection lays out the screen above once, a quarter per
+frame, coming back in the same frame: nothing shows, but the first scroll finds those rows measured
+and their cells built.
 
 On iPad and wide windows the transcript and composer sit in one centred reading column (`ChatReadingColumn`, `DS.Size.proseReadingWidth`); on iPhone they use the full width. The space above a row follows what sits above it (`ChatRowSpacing`): blocks of one reply sit close, consecutive tool calls touch, and a prompt opens more room above and below it than the rows inside a turn. Markdown rows use prepared attributed values. Agents wrap prose at the terminal's width, so a single newline inside a paragraph, list item or quote is a soft break and reads as a space; two trailing spaces or a backslash keep a hard break, and blank lines still separate paragraphs (`ChatLineBreaks`). Simple, single-line paragraph values reuse the
 existing Swift Markdown inline nodes instead of invoking a second parser. Unsupported/nested
