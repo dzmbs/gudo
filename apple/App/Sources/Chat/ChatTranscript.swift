@@ -49,10 +49,12 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     }
 
     static let followDistance: CGFloat = 40
-    static let historyDistance: CGFloat = 600
     /// Measuring can grow rows into view that need measuring in turn; past this many passes the
     /// rest waits for the next frame.
     static let measurePassLimit = 8
+    /// Measuring ahead of the viewport takes at most this many rows and this long per frame.
+    static let measureAheadLimit = 8
+    static let measureAheadBudget: Duration = .milliseconds(2)
     private static let proseLineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: ChatFont.proseSize))
     private static let rowIdentifier = NSUserInterfaceItemIdentifier("chat-row")
 
@@ -99,6 +101,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     private var isApplying = false
     private var isMeasuring = false
     private var applyScheduled = false
+    private var measuresAhead = false
     private var needsRestyle = true
     private var lastWidth: CGFloat = 0
     private var observers: [NSObjectProtocol] = []
@@ -462,6 +465,9 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             document = NativeListLayout()
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
+        let itemUpdate = keptOrder.map {
+            ChatItemUpdate(old: documentRowIDs, new: frame.rows, keptOrder: $0, keptTail: keptTail(of: frame, after: $0))
+        }
         var changed = updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil)
         let revealed = reveal.update(frame, paces: paintsFrames).filter(frame.rowIDs.contains)
         measured.subtract(revealed)
@@ -482,7 +488,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             itemCount = current.rows.count
             collection.reloadData()
         }
-        else if changesOrder { replaceItems(from: keptOrder ?? 0, previousCount: previousCount, changed: changed) }
+        else if let itemUpdate { replaceItems(itemUpdate, changed: changed) }
         else { reconfigure(changed) }
         if following { scrollToBottom() }
         else if let anchor, let y = document.position(of: anchor) { scroll(toY: y - scroll.contentInsets.top) }
@@ -493,6 +499,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             measured.formIntersection(identifiers)
         }
         if firstContentLatency == nil, !current.rows.isEmpty { firstContentLatency = .now - openedAt }
+        if changesOrder { scheduleMeasureAhead() }
         if !revealed.isEmpty { recordRevealSample(at: start) }
         latest.isHidden = !(model.hasNewItems || current.hasNewerGap)
         model.readingItem = visibleRows.first?.item
@@ -561,18 +568,35 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         return zip(frame.rows, documentRowIDs).prefix { $0.id == $1 }.count
     }
 
+    /// How many of the collection's last rows end `frame` too, after its first `kept` rows.
+    private func keptTail(of frame: TimelineFrame, after kept: Int) -> Int {
+        let limit = min(documentRowIDs.count, frame.rows.count) - kept
+        var count = 0
+        while count < limit, documentRowIDs[documentRowIDs.count - 1 - count] == frame.rows[frame.rows.count - 1 - count].id {
+            count += 1
+        }
+        return count
+    }
+
     private func keptRowCount(keptOrder: Int, width: CGFloat, changed: Set<ChatRowID>) -> Int {
         guard document.contentWidth == width, documentRowIDs.count == document.rows.count else { return 0 }
         let firstChanged = changed.lazy.compactMap { self.document.indices[$0.storageKey] }.min()
         return min(keptOrder, firstChanged ?? keptOrder, document.rows.count)
     }
 
-    /// The items from `start` on are replaced and the ones before it that changed redrawn, so a
-    /// streamed row never reloads the rows above it.
-    private func replaceItems(from start: Int, previousCount: Int, changed: Set<ChatRowID>) {
-        let start = min(start, previousCount, current.rows.count)
-        let removed = Set((start..<previousCount).map { IndexPath(item: $0, section: 0) })
-        let inserted = Set((start..<current.rows.count).map { IndexPath(item: $0, section: 0) })
+    /// Only the items that moved are replaced and the ones that changed redrawn: a streamed row
+    /// never reloads the rows above it, and a page of history arriving above never reloads the
+    /// rows below it.
+    private func replaceItems(_ update: ChatItemUpdate, changed: Set<ChatRowID>) {
+        // Rows arriving above move every item after them, and AppKit's batch update visits each
+        // one (64 ms for a page above 1,700 rows); reloading builds only the items on screen.
+        if update.inserted.first == 0 || update.removed.first == 0 {
+            itemCount = current.rows.count
+            collection.reloadData()
+            return
+        }
+        let removed = Set(update.removed.lazy.map { IndexPath(item: $0, section: 0) })
+        let inserted = Set(update.inserted.lazy.map { IndexPath(item: $0, section: 0) })
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
@@ -691,6 +715,61 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     private func boundsChanged() {
         guard isActive, !isApplying else { return }
         measureVisible()
+        scheduleMeasureAhead()
+    }
+
+    /// Rows within a screen of the viewport are measured a few per frame, nearest first, so
+    /// scrolling to them, or a page of history landing above, only draws them.
+    private func scheduleMeasureAhead() {
+        guard !measuresAhead else { return }
+        measuresAhead = true
+        Task { @MainActor [weak self] in
+            while let self, isActive, view.window != nil {
+                try? await Task.sleep(for: ChatTextReveal.frameInterval)
+                // Only while nothing else draws: a streaming reply's frames come first.
+                guard pending == nil, reveal.isSettled, !isApplying, measureAhead() else { break }
+            }
+            self?.measuresAhead = false
+        }
+    }
+
+    /// Measures up to `measureAheadLimit` unmeasured rows near the viewport; whether any are left.
+    private func measureAhead() -> Bool {
+        guard !isMeasuring, lastWidth > 0, readingRect.height > 0 else { return false }
+        let shown = document.visibleRows(in: readingRect)
+        let window = document.visibleRows(in: readingRect.insetBy(dx: 0, dy: -readingRect.height))
+        guard !window.isEmpty else { return false }
+        isMeasuring = true
+        defer { isMeasuring = false }
+        let anchor = document.anchor(at: readingRect.minY)
+        let following = model.followsBottom
+        let start = ContinuousClock.now
+        var changed: [Int: CGFloat] = [:]
+        var measuredCount = 0
+        var above = shown.lowerBound - 1
+        var below = shown.upperBound
+        var remains = false
+        func measure(_ index: Int) {
+            guard window.contains(index), current.rows.indices.contains(index), !measured.contains(current.rows[index].id) else { return }
+            measuredCount += 1
+            if let height = fittedHeight(current.rows[index]), document.rows[index].height != height { changed[index] = height }
+        }
+        while above >= window.lowerBound || below < window.upperBound {
+            if measuredCount >= Self.measureAheadLimit || ContinuousClock.now - start > Self.measureAheadBudget {
+                remains = true
+                break
+            }
+            measure(above)
+            measure(below)
+            above -= 1
+            below += 1
+        }
+        guard !changed.isEmpty else { return remains }
+        document.setHeights(changed)
+        install()
+        if following { scrollToBottom() }
+        else if let anchor, let y = document.position(of: anchor) { scroll(toY: y - scroll.contentInsets.top) }
+        return remains
     }
 
     private func userScrolled() {
@@ -703,7 +782,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
             latest.isHidden = !current.hasNewerGap
         }
         model.readingItem = visibleRows.first?.item
-        if !follows, readingRect.minY < Self.historyDistance { model.requestOlder() }
+        if !follows, readingRect.minY < readingRect.height * ChatHistoryLead.screens { model.requestOlder() }
     }
 }
 
@@ -723,10 +802,19 @@ final class ChatScrollView: NSScrollView {
     }
 }
 
+/// A row's view takes the height the document measured; asking SwiftUI again on every layout
+/// would lay each visible row out twice.
+private final class ChatTranscriptItemView: NSView {
+    @objc(preferredLayoutAttributesFittingAttributes:)
+    func preferredLayoutAttributesFitting(_ layoutAttributes: NSCollectionViewLayoutAttributes) -> NSCollectionViewLayoutAttributes {
+        layoutAttributes
+    }
+}
+
 private final class ChatTranscriptItem: NSCollectionViewItem {
     private var host: NSHostingView<AnyView>?
 
-    override func loadView() { view = NSView() }
+    override func loadView() { view = ChatTranscriptItemView() }
 
     func configure(_ content: AnyView) {
         if let host {

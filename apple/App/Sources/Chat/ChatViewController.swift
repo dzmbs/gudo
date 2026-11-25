@@ -384,9 +384,10 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        guard !isApplying, scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
-        updateFollowing()
+        guard !isApplying else { return }
         requestHistoryIfNeeded()
+        guard scrollView.isDragging || scrollView.isDecelerating || scrollView.isTracking else { return }
+        updateFollowing()
     }
 
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
@@ -561,7 +562,9 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             warmedAbove = 0
         }
         let keptOrder = changesOrder && !resets ? keptOrder(of: frame) : nil
-        let keptTail = keptOrder.map { keptTail(of: frame, after: $0) } ?? 0
+        let itemUpdate = keptOrder.map {
+            ChatItemUpdate(old: documentRowIDs, new: frame.rows, keptOrder: $0, keptTail: keptTail(of: frame, after: $0))
+        }
         var changed = Set(updateRows(in: frame, resetting: resets, keptOrder: changesOrder ? keptOrder ?? 0 : nil))
         let revealed = reveal.update(frame, paces: paintsFrames).filter(frame.rowIDs.contains)
         measured.subtract(revealed)
@@ -584,9 +587,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
             restore(targetOffset(anchor: anchor, following: wasFollowing).y)
             itemCount = frame.rows.count
             collection.reloadData()
-        } else if changesOrder {
-            replaceItems(from: min(keptOrder ?? 0, previousCount), previousCount: previousCount, keepingLast: keptTail,
-                         landingAt: targetOffset(anchor: anchor, following: wasFollowing))
+        } else if let itemUpdate {
+            replaceItems(itemUpdate, landingAt: targetOffset(anchor: anchor, following: wasFollowing))
             reconfigureVisible(changed)
         } else {
             reconfigureVisible(changed)
@@ -599,11 +601,9 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     /// reloads the rows above it, and rows arriving above never reload the ones on screen.
     /// The collection lands at `offset` as it takes the update, so it never lays out the rows
     /// that were under the old offset.
-    private func replaceItems(from start: Int, previousCount: Int, keepingLast kept: Int, landingAt offset: CGPoint) {
-        let start = min(start, previousCount, current.rows.count)
-        let kept = min(kept, previousCount - start, current.rows.count - start)
-        let removed = (start..<(previousCount - kept)).map { IndexPath(item: $0, section: 0) }
-        let inserted = (start..<(current.rows.count - kept)).map { IndexPath(item: $0, section: 0) }
+    private func replaceItems(_ update: ChatItemUpdate, landingAt offset: CGPoint) {
+        let removed = update.removed.map { IndexPath(item: $0, section: 0) }
+        let inserted = update.inserted.map { IndexPath(item: $0, section: 0) }
         layout.offsetAfterUpdate = offset
         defer { layout.offsetAfterUpdate = nil }
         UIView.performWithoutAnimation {
@@ -918,7 +918,8 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
     }
 
     private func requestHistoryIfNeeded() {
-        if !model.followsBottom, collection.contentOffset.y + collection.adjustedContentInset.top < 600 { model.requestOlder() }
+        let fromTop = collection.contentOffset.y + collection.adjustedContentInset.top
+        if !model.followsBottom, fromTop < collection.bounds.height * ChatHistoryLead.screens { model.requestOlder() }
     }
 
     private func invalidateMetrics() {
