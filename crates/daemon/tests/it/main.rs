@@ -27,6 +27,7 @@ mod low_data;
 mod multiplayer;
 mod multiplayer_mp2;
 mod notify;
+mod pane_images;
 mod paths;
 mod presence;
 mod program_status;

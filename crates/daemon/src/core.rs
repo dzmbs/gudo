@@ -1608,6 +1608,7 @@ impl Core {
                     self.remember_closed(*id, &lock(&entry.record));
                     self.term.pane_closed(self, *id, &entry);
                     self.term.forget(*id);
+                    crate::pane_images::forget_pane(&self.cfg.state_dir, *id);
                     if let Some((agent, account)) = self.ws.accounts.sign_in_closed(*id) {
                         self.check_account(agent, account);
                     }

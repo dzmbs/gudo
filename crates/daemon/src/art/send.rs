@@ -41,6 +41,10 @@ pub(crate) fn paste_text(path: &str) -> Option<String> {
     Some(escaped)
 }
 
+/// Claude Code attaches a pasted image asynchronously: a keystroke right behind the paste can
+/// land in front of the chip. Answers wait this long after the paste.
+pub(crate) const ATTACH_SETTLE: Duration = Duration::from_millis(120);
+
 /// Sends a PNG to an agent pane. Returns what was sent and the events to broadcast (a bare
 /// image becomes an image artifact).
 pub(crate) async fn send(
@@ -132,9 +136,7 @@ pub(crate) async fn send(
         .write(bytes)
         .await
         .map_err(|_| ArtifactError::NotFound(format!("pane {} exited", request.pane_id)))?;
-    // Claude Code attaches the image asynchronously: a keystroke right behind the paste can
-    // land in front of the chip. Answer once it has had time to settle.
-    tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+    tokio::time::sleep(ATTACH_SETTLE).await;
     Ok((
         Sent {
             artifact_id,

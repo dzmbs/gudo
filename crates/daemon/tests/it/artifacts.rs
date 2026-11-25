@@ -144,7 +144,7 @@ async fn hook(socket: &std::path::Path, request: &HookRequest) -> HookResponse {
 }
 
 /// Marks `pane` as a Claude pane through its hook socket (its program stays what it is).
-async fn make_agent(daemon: &daemon::Daemon, dir: &std::path::Path, pane: PaneId) {
+pub(crate) async fn make_agent(daemon: &daemon::Daemon, dir: &std::path::Path, pane: PaneId) {
     hook(
         daemon.hook_socket(),
         &HookRequest {
@@ -627,11 +627,11 @@ async fn send_to_agent_pastes_an_escaped_path_without_enter() {
     daemon.shutdown().await;
 }
 
-const LOCATION: &[u8] = b"GPS 48.8584 N 2.2945 E";
+pub(crate) const LOCATION: &[u8] = b"GPS 48.8584 N 2.2945 E";
 
 /// A photo as a phone takes it: turned (EXIF orientation 6), with its position and camera in
 /// the EXIF and a comment.
-fn photo_with_location() -> Vec<u8> {
+pub(crate) fn photo_with_location() -> Vec<u8> {
     fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
         let mut bytes = vec![0xff, marker];
         bytes.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
@@ -655,7 +655,7 @@ fn photo_with_location() -> Vec<u8> {
     .concat()
 }
 
-fn holds(bytes: &[u8], needle: &[u8]) -> bool {
+pub(crate) fn holds(bytes: &[u8], needle: &[u8]) -> bool {
     bytes.windows(needle.len()).any(|window| window == needle)
 }
 
@@ -831,7 +831,7 @@ async fn a_photo_reaches_the_agent_without_where_it_was_taken() {
     daemon.shutdown().await;
 }
 
-fn guest_spec(roles: Roles, scope: Scope, label: &str) -> GrantSpec {
+pub(crate) fn guest_spec(roles: Roles, scope: Scope, label: &str) -> GrantSpec {
     let mut spec = GrantSpec::new(roles, scope);
     spec.label = label.into();
     spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));

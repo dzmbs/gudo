@@ -420,6 +420,11 @@ pub(crate) async fn handle(
         } => chat_files::search(core, conn, pane_id, query, limit)
             .await
             .map(Response::ChatFiles),
+        Request::PasteImage { pane_id, image } => {
+            crate::pane_images::paste(core, conn.actor, pane_id, image)
+                .await
+                .map(Response::ImagePasted)
+        }
         Request::FsRead { path, offset, len } => {
             blocking(move || files::read(&policy, &path, offset, len))
                 .await

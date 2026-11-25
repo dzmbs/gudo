@@ -230,6 +230,12 @@ makes, and then without its old invites.
   that would run them is checked separately 80 ms later.
   A sketch sent to an agent pastes only a path the daemon wrote, escaped, without Enter. The
   agents' own drive tools are covered in agent-terminal.md.
+- **A pasted picture writes only into its pane's store.** `PasteImage` needs prompter or
+  driver on an agent pane in scope (viewers, approvers and guests scoped elsewhere are refused
+  before anything is written), is rate limited and audited like a prompt, and writes one
+  stripped PNG or JPEG under `<state>/pane-images/<pane>/`, named by its hash (0700 folders,
+  0600 files), bounded per picture, per pane and in all, deleted with the pane. The agent gets
+  only that path, pasted without Enter, and nothing when it is waiting on a question.
 - **Images carry no location.** A photo sent to an agent would otherwise tell the host, the
   agent and its model provider where and when it was taken. The app strips EXIF, XMP, IPTC and
   PNG text before upload, and the daemon strips again what it stores and what agents read;

@@ -1692,6 +1692,7 @@ with an id get the error in their answer (`OpError::Forbidden`, `WsError::Denied
 | `Workspace`: `ListPorts`, `AttentionList`, `AttentionSeen` | any role | answers filtered to scope; a guest's `seen` is its own |
 | `Workspace`: `ListTurns`, `TurnDiff` | prompter, driver or approver | pane in scope |
 | `Workspace`: `SendReview` | prompter, driver or approver (non-drivers: agent panes only) | pane in scope |
+| `Workspace`: `PasteImage` | **prompter or driver**; **agent pane only** | pane in scope |
 | `Workspace`: git, `Fs*` (read, write, watch), worktrees, `EditorStatus`, `EditorOpen`, `VsCodeTunnelStatus`, `VsCodeTunnelOpen` | driver | host |
 | `Workspace`: `WorktreeLaunch` | driver | the pane's session |
 | `Workspace`: `EditorLaunch`, `EditorStop`, `VsCodeCliInstall`, `VsCodeTunnelStart`, `VsCodeTunnelStop` | **owner** | daemon |
@@ -2009,7 +2010,29 @@ keystroke cannot overtake Claude's asynchronous attach. A bare image (no artifac
 an image artifact. Each send is audited (`Prompt` kind, path only). Deleting the artifact
 deletes its send copies.
 
-### 7.5 Export
+#### 7.4.1 Pasting a picture into an agent
+
+`WorkspaceRequest::PasteImage{pane, image: Inline | Blob}` → `ImagePasted(PastedImage{path,
+agent})`, behind `MoreDaemonFeatures::PANE_IMAGES` (client-core refuses it locally for older
+helpers). What a paste or a drop of pictures on an agent pane sends, on any host. Unlike
+`Send` it makes no artifact: the picture is the agent's input, not a drawing of the session.
+
+- **Who.** Prompter or driver with the pane in scope (the same as `Send`), guests rate limited
+  as prompts; viewers and approvers are refused. The pane must run an agent (attached,
+  launched, or pi); a shell answers `Unavailable` and nothing is written. An agent waiting on
+  a question is refused too: a typed path could pick one of its answers.
+- **Store.** PNG or JPEG (sniffed), stripped like everything stored (§7.1), written atomically
+  to `<state>/pane-images/<pane>/<sha256>.<ext>`: directories 0700, files 0600.
+  `[PaneImageLimits]`: 16 MiB per picture, 32 pictures and 128 MiB per pane, 512 MiB for all
+  panes; past a limit the oldest go, never the one just written, and folders of panes that no
+  longer exist go too. Closing the pane deletes its folder; a daemon stopping or handing over
+  keeps it, as the pane lives on.
+- **Delivery.** The path is pasted bracketed when the program enabled it and never followed
+  by Enter, so the user adds words and sends. Claude Code and Codex get it escaped as in §7.4
+  and attach it (`[Image #N]`); pi takes pasted text as it is and its model reads the file, so
+  it gets the plain path, as pi's own clipboard paste does. The answer waits 120 ms, as `Send`
+  does. Each paste is audited (`Prompt` kind, path only).
+
 
 `Ascii`: `drawing::to_ascii`: box glyphs (`┌─┐`, `├`, `┼`) with junctions where lines
 meet, arrows as orthogonal elbows ending in `▶◀▲▼`, ellipses `╭╮╰╯`, text in place, ink as
@@ -2043,7 +2066,9 @@ from the environment or an `a=q` query; else a braille render and a summary).
 `cargo test -p daemon --test it artifacts` (macOS and Linux): Excalidraw scenes (a canvas pane
 creates one; concurrent puts reconcile with the version / nonce rule on both clients and the
 daemon, stale offers come back as winners, deletions, resync after a reconnect, ASCII/SVG/PNG
-export, a viewer reads but cannot put or import); a canvas pane with peers
+export, a viewer reads but cannot put or import); `cargo test -p daemon --test it pane_images`
+(§7.4.1: each agent's paste bytes, metadata stripped, modes, store bounds and eviction, orphans,
+pane close, guests); a canvas pane with peers
 (`canvas_pane_with_peers_syncs_inks_resyncs_and_closes`: owner, second device, driver guest
 and viewer on one `Split` canvas: `Canvases` on attach and reconnect, realistic rectangle /
 freedraw / text elements pushed live with put→push latency printed, edits of each other's
@@ -2197,18 +2222,26 @@ images and ink). `Detached` placements leave the grid and go to the pane's loose
 Excalidraw editor full-size, free scene units.
 
 **Paste / drop onto a terminal.** Ordinary paste/drop writes text or shell-escaped file paths;
-file URLs take precedence over their clipboard display names. Image-only clipboard paste writes
-nothing and creates no placement, including in agent panes. Placement is explicit: the Mac's
-“Place Image from Clipboard” menu item, Option-drop, or paste/import inside the canvas editor
-(on either platform). Option-drop onto an agent retains `send_to_agent(pane, None, None,
-Some(png))`. Internal drawing drags still move/place the existing artifact.
+file URLs take precedence over their clipboard display names. On a pane running no agent,
+image-only clipboard paste writes nothing and creates no placement, and dropped image files
+paste their paths as any file does: a shell gets no file written on the host by a paste.
+Placement is explicit: the Mac's “Place Image from Clipboard” menu item, Option-drop, or
+paste/import inside the canvas editor (on either platform). Option-drop onto an agent retains
+`send_to_agent(pane, None, None, Some(png))`. Internal drawing drags still move/place the
+existing artifact.
 
-**Images for an agent.** An agent pane's menu has “Send Image to <agent>…”: the photo library
-on iPhone and iPad, a file on the Mac. On iPhone and iPad an image alone dropped on an agent
-pane (from Photos, a screenshot) is sent to it; elsewhere it is still ignored. Either way the
-app writes the picture again from its pixels first (`AgentImage`: upright, at most 2048 px,
-PNG stays PNG, anything else JPEG, no metadata) and sends it with `send_to_agent` to that
-pane's own host. Viewers get no such entry.
+**Images for an agent.** On an agent pane, pasting an image alone (⌘V, the edit menu; not
+the key bar's paste control, which takes text) or image files only (PNG, JPEG, HEIC, GIF,
+WebP), and dropping image files or photos, sends the pictures to the agent instead of typing
+anything (TerminalKit `acceptsImages` / `onImages`, installed by `AgentImageSender.install`).
+Text, other files and a mix of images and other files paste exactly as before. An agent pane's
+menu also has “Send Image to <agent>…”: the photo library on iPhone and iPad, a file on the
+Mac. Every way in writes the picture again from its pixels first (`AgentImage`: upright, at most
+2048 px, JPEG and HEIC photos as JPEG, everything else PNG, no metadata), at most eight per
+paste, and sends it to that pane's own host with `paste_image` (§7.4.1); a helper without
+`PANE_IMAGES` gets `send_to_agent` instead, which pastes the same way and keeps the picture as
+an image of the session. A toast at the standard anchor says “Image sent to Claude Code”, or
+why not. Viewers get no such entry.
 
 **Explicit image previews.** `import_to_pane(pane, name, bytes)` automatically sizes the preview
 to at most a third of the pane's columns and rows, preserving aspect ratio to cell rounding.

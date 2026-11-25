@@ -213,6 +213,8 @@ pub struct Config {
     pub history: crate::assist::HistoryConfig,
     /// Size caps for drawings and images.
     pub artifacts: ArtifactLimits,
+    /// Size caps for pictures pasted into agent panes.
+    pub pane_images: PaneImageLimits,
     /// What one client connection may hold at once.
     pub connection: ConnectionLimits,
     /// Events kept for connections that are behind; one that misses more is sent the state
@@ -291,6 +293,39 @@ pub struct ArtifactLimits {
     pub batch_max: u64,
     /// Artifacts per session.
     pub per_session: usize,
+}
+
+/// Size caps for the pictures pasted into agent panes (`<state>/pane-images/<pane>/`). Past a
+/// count or total the oldest go first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneImageLimits {
+    /// One picture, in bytes.
+    pub image_max: u64,
+    /// Pictures kept per pane.
+    pub per_pane: usize,
+    /// Everything one pane keeps, in bytes.
+    pub pane_total_max: u64,
+    /// Everything all panes keep, in bytes.
+    pub total_max: u64,
+}
+
+/// The app sends at most 16 MiB, written again at 2048 px on the long side.
+pub const PANE_IMAGE_MAX: u64 = 16 << 20;
+/// A pasted path waits in the agent's input until the prompt is sent; Codex reads the file
+/// only then.
+pub const PANE_IMAGES_PER_PANE: usize = 32;
+pub const PANE_IMAGES_PANE_TOTAL_MAX: u64 = 128 << 20;
+pub const PANE_IMAGES_TOTAL_MAX: u64 = 512 << 20;
+
+impl Default for PaneImageLimits {
+    fn default() -> Self {
+        Self {
+            image_max: PANE_IMAGE_MAX,
+            per_pane: PANE_IMAGES_PER_PANE,
+            pane_total_max: PANE_IMAGES_PANE_TOTAL_MAX,
+            total_max: PANE_IMAGES_TOTAL_MAX,
+        }
+    }
 }
 
 /// What one client connection may hold at once, so no peer (a guest included) can tie up the
@@ -406,6 +441,7 @@ impl Config {
             pre_auth: crate::preauth::PreAuthLimits::default(),
             presence: PresenceTimes::default(),
             artifacts: ArtifactLimits::default(),
+            pane_images: PaneImageLimits::default(),
             connection: ConnectionLimits::default(),
             event_backlog: 1024,
             askpass: AskpassConfig::default(),

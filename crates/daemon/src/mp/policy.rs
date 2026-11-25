@@ -231,6 +231,8 @@ pub(crate) fn workspace(req: &WorkspaceRequest) -> (Need, Target) {
             (Need::Prompt, Target::Pane(*pane_id))
         }
         R::SendReview(review) => (Need::Prompt, Target::Pane(review.pane_id)),
+        // Writes a file on the host: only for those who may hand the agent a drawing.
+        R::PasteImage { pane_id, .. } => (Need::Draw, Target::Pane(*pane_id)),
         R::WorktreeLaunch { split_from, .. } => (Need::Drive, Target::SessionOf(*split_from)),
         R::GitStatus { .. }
         | R::RepoRoot { .. }

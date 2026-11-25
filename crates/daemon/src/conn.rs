@@ -348,6 +348,7 @@ pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
         | proto::MoreDaemonFeatures::CHAT_IMAGES
         | proto::MoreDaemonFeatures::AGENT_CONTROLS
         | proto::MoreDaemonFeatures::CHAT_FILE_SEARCH
+        | proto::MoreDaemonFeatures::PANE_IMAGES
 }
 
 pub(crate) fn daemon_info(core: &Core) -> proto::DaemonInfo {
@@ -3065,7 +3066,10 @@ impl Client {
             }
             _ => {}
         }
-        if matches!(request, WorkspaceRequest::SendReview(_)) {
+        if matches!(
+            request,
+            WorkspaceRequest::SendReview(_) | WorkspaceRequest::PasteImage { .. }
+        ) {
             self.core
                 .mp
                 .admit_prompt(&self.authz, self.ws.owner)
