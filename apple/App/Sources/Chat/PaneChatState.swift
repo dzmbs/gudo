@@ -52,11 +52,7 @@ final class PaneChatState {
         guard let model, model.error == nil else { return [] }
         return model.outline.capabilities
     }
-    #if canImport(UIKit)
-    @ObservationIgnored weak var controller: ChatViewController?
-    #else
-    @ObservationIgnored weak var controller: ChatTranscriptController?
-    #endif
+    @ObservationIgnored weak var controller: ChatTranscriptViewController?
     @ObservationIgnored private weak var hub: DaemonWorkspace?
     @ObservationIgnored private var actionEpoch = UUID()
 
@@ -128,7 +124,37 @@ final class PaneChatState {
         }
     }
 
+    /// The transcript for `model`: the one kept from the last time this pane showed it, when
+    /// it is free.
+    func transcriptController(for model: TimelineModel) -> ChatTranscriptViewController {
+        guard let lease, lease.model === model else { return ChatTranscriptViewController(model: model) }
+        return lease.transcript { ChatTranscriptViewController(model: model) }
+    }
+
+    /// How long a Chat started ahead of its view waits for the view before letting its model go.
+    static let prewarmGrace: Duration = .seconds(2)
+    @ObservationIgnored private var prewarmRelease: Task<Void, Never>?
+
+    /// Starts this pane's Chat before its view appears (the pointer resting on its tab), so its
+    /// rows are on their way when it shows. It never takes another pane's warm model, and lets go
+    /// after `grace` unless the view shows.
+    func prewarm(in hub: DaemonWorkspace, grace: Duration = PaneChatState.prewarmGrace) {
+        guard agent != nil, offersChat, presentation == .chat, lease == nil,
+              let lease = pool.acquireWithoutEvicting(owner, pane: member.pane.rawValue) else { return }
+        self.lease = lease
+        self.hub = hub
+        lease.model.start(in: hub)
+        prewarmRelease = Task { [weak self] in
+            try? await Task.sleep(for: grace)
+            guard let self, !Task.isCancelled, prewarmRelease != nil else { return }
+            prewarmRelease = nil
+            deactivate()
+        }
+    }
+
     func activate(in hub: DaemonWorkspace) {
+        prewarmRelease?.cancel()
+        prewarmRelease = nil
         guard agent != nil else { return }
         self.hub = hub
         if lease == nil { lease = pool.acquire(owner, pane: member.pane.rawValue) }
@@ -161,6 +187,8 @@ final class PaneChatState {
     }
 
     func deactivate() {
+        prewarmRelease?.cancel()
+        prewarmRelease = nil
         invalidateActions()
         lease?.close()
         lease = nil

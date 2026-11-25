@@ -14,13 +14,15 @@ struct NativeChatView<Composer: View>: NSViewControllerRepresentable {
     var actions = ChatRowActions()
     var isActive = true
     var isWorking = false
+    /// Returns the transcript to show, which may be one kept from an earlier showing.
+    var makeController: (() -> ChatTranscriptController)?
     var onControllerReady: ((ChatTranscriptController) -> Void)?
     @ViewBuilder var composer: () -> Composer
     @Environment(\.self) private var environment
     @AppStorage(TerminalPreferences.Key.fontSize) private var fontSize = TerminalPreferences.Default.fontSize
 
     func makeNSViewController(context: Context) -> ChatTranscriptController {
-        let controller = ChatTranscriptController(model: model)
+        let controller = makeController?() ?? ChatTranscriptController(model: model)
         onControllerReady?(controller)
         return controller
     }
@@ -129,6 +131,16 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
     /// The rows between the top fade and the composer, top to bottom.
     var visibleRows: [ChatRowID] {
         document.visibleRows(in: readingRect).compactMap { current.rows.indices.contains($0) ? current.rows[$0].id : nil }
+    }
+
+    /// The row at the top of the reading area, which the transcript holds still.
+    var readingRow: ChatRowID? {
+        document.row(at: readingRect.minY).flatMap { documentRowIDs.indices.contains($0) ? documentRowIDs[$0] : nil }
+    }
+
+    /// Where the row starts, from the top of the reading area.
+    func viewportPosition(of id: ChatRowID) -> CGFloat? {
+        document.indices[id.storageKey].map { document.positions[$0] - readingRect.minY }
     }
 
     /// How far the reader is above the latest row.

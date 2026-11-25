@@ -132,25 +132,7 @@ final class MacChatFixture {
     /// Scrolls the transcript as a trackpad does: a gesture that begins, moves `steps` times by
     /// `delta` points (positive scrolls up, to earlier rows) and ends.
     func scrollWheel(by delta: Int32, steps: Int = 6) async {
-        guard let content = window.contentView else { return }
-        let inWindow = content.convert(NSPoint(x: content.bounds.midX, y: content.bounds.midY), to: nil)
-        let onScreen = window.convertPoint(toScreen: inWindow)
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let location = CGPoint(x: onScreen.x, y: primaryHeight - onScreen.y)
-        func send(_ delta: Int32, phase: CGScrollPhase) {
-            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
-                                      wheel1: delta, wheel2: 0, wheel3: 0) else { return }
-            event.location = location
-            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-            if let wheel = NSEvent(cgEvent: event) { window.sendEvent(wheel) }
-        }
-        send(0, phase: .began)
-        for _ in 0..<steps {
-            send(delta, phase: .changed)
-            try? await Task.sleep(for: .milliseconds(16))
-        }
-        send(0, phase: .ended)
-        try? await Task.sleep(for: .milliseconds(50))
+        await window.scrollChat(by: delta, steps: steps)
     }
 
     func wait(timeout: Duration = .seconds(20), file: StaticString = #filePath, line: UInt = #line,

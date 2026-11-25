@@ -400,6 +400,7 @@ private struct TabChip: View {
         .onMiddleClick { model.closeTab(ref, undoable: false) }
         #endif
         .onHover { hovering in withAnimation(DS.Motion.micro) { isHovered = hovering } }
+        .modifier(ChatHoverPrewarm(hovered: isHovered, tab: tab, workspace: workspace))
         .chromeContextMenu {
             if let workspace {
                 Button("Rename…", systemImage: "pencil") {

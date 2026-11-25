@@ -1055,6 +1055,7 @@ struct TabRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered = $0 }
+        .modifier(ChatHoverPrewarm(hovered: hovered, tab: tab, workspace: workspace))
         .task(id: started?.startedAtMs) {
             guard let started else { return longRunning = nil }
             let ranFor = Date.now.timeIntervalSince1970 - Double(started.startedAtMs) / 1000

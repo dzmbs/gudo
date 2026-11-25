@@ -63,6 +63,7 @@ struct PaneChatView<Terminal: View>: View {
     private func transcript(_ model: TimelineModel) -> some View {
         NativeChatView(model: model, frame: model.frame, expanded: model.expanded, actions: actions,
                        isActive: state.presentation == .chat, isWorking: working,
+                       makeController: { state.transcriptController(for: model) },
                        onControllerReady: { state.controller = $0 }) {
             composer
         }

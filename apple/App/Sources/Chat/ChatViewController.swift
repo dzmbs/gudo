@@ -11,13 +11,15 @@ struct NativeChatView<Composer: View>: UIViewControllerRepresentable {
     var actions = ChatRowActions()
     var isActive = true
     var isWorking = false
+    /// Returns the transcript to show, which may be one kept from an earlier showing.
+    var makeController: (() -> ChatViewController)?
     var onControllerReady: ((ChatViewController) -> Void)?
     @ViewBuilder var composer: () -> Composer
     @Environment(\.self) private var environment
     @AppStorage(TerminalPreferences.Key.fontSize) private var fontSize = TerminalPreferences.Default.fontSize
 
     func makeUIViewController(context: Context) -> ChatViewController {
-        let controller = ChatViewController(model: model)
+        let controller = makeController?() ?? ChatViewController(model: model)
         onControllerReady?(controller)
         return controller
     }
@@ -439,6 +441,17 @@ final class ChatViewController: UIViewController, UICollectionViewDataSource, UI
 
     func indexPath(of id: ChatRowID) -> IndexPath? {
         document.indices[id.storageKey].map { IndexPath(item: $0, section: 0) }
+    }
+
+    /// The row at the top of the reading area, which the transcript holds still.
+    var readingRow: ChatRowID? {
+        document.row(at: collection.contentOffset.y + collection.adjustedContentInset.top)
+            .flatMap { documentRowIDs.indices.contains($0) ? documentRowIDs[$0] : nil }
+    }
+
+    /// Where the row starts, from the top of the reading area.
+    func viewportPosition(of id: ChatRowID) -> CGFloat? {
+        document.indices[id.storageKey].map { document.positions[$0] - collection.contentOffset.y - collection.adjustedContentInset.top }
     }
 
     private func rowContent(_ row: ChatRow) -> some View {

@@ -59,7 +59,20 @@ nonisolated final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimeli
             .map { FileMatch(path: $0, kind: $0.hasSuffix("/") ? .dir : .file, positions: []) }
         return FileMatches(root: "/fixture/project", matches: matches, scanned: UInt32(searchablePaths.count), truncated: false)
     }
-    func timelineWatch(paneId: UInt64) async throws -> String { record("watch \(paneId)"); return snapshot }
+    /// A whole session served as the helper serves one: its latest page on watch, then older
+    /// pages on request. Unset, every watch returns `snapshot`.
+    nonisolated(unsafe) var session: [[String: Any]]?
+    /// How long each watch and history read takes, as a link to another host does.
+    nonisolated(unsafe) var latency: Duration = .zero
+    static let latestPageItems = 60
+
+    func timelineWatch(paneId: UInt64) async throws -> String {
+        record("watch \(paneId)")
+        if latency > .zero { try await Task.sleep(for: latency) }
+        guard let session else { return snapshot }
+        let start = max(0, session.count - Self.latestPageItems)
+        return try ChatScenes.snapshot(Array(session[start...]), before: start > 0 ? UInt64(start) : nil)
+    }
     func timelineUnwatch(paneId: UInt64) async throws { record("unwatch \(paneId)") }
     /// The page `timelineItemsBefore` returns; an empty one when nil.
     nonisolated(unsafe) var olderPage: String?
@@ -69,6 +82,12 @@ nonisolated final class TimelineFixtureClient: FakeWorkspaceClient, DaemonTimeli
     func timelineItemsBefore(paneId: UInt64, before: UInt64, limit: UInt16) async throws -> String {
         olderPageRequests += 1
         while holdsOlderPage { try await Task.sleep(for: .milliseconds(5)) }
+        if latency > .zero { try await Task.sleep(for: latency) }
+        if let session {
+            let end = min(Int(before), session.count)
+            let start = max(0, end - Int(limit))
+            return try ChatScenes.snapshot(Array(session[start..<end]), before: start > 0 ? UInt64(start) : nil)
+        }
         return try olderPage ?? TimelineFixtureJSON.snapshot(0..<0, before: nil)
     }
     func timelineToolOutput(paneId: UInt64, handle: String, offset: UInt64, len: UInt32) async throws -> String {

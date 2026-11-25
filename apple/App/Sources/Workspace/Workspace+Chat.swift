@@ -30,6 +30,12 @@ extension Workspace {
         state.prepareInitialPresentation { pane.prepareToParkTerminal() }
     }
 
+    /// Starts the Chat of the tab's agent panes before the tab shows, as the pointer rests on it.
+    func prewarmChat(of tab: Tab) {
+        guard let hub = (host as? DaemonConnection)?.workspace else { return }
+        for id in tab.root.panes { panes[id]?.chat?.prewarm(in: hub) }
+    }
+
     /// The Chat of the tab's only pane when it runs an agent: the title bar carries its switch,
     /// as a split pane's header does.
     var soleAgentPaneChat: (pane: Pane, chat: PaneChatState)? {
