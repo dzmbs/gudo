@@ -230,8 +230,17 @@ to the first frame showing rows, median / worst.
 
 The kept transcript adds nothing to the switch: its cells, measured heights and offset are there
 when the view attaches, and the refreshed watch lands after the first frame. What is left is SwiftUI
-building the pane's own views again (composer, overlays, sheets): 60 ms of main thread in the Mac
-profile, against the 16 ms (Mac) and 33 ms (iOS) targets. `switchBudget` holds the measured 100 ms.
+building the pane's own views again: the test reads the main thread busy for 65-75 ms of each Mac
+switch (thread CPU time, so not waiting), against the 16 ms (Mac) and 33 ms (iOS) targets.
+`switchBudget` holds the measured 100 ms. Tried and measured:
+
+- Dropping the pane's sheets, alerts, pickers and `onChange` handlers left 66-72 ms: they are not
+  the cost; the transcript's representable, its composer and the empty state are.
+- Keeping the pane's Chat views (composer, overlays, transcript) in a hosting controller held by
+  the pool and reattaching it: SwiftUI builds a hosting controller's root again when its
+  representable is made again (a new `@State`, `onAppear` with a fresh identity, a new transcript
+  controller on every reattach), so nothing was saved. The views have to stay mounted, as recent
+  tabs kept in the window hidden would be, to be reused.
 
 **Reading back**: a 10,500-item session (1,500 turns) paged as the helper pages it, 20 ms a read,
 scrolled up 400 pt a step until 32 older pages have loaded.
@@ -258,7 +267,9 @@ its Chat, so a link's round trip (80 ms in `testAPaneStartedAheadOpensOnRowsAlre
 spent before the click.
 
 Existing budgets in the same runs: Mac long session first rows 83-116 ms, apply mean 1.2-1.6 ms,
-max 4.7-8.7 ms, stall 17-24 ms (with or without measuring ahead; 7 ms on a quiet machine before),
+max 4.7-8.7 ms, stall 17-24 ms (with or without measuring ahead). Re-measured at load 3-4: wheel
+stall 17-24 ms, streaming 11-14 ms, so the scrolling stall is real. It is a tall row's SwiftUI
+sizing in the frame it scrolls into view; the iOS paragraph fast path is not on the Mac yet.
 smoothness CV 0.50, p95 23 ms. iOS first rows 127 ms, apply mean 2.2 ms, max 3.7 ms, stall 12 ms,
 smoothness CV 0.77, p95 32 ms.
 
@@ -394,10 +405,11 @@ App (not measured end to end, because the Mac app is not launched in the foregro
   would roughly halve atlas memory (the atlas is now shared, so about 1.3 MB per font size).
 - **Other periodic SwiftUI views:** `TabSubtitle` (one per tab, 1 s) and the presence/knock timelines. Each is small,
   but they scale with tabs.
-- **Chat pane switch is SwiftUI-bound.** Switching back to a warm pane costs 59-67 ms, nearly all
-  of it building the pane's composer and overlays again. Keeping recent panes' views alive, or
-  moving the composer's state into `PaneChatState` so its hosting view is reused whole, would bring
-  it toward the 16 ms (Mac) and 33 ms (iOS) targets.
+- **Chat pane switch is SwiftUI-bound.** Switching back to a warm pane costs 59-75 ms of main
+  thread, nearly all of it SwiftUI building the pane's views again. A kept hosting controller does
+  not help (SwiftUI rebuilds its root on reattach, measured); keeping recent tabs mounted and hidden
+  in the window (bounded, with hidden terminals kept from claiming their size) would reach the
+  16 ms (Mac) and 33 ms (iOS) targets.
 - **Keystroke latency and frame pacing under load** were not measured. This needs instrumentation in the
   client (input → echo applied → frame presented).
 

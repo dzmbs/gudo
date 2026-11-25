@@ -60,6 +60,20 @@ nonisolated enum ProcessStats {
         return result == KERN_SUCCESS ? Double(info.phys_footprint) / 1_048_576 : 0
     }
 
+    /// CPU time the calling thread has used; called on the main thread, the main thread's.
+    static var mainThreadCPU: Double {
+        let thread = mach_thread_self()
+        defer { mach_port_deallocate(mach_task_self_, thread) }
+        var info = thread_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<thread_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { thread_info(thread, thread_flavor_t(THREAD_BASIC_INFO), $0, &count) }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        func seconds(_ time: time_value_t) -> Double { Double(time.seconds) + Double(time.microseconds) / 1_000_000 }
+        return seconds(info.user_time) + seconds(info.system_time)
+    }
+
     static var cpuSeconds: Double {
         var usage = rusage()
         getrusage(RUSAGE_SELF, &usage)

@@ -257,13 +257,18 @@ final class ChatPaneSwitchTests: XCTestCase {
         try await fixture.wait(timeout: .seconds(60)) { !fixture.visibleRows(1).isEmpty }
         try await Task.sleep(for: .milliseconds(500))
         var switches: [Duration] = []
+        var busy: [Double] = []
         for round in 0..<10 {
             let index = round.isMultiple(of: 2) ? 0 : 1
+            let cpuBefore = ProcessStats.mainThreadCPU
             fixture.show(index)
             switches.append(try await fixture.wait { !fixture.visibleRows(index).isEmpty })
+            busy.append(ProcessStats.mainThreadCPU - cpuBefore)
             try await Task.sleep(for: .milliseconds(300))
         }
         let warm = ProcessStats.footprintMB - footprint
+        let busyMedian = busy.sorted()[busy.count / 2] * 1_000
+        print("chat-switch \(Self.platform): main thread busy median \(String(format: "%.1f", busyMedian)) ms of each switch")
         let sorted = switches.sorted()
         let median = sorted[sorted.count / 2]
         let worst = sorted.last ?? .zero
