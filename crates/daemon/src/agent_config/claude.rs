@@ -204,7 +204,7 @@ fn restarts_at_prompt(entry: &PaneEntry) -> Option<Restarts> {
 
 /// The conversation of the Claude Code running in `entry`: as its hooks name it, else as its
 /// record keeps it (a build that handed the pane over knew it, this one has heard no hook yet).
-fn running_session(entry: &PaneEntry) -> Option<String> {
+pub(super) fn running_session(entry: &PaneEntry) -> Option<String> {
     let reported = {
         let agent = lock(&entry.agent);
         let runtime = agent
@@ -510,7 +510,7 @@ fn waits_for_restart(entry: &PaneEntry) -> bool {
     })
 }
 
-fn is_starting(entry: &PaneEntry) -> bool {
+pub(super) fn is_starting(entry: &PaneEntry) -> bool {
     lock(&entry.claude_launch)
         .as_ref()
         .is_some_and(|launch| launch.starting)

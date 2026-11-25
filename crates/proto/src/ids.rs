@@ -157,6 +157,10 @@ bitset! {
         STREAMING_DELTAS = 6;
         THINKING = 7;
         PLANS = 8;
+        /// Chat may send to an agent started by hand: the first send restarts it in its pane
+        /// through the daemon's launch, on the same conversation, then sends. A client that does
+        /// not know this bit sees no `SEND` and keeps Chat read-only.
+        SEND_AFTER_TAKEOVER = 9;
     }
 }
 

@@ -60,3 +60,12 @@ fn unknown_agent_capability_bits_are_preserved_not_authority() {
     assert!(restored.contains(AgentCapabilities::READ));
     assert!(!restored.contains(AgentCapabilities::SEND));
 }
+
+/// Takeover is a bit of its own beside `SEND`, so a client that does not know it sees no send.
+#[test]
+fn send_after_takeover_is_its_own_bit() {
+    let capabilities = AgentCapabilities::READ | AgentCapabilities::SEND_AFTER_TAKEOVER;
+    assert_eq!(postcard::to_stdvec(&capabilities).unwrap(), [0x81, 0x04]);
+    assert_eq!(serde_json::to_string(&capabilities).unwrap(), "513");
+    assert!(!capabilities.contains(AgentCapabilities::SEND));
+}

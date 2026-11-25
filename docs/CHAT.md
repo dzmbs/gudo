@@ -633,7 +633,16 @@ that link's existing feature bits, without looking at agent kinds. A snapshot la
 read-only in the app; unknown feature bits never grant a known action. Chat selects Send, Stop,
 approvals and recorded-diff controls by feature, with the existing role/context checks still required.
 A capability round trip rotates the local intent generation even when both transitions arrive in one
-render batch, so restoring support cannot revive a deferred action. Live timeline operations retain
+render batch, so restoring support cannot revive a deferred action.
+
+An agent started by hand (Claude Code, Codex or pi without the daemon's launch around it) reports
+`SEND_AFTER_TAKEOVER` instead of `SEND` when the daemon can restart it: its options are ones a
+typed launch takes and its conversation is known. The app's composer treats it as Send; an older
+app sees no Send and keeps "Reply in Terminal". The first `ChatPrepare` then waits up to 20 s for
+the agent to be idle (else asks to send again), stops it, types the launch's fenced restart at its
+shell's prompt (POSIX or fish syntax) after one line saying so, waits for the agent to be up on the
+same conversation with its options, and answers the ticket; the send goes once, as to any launch.
+One restart at a time per pane. Live timeline operations retain
 the watch's features; reconnects and agent/session replacement retire its context.
 
 Codex proxy work follows this shared interface and capability contract.
@@ -792,7 +801,10 @@ wakes the reader; each refresh reads at most 8 MiB past the last record and upse
 A recorded rollback, another thread or another home starts a new epoch with a fresh snapshot.
 
 This source is read-only, plus Send through the terminal for a pane the daemon launched (it has an
-exit fence); a Codex started by hand gets no controls. It has no streaming deltas, Stop or
+exit fence); a Codex started by hand gets Send through a takeover (above) and no other controls.
+A Codex that resumes another conversation inside itself is followed: every 4 s the pane reads which
+rollout the process holds open, and Chat, restore and hand-off use that one; pi is followed by the
+session file it writes. It has no streaming deltas, Stop or
 approvals, and since-join guests use Terminal. Where Chat cannot read the conversation the refusal
 says why and what to do: a rollout in the older history format asks to update Codex, a forked
 conversation and a missing Codex home point to Terminal, and a native source that loses the

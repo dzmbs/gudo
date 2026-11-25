@@ -594,6 +594,14 @@ pub(crate) async fn handle(
                 version,
             };
             watches.insert(pane_id, watch);
+            let mut capabilities = capabilities;
+            if !capabilities.contains(proto::AgentCapabilities::SEND)
+                && core
+                    .pane(pane_id)
+                    .is_some_and(|entry| crate::takeover::is_possible(core, &entry))
+            {
+                capabilities |= proto::AgentCapabilities::SEND_AFTER_TAKEOVER;
+            }
             if wants_capabilities {
                 Ok(WorkspaceResponse::AgentTimeline(
                     proto::AgentTimelineSnapshot {

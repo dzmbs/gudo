@@ -73,6 +73,7 @@ mod screens;
 mod shell;
 mod sizing;
 mod stream;
+mod takeover;
 mod term;
 mod theme;
 mod timeline;

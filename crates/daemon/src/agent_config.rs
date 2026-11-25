@@ -375,6 +375,16 @@ pub(crate) fn session_started(core: &Core, pane: PaneId) {
 
 /// Whether the pane's Claude Code is restarting with new settings, so its exit is not the
 /// agent's.
+/// The conversation the pane's Claude Code is writing, as a restart resumes it.
+pub(crate) fn conversation(entry: &PaneEntry) -> Option<String> {
+    claude::running_session(entry)
+}
+
+/// Whether the pane's Claude Code launch is still to report its session.
+pub(crate) fn is_starting(entry: &PaneEntry) -> bool {
+    claude::is_starting(entry)
+}
+
 pub(crate) fn is_relaunching(entry: &PaneEntry) -> bool {
     claude::is_relaunching(entry)
 }

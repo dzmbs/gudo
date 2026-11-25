@@ -196,7 +196,7 @@ pub(crate) fn parse_pi(args: &[String]) -> Option<PiStart> {
     }
 }
 
-fn start_codex(
+pub(crate) fn start_codex(
     core: &Arc<Core>,
     entry: &Arc<PaneEntry>,
     context: &agents::LaunchContext,
@@ -250,7 +250,7 @@ fn start_codex(
     Ok(launch)
 }
 
-fn start_pi(
+pub(crate) fn start_pi(
     core: &Core,
     entry: &PaneEntry,
     context: &agents::LaunchContext,

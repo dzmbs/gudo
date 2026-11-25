@@ -24,6 +24,13 @@ pub(crate) async fn request(
         _ => return Err(unavailable()),
     };
     let entry = core.pane(pane).ok_or_else(unavailable)?;
+    // An agent started by hand first starts again through its launch; the send then goes to it.
+    if matches!(request, WorkspaceRequest::ChatPrepare { .. })
+        && !lock(&entry.pane.agent_input_gate).has_launch()
+        && crate::takeover::is_possible(core, &entry)
+    {
+        crate::takeover::take_over(core, &entry).await?;
+    }
     // Disk I/O before the input gate is taken.
     let images = match &request {
         WorkspaceRequest::ChatSendImages { images, .. } => {
