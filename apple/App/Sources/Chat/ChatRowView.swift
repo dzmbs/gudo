@@ -81,7 +81,7 @@ struct ChatRowView: View {
 
     @ViewBuilder private var content: some View {
         switch row.content {
-        case .markdown(let block): markdown(block)
+        case .markdown(let block): markdown(block).environment(\.openURL, block.openLink)
         case .item(let item): itemContent(item)
         case .showAll(let longText): showAllContent(longText)
         case .toolGroup(let group): toolGroupContent(group)

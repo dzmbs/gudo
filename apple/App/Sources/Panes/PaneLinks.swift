@@ -71,10 +71,12 @@ enum PaneLinks {
 
     /// Output from any program, file or host can print a link, so one whose address the user
     /// could not see first, or that would start another app, asks before it opens.
-    static func confirmOpen(_ url: URL, from pane: Pane?, then open: @escaping () -> Void) {
+    static func confirmOpen(
+        _ url: URL, from pane: Pane?, source: String = "A program in the terminal printed this link.", then open: @escaping () -> Void
+    ) {
         // The host first: a long `user@` part or path cannot push it out of sight.
         let title = LinkSafety.destination(url).map { "Open a Link to \($0)?" } ?? "Open This Link?"
-        let message = LinkSafety.display(url) + "\n\nA program in the terminal printed this link."
+        let message = LinkSafety.display(url) + "\n\n" + source
         #if os(macOS)
         let alert = NSAlert()
         alert.messageText = title
