@@ -675,13 +675,12 @@ public final class HostsModel {
     ) throws -> HostRecord {
         let existing = hostId.flatMap(record) ?? savedSSH(endpoint)
         var record = existing ?? HostRecord(name: name ?? endpoint.alias ?? endpoint.host, kind: .ssh, ssh: endpoint)
+        record.ssh = endpoint
         if existing == nil {
             record.nameSource = name == nil && endpoint.alias == nil ? .placeholder : .user
-        } else if let name, !name.isEmpty, name != record.name {
-            record.name = name
-            record.nameSource = .user
+        } else {
+            Self.name(&record, given: name, keepingUserName: true)
         }
-        record.ssh = endpoint
         try saveSecrets(for: record, password: password, rememberPassword: rememberPassword, passphrase: passphrase, rememberPassphrase: rememberPassphrase)
         upsert(record)
         return record
@@ -695,16 +694,27 @@ public final class HostsModel {
     ) throws {
         guard var record = record(hostId) else { throw HostError.notConnected }
         record.ssh = endpoint
-        if let name, !name.isEmpty, name != record.name {
-            record.name = name
-            record.nameSource = .user
-        }
+        Self.name(&record, given: name, keepingUserName: false)
         try saveSecrets(for: record, password: password, rememberPassword: rememberPassword, passphrase: passphrase, rememberPassphrase: rememberPassphrase)
         upsert(record)
         if record.kind == .ssh, connections[hostId] != nil {
             disconnect(hostId)
             _ = try openSSH(record, password: password, passphrase: passphrase)
         }
+    }
+
+    /// A name given wins. Without one, a host the app named (and with `keepingUserName` false,
+    /// any host) is named after its ssh_config alias or its address.
+    private static func name(_ record: inout HostRecord, given name: String?, keepingUserName: Bool) {
+        if let name, !name.isEmpty {
+            guard name != record.name else { return }
+            record.name = name
+            record.nameSource = .user
+            return
+        }
+        guard let endpoint = record.ssh, !keepingUserName || record.hasPlaceholderName else { return }
+        record.name = endpoint.alias ?? endpoint.host
+        record.nameSource = endpoint.alias == nil ? .placeholder : .user
     }
 
     private func saveSecrets(

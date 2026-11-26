@@ -442,6 +442,15 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// A plain SSH host given a name: the sidebar heads its group with the name, not the address.
+    func testNamedSSHHostInTheSidebar() async throws {
+        defer { for id in ["fixture-studio", "fixture-hetzner", "fixture-box"] { AppModel.shared.hosts.disconnect(id) } }
+        try await window("sidebar-ssh-named", screen: "projects") { model in
+            _ = try? model.app.hosts.saveSSH(
+                SSHEndpoint(user: "root", host: "203.0.113.10", identity: .password), name: "ops", hostId: "fixture-box")
+        }
+    }
+
     /// A long sidebar scrolled part way: the header of the project under the top edge pinned
     /// there, then pushed up by the end of its rows.
     func testPinnedProjectHeader() async throws {

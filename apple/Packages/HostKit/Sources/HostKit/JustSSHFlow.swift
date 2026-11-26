@@ -121,7 +121,7 @@ public final class JustSSHFlow {
         user = endpoint.user
         port = endpoint.port == 22 ? "" : String(endpoint.port)
         proxyJump = endpoint.proxyJump ?? ""
-        name = record.name
+        name = record.hasPlaceholderName ? "" : record.name
         auth = Self.choice(for: endpoint)
         applying = false
         userEdited = true

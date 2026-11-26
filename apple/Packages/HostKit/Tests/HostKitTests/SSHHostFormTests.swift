@@ -266,6 +266,54 @@ private struct Desk {
         #expect(!flow.canKeepHost)
     }
 
+    @Test func theNameGivenNamesTheHostInTheSidebar() async throws {
+        let desk = try Desk()
+        let flow = JustSSHFlow(hosts: desk.model)
+        flow.destination = "127.0.0.1"
+        flow.user = "me"
+        flow.port = "1"
+        flow.auth = .password
+        flow.password = "pw"
+        flow.name = "ops"
+        await flow.connect()
+        let id = try flow.keepHost()
+        let groups = HostGroups(hosts: desk.model)
+        _ = try? groups.open(id)
+        #expect(groups.group(id)?.name == "ops")
+
+        let rename = JustSSHFlow(hosts: desk.model, editing: try #require(desk.model.record(id)))
+        #expect(rename.name == "ops")
+        rename.name = "web"
+        await rename.connect()
+        #expect(groups.group(id)?.name == "web")
+
+        let clear = JustSSHFlow(hosts: desk.model, editing: try #require(desk.model.record(id)))
+        clear.name = ""
+        await clear.connect()
+        #expect(groups.group(id)?.name == "127.0.0.1", "no name: the address")
+    }
+
+    @Test func anUnnamedHostIsNamedByItsAddress() async throws {
+        let desk = try Desk()
+        let endpoint = SSHEndpoint(user: "me", host: "127.0.0.1", port: 1, identity: .password)
+        let saved = try desk.model.saveSSH(endpoint)
+        #expect(saved.name == "127.0.0.1")
+
+        let edit = JustSSHFlow(hosts: desk.model, editing: saved)
+        #expect(edit.name == "", "the address is the field's placeholder, not a name to keep")
+        edit.destination = "localhost"
+        await edit.connect()
+        #expect(desk.model.record(saved.id)?.name == "localhost", "follows the address it was named after")
+
+        let named = JustSSHFlow(hosts: desk.model, editing: try #require(desk.model.record(saved.id)))
+        named.name = "ops"
+        await named.connect()
+        let moved = JustSSHFlow(hosts: desk.model, editing: try #require(desk.model.record(saved.id)))
+        moved.destination = "127.0.0.1"
+        await moved.connect()
+        #expect(desk.model.record(saved.id)?.name == "ops", "a name the user gave stays")
+    }
+
     @Test func dialFailuresReadAsPlainWords() {
         #expect(SshErrorText.plainReason("ssh: Channel send error") == "The connection closed before signing in.")
         #expect(SshErrorText.plainReason("connecting to 10.0.0.1:22: Connection refused (os error 61)") == "Nothing answered on the SSH port.")

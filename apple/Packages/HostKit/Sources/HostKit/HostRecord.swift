@@ -39,6 +39,10 @@ nonisolated public struct HostRecord: Codable, Identifiable, Hashable, Sendable 
     public var thisDevice: Bool?
 
     public var isGuest: Bool { guest == true }
+    /// The app made the name up (the address typed, "Host 1a2b3c4d").
+    public var hasPlaceholderName: Bool {
+        (nameSource ?? (MachineName.looksDefault(self) ? .placeholder : .user)) == .placeholder
+    }
     public var isThisDevice: Bool { thisDevice == true }
 
     /// Where a host's name came from: the app's placeholder, the machine's host name, or the

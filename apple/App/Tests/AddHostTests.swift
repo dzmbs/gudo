@@ -87,6 +87,37 @@ final class AddHostTests: XCTestCase {
         XCTAssertNotNil(kept, "the host is saved: \(AppModel.shared.hosts.records.map(\.name))")
     }
 
+    func testTheNameGivenNamesTheHostInTheSidebar() async throws {
+        let port = try Self.closedPort()
+        let (window, presenter) = try await presentAddHost()
+        try await window.enter("dev@127.0.0.1", into: "pairing-destination")
+        try await window.enter(String(port), into: "ssh-port")
+        try await window.enter("add-host-ops", into: "ssh-name")
+        try await window.until("Connect is on") { window.isEnabled("pairing-confirm") }
+        try await window.click("pairing-confirm")
+        _ = try await window.waitForElement("pairing-error", timeout: .seconds(30))
+        try await window.click("pairing-keep-host")
+        try await window.until("Add Anyway closes the sheet") { !presenter.isPresented }
+        let hosts = AppModel.shared.hosts
+        let kept = try XCTUnwrap(hosts.records.first { $0.ssh?.host == "127.0.0.1" && $0.ssh?.port == port })
+        let groups = HostGroups(hosts: hosts)
+        _ = try? groups.open(kept.id)
+        XCTAssertEqual(groups.group(kept.id)?.name, "add-host-ops")
+        window.close()
+
+        let editPresenter = SheetPresenter()
+        let editWindow = HostWindow {
+            PresentedSheet(presenter: editPresenter) { EditSSHHostSheet(hosts: hosts, record: kept) }
+        }
+        self.window = editWindow
+        try await editWindow.until("the sheet is up") { editWindow.sheet != nil }
+        await editWindow.pump(0.5)
+        try await editWindow.enter("add-host-web", into: "ssh-name")
+        try await editWindow.click("ssh-save")
+        try await editWindow.until("Save closes the sheet") { !editPresenter.isPresented }
+        XCTAssertEqual(groups.group(kept.id)?.name, "add-host-web", "renamed in Edit Host")
+    }
+
     // MARK: Ticket
 
     func testATicketFromAHostPairsWithIt() async throws {
