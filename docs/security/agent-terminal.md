@@ -73,6 +73,17 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   from choices the installed CLI listed; nothing restarts mid-turn. A Claude without the loop is
   started again by typing only at the pane's own shell once it is back in the foreground; a
   line for a launch is fenced like a launch, so Chat input never reaches that shell.
+- **Other hosts.** An agent reaches another of the owner's hosts only through the owner's
+  device (`proto::cross_host`): its host pushes the request to paired owner devices with the
+  capability, never to a guest; the device refuses unless the owner turned that directed pair
+  on, shows the action worded from the call's own arguments, and on a yes signs a claim the
+  host audits, then runs the call on the other host over its own connection. The hosts never
+  talk to each other or hold a credential for each other. Nothing happens while no device is
+  connected. On the target, the call runs for a stand-in of the remote agent: panes it opens are
+  its own, a password prompt is refused, it cannot reach a third host, and the device's yes is
+  the only authority (`Reads` covers reads alone). Both hosts audit it, the target with
+  `on_behalf_of`. A yes for "this agent" ends when its pane closes or the owner turns the pair
+  off.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
   A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.
@@ -81,6 +92,14 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   This does not guarantee delivery of VT updates still pending when a pane task is aborted.
 
 ## Residual risk
+
+- **Allow all on another host.** "Allow all for this agent" hands the agent that host, the
+  user's own panes included, until its pane closes; what it does there is not shown first. A
+  compromised asking host can present any request as from an agent that holds such a yes (it
+  names the agent); turning the pair off ends it at once. Data read on the other host goes to
+  the agent and its model provider.
+- **One device's switches.** The per-pair switches and standing yeses live on each device: a
+  pair turned on on the Mac is still off on the iPhone, which refuses until turned on there too.
 
 - **The owner approves something harmful.** The card shows exactly what will be typed, but a
   long command or a clever one can still fool a person in a hurry. "For this pane" hands the

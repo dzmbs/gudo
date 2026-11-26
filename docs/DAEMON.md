@@ -2752,7 +2752,9 @@ Agents drive the terminal they run in through `gudo-hook mcp`: one `TermCall {v,
   `limits.panes {yours, session}`, each `{open, max}`. A wait holds at most 1 MiB of output.
 - **Tools.** `whoami`, `pane_list`, `pane_split`, `tab_new`, `pane_close`, `cmd_run`, `pane_read`,
   `pane_wait`, `pane_send`, `status_set`, `agent_spawn`, `agent_prompt`, `agent_wait`, `agent_result`,
-  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`. Ids are `p12`, `t3`; `self` (or no pane) is the caller. Pane `scopes`:
+  `events_wait`, `pane_float`, `pane_dock`, `pane_minimize`, `pane_raise`, `host_list`. With
+  `host`, a call is for another of the owner's hosts ("Other hosts" below). Ids are `p12`,
+  `t3`; `self` (or no pane) is the caller. Pane `scopes`:
   `read`, plus `input` and `manage` where it drives, or `ask` on the user's panes. Errors say
   the reason in `message` itself; `hint` only suggests what to do next.
 - **Listing.** `pane_list {scope?, tab?}` returns `tabs` and `panes`. Each tab has `id`,
@@ -3001,25 +3003,65 @@ bar, and the tmux session survives the app and the daemon.
   session list in the app. Until then, `multiplexer: "tmux-control"` tells agents and the app
   what runs there.
 
-### Cross-host tools (design only, not built)
+### Other hosts (`proto::cross_host`, `term::cross`)
 
-An agent on host A driving a pane on host B. Not built; the safe shape:
+An agent on host A works on host B, another of the owner's hosts, through the owner's device:
+A and B never talk to each other and hold nothing of each other. The security analysis and
+the owner's decisions are in `docs/security/proposals/cross-host-agents.md`.
 
-- **Identity.** A's daemon, not the agent, is the actor on B: it connects to B as a guest under a
-  grant chain B's owner issued to A's daemon key (an invite, `crates/grants`), narrowed to the
-  panes or session meant for it and to roles that fit (Prompter for `agent_prompt`, Driver for
-  input). A never holds B's owner key, and an agent's request never travels as a credential.
-- **Ownership.** Panes A's agent opens on B are recorded on B with the guest principal as creator;
-  driving them needs no further question while the grant lives. Every other pane of B is B's
-  owner's: a drive request on B, answered by B's owner like any other (guests never answer), and
-  "for this pane" scoped to the guest principal. Password prompts stay refused.
-- **Revocation and audit.** B audits every action under the guest principal and grant id;
-  revoking the grant on B ends A's access at once (the live checks of §6.2). A also audits what
-  it asked B to do, so both sides can account for a cross-host action.
-- **Tools.** A `host` argument (from `gudo hosts`) on the terminal tools, forwarded over A's
-  connection to B; results and the event stream stay per host; nothing is ever fanned out to
-  every host at once. Open: how A's owner sees B's pending requests (B's own push to B's owner
-  is the default; A forwarding them would need B to trust A's devices).
+- **Tools.** The terminal tools of `proto::CROSS_HOST_TOOLS` (`pane_list`, `pane_read`,
+  `pane_wait`, `agent_wait`, `agent_result`, `tab_new`, `pane_split`, `agent_spawn`, `pane_send`,
+  `cmd_run`, `agent_prompt`, `pane_close`) take `host`: a host's name as the app shows it, or
+  its id. Any other tool with `host` is refused (`events_wait` never fans out across hosts).
+  `host_list` lists what the connected devices sent (`CrossHostMsg::Directory`): each host's
+  `name`, `id`, `state` (`enabled`, `off`, `offline`, `guest`, `no_helper`, `old_helper`) and a
+  `note` saying what to do, or an empty list with a note when no device is connected.
+- **On A.** A call with `host` becomes a `CrossHostRequest` (the tool, its arguments without
+  `host`, the asking pane, a random `agent_key` for the pane's life, the guest driving it, if
+  any) pushed as `ServerCtl::CrossHost(Request)` to every connection of a paired owner device
+  that announced `Caps::CROSS_HOST`, and to devices that connect while it waits. Guests never get
+  one, whatever their caps. One request at a time per asking pane (`agent_blocked`, retryable);
+  at most `cross_host_requests_per_minute` (60) per target host name, all agents together. A
+  device refuses (`CrossHostMsg::Refuse`, a `CrossHostRefusal` A words for the agent:
+  "ops isn't enabled for agents on this Mac. Turn it on in Gudo › Hosts › ops.") or claims it
+  with a signed `Decide` (`CrossHostMsg::Claim`, options `Allow once` 0, `Allow all for this
+  agent` 1, `Deny` 2, signed for A's daemon id). The first valid claim wins
+  (`CrossHostPush::Claimed{won}`); the others are told `Closed`. A claim needs the connection's
+  own actor, an owner device that was sent the request, and a good signature; anything else is
+  audited `Denied`. Every request is a `CrossHost` audit record and every claim an `Approval`
+  record with the signed bytes. After an allow, the winner's `CrossHostMsg::Result` (B's reply,
+  or why it failed) answers the call; Deny refuses it. Unclaimed after `drive_ask_wait` (120 s),
+  or at once when every device refused, the call fails; with no device ever sent it, "No Gudo
+  device is connected to approve this." (retryable). While no device is connected, or none
+  claimed it within 3 s, the owner gets an attention item and push (`AgentBlocked`, no Approve
+  button: a relayed call is answered in the app). The asking pane closing sends
+  `CrossHostPush::AgentGone{pane, agent_key}`: every yes for that agent ends.
+- **On the device** (`client_core::CrossHostRelay`, one per app). It knows every host: owner hosts
+  with their connection, guests, plain SSH hosts and paired hosts it is not connected to now.
+  For a request it refuses unknown names, A itself, guests (never targets), SSH-only hosts
+  ("Install the helper on pi to reach it."), pairs the owner has not turned on (per directed
+  pair, off by default, kept on the device), B offline and B helpers without
+  `MoreDaemonFeatures::CROSS_HOST`. A standing yes covers the request without asking ("Allow
+  all": everything; after "Allow once": reads); otherwise the app shows a card with the action
+  in words from the request's own arguments (`proto::describe_cross_host`, never A's wording).
+  On an allow it claims, runs `CrossHostMsg::Call` on B over its own connection and returns the
+  reply. Turning a pair off ends its standing yeses at once.
+- **On B.** A `Call` from an owner device (anyone else: refused and audited) runs as a
+  terminal-tool call of a stand-in caller for `(A, pane, agent_key)`, in the session the device
+  shows (else the most recent), with the `Consent` it carries: `Once` (that call), `Agent`
+  (allow all) or `Reads` (reads only; anything else refused). Panes it opens are the stand-in's
+  own (a pane of its own, beside its newest one, or a tab `Claude from mac`), so other agents
+  on B are asked before driving them; a password prompt is never typed into; a relayed call
+  with `host` is refused (no chains). Each call is a `CrossHost` audit record under the device's
+  actor, its detail ending `on_behalf_of=<A daemon id>/p<pane>`. `CrossHostMsg::AgentGone` (the
+  agent's pane closed, or the owner ended its yes) drops the stand-in: its panes go back to the
+  user. At most 64 remote agents at once.
+- **Tests.** `tests/it/cross_host.rs` (two daemons, one owner device relaying: allow once runs
+  exactly the shown call and then covers reads, deny, allow all until the pane closes, the
+  password prompt on B, revoke, no device connected then one arriving and the notification,
+  guests never sent a request and never targets, one at a time and the rate limit, the audit on
+  both hosts, panes the remote agent opens, tools that stay home and `host_list`);
+  `client_core::cross_host::tests`; goldens `proto/tests/golden_cross_host.rs`.
 
 ## 10. Known gaps / follow-ups
 

@@ -1,7 +1,7 @@
 # Proposal: agents across hosts, and images from the owner's devices
 
-Status: proposal. Feature 1 is not built and waits for the owner's decisions below. Feature 2
-reuses what exists and is built as described in its section.
+Status: both built. Feature 1 as Option A with the owner's decisions below (DAEMON.md, "Other
+hosts"); feature 2 reuses what exists, as described in its section.
 
 Two requests:
 
@@ -131,17 +131,56 @@ fan-out across hosts; everything audited on both hosts.
 
 ### Verdict
 
-**Needs owner decisions.** Not built. Questions:
+**Built: Option A**, with the owner's decisions:
 
-1. Option A (relay through the app, owner present) over B (hosts trust each other, works
-   unattended)? Recommended: A.
-2. Is "nothing happens while no owner device is connected" acceptable? Recommended: yes; the
-   Mac app is usually open.
-3. Reads: one yes per agent and host (recommended), or per call?
-4. May a remote agent open panes on B and then run in them without asking each time, as it can
-   on its own host? Recommended: no; on another host every input is asked, "for this pane" the
-   widest answer.
-5. Which devices may relay: any owner device (recommended), or only the Mac?
+1. **The app relays, the owner approves on the device.** A's daemon pushes the request to its
+   connected owner devices that announce `Caps::CROSS_HOST`; the device checks that B is a host
+   it is paired with as owner and that the owner turned on "Agents on A may reach B", runs it on
+   B over its own connection, and B runs it as a terminal-tool call of that owner device on
+   behalf of `(A daemon id, pane)`. The result goes back to A. A and B never get credentials for
+   each other.
+2. **Nothing happens while no owner device is connected.** The request waits 120 s, with a push
+   to the owner as drive asks do; a device that connects meanwhile gets it.
+3. **Looser approvals, the owner's choice.** With a pair on, an agent's first request to B asks
+   once: "Allow once", "Allow all for this agent" (reads and input, run, open and close on B
+   until that agent's pane on A closes) or "Deny". Reads need at least that one yes per agent
+   and host. Kept: off by default per directed pair (A to B apart from B to A); the yes for an
+   agent ends with its pane; one open request per agent pane and a per-host rate limit (60 a
+   minute); every action audited on both hosts (A: the request and the device's signed claim;
+   B: the call under the owner device, `on_behalf_of=<A>/p<pane>`); guests never receive or
+   answer a request and a host joined as a guest is never a target; password prompts on B
+   refused; no `events_wait` across hosts; panes a remote agent opens on B are its own. Turning
+   a pair off in the app (Settings › Agents › the host, or the host's menu in Hosts) ends every
+   standing yes for it at once.
+4. **Any owner device relays** (Mac, iPhone, iPad); the first to claim performs it, the others
+   drop it.
+5. **Tool surface.** The terminal tools take `host` (a name as shown in the app, or its id);
+   `host_list` lists the hosts and where each stands. Errors are plain: "ops isn't enabled for
+   agents on this Mac. Turn it on in Gudo › Hosts › ops.", "No Gudo device is connected to
+   approve this."
+6. **Mixed versions.** Capability bits on both legs (`Caps::CROSS_HOST`,
+   `MoreDaemonFeatures::CROSS_HOST`): old apps never see a request, a device never sends relay
+   messages to a helper without the bit, and a B helper without it is refused ("Update the helper
+   on ops to reach it."). Goldens: `proto/tests/golden_cross_host.rs`.
+7. **Hosts without a helper** (plain SSH held by the app) are not targets: "Install the helper on
+   pi to reach it."
+
+As built, a few choices the decisions left open:
+
+- **The card is B's drive ask.** Under "Allow once" the card the owner answers names the exact
+  action on B, the pane id included, so that yes is the owner's yes for that one action and B
+  does not ask a second time for the user's panes there. Under "Allow all" nothing on B is
+  asked. Agents running on B itself still ask before driving panes a remote agent opened.
+- **The device words the action** from the call's arguments (`proto::describe_cross_host`), never
+  from text A sends, so a compromised A cannot show one action and request another.
+- **What A can still do.** A names the asking agent; a compromised A can present a request as
+  from an agent that holds "Allow all". Its reach is still only what that yes covers, on hosts
+  the owner turned on for A, while a device is connected; turning the pair off ends it.
+- **Switches are per device.** Each device keeps its own pairs and yeses (memory only for the
+  yeses); a device that has not turned a pair on refuses, and the request fails only once every
+  device that got it refused.
+- **Sessions on B.** A relayed call works in the session the relaying device shows on B, else
+  B's most recent one.
 
 ## Feature 2: images from the owner's devices to an agent
 

@@ -1800,3 +1800,28 @@ A host can keep several Claude Code and Codex sign-ins, such as Personal and Wor
 - HostKit `AccountBookTests` cover the resolution order, removed defaults, labels only with a choice, the limit hint (and when it stays quiet) and the status words.
 - App `AccountsTests` cover the fixture, project defaults, search and row words.
 - Snapshots: `MacSnapshotTests.testAccounts`, run with `TEST_RUNNER_SNAPSHOT_ONLY=settings-agents,settings-accounts,account-pane` in dark and light.
+
+## 29. Agents reaching other hosts (DAEMON.md, "Other hosts")
+
+The device relays an agent's call from one of the owner's hosts to another; the rules are the
+core's (`client_core::CrossHostRelay`, `CrossHostRelay` over FFI), the app keeps the switches and
+shows the requests.
+
+- **Model.** `HostKit.CrossHostSession` (one, on `AppModel.crossHost`): `follow(hosts)` hands the
+  relay every host (owner hosts with their live `DaemonClient`, else as unreached; guests; plain
+  SSH hosts) and opens a connection to each host of a pair that is on, so requests and calls get
+  through while the app runs. Owner connections announce `Caps::CROSS_HOST`
+  (`RelaySettings.connectOptions`, never for guests). `pairs` (directed, off by default) are kept
+  in `UserDefaults` (`crossHost.pairs`); `requests` and `allows` come from the relay.
+- **Card.** `CrossHostCardView` in `AgentToastStack`, above the agents' cards, so it keeps clear of
+  composers and banners as they do: the agent, both hosts, the action as the core words it from
+  the call's arguments, and Deny, Allow All (this agent on that host until its pane closes) and
+  Allow Once. It stays until answered here or elsewhere, or the request lapses; with no window
+  on screen the host's push says it waits.
+- **Switches.** Settings › Agents › Agents on Other Hosts lists the owner's hosts; a host's page
+  (`SettingsPage.hostReach`, also from its menu in Hosts) has one switch per other host ("Agents
+  on mac") and the yeses standing now with Revoke. Turning a switch off ends every yes from that
+  host at once.
+- **Tests.** `CrossHostSessionTests` (HostKit), `CrossHostViewsTests`;
+  snapshots `MacSnapshotTests.testCrossHost` (`cross-host-card`, `settings-cross-host`) and
+  `TouchSnapshotTests.testCrossHostCard`, `testCrossHostSwitches`.
