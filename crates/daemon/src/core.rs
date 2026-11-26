@@ -709,6 +709,7 @@ impl Core {
         self.assist.forget_conn(conn);
         self.askpass.forget_conn(conn);
         self.browser.forget_conn(conn);
+        self.term.cross.forget_conn(conn);
         if lock(&self.attached).remove(&conn).is_some() {
             self.emit(Event::Sessions);
         }
@@ -1612,6 +1613,7 @@ impl Core {
                     self.remember_closed(*id, &lock(&entry.record));
                     self.term.pane_closed(self, *id, &entry);
                     self.term.forget(*id);
+                    self.term.cross.agent_closed(self, *id);
                     crate::pane_images::forget_pane(&self.cfg.state_dir, *id);
                     if let Some((agent, account)) = self.ws.accounts.sign_in_closed(*id) {
                         self.check_account(agent, account);

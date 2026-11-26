@@ -87,7 +87,7 @@ impl PaneStream {
 
 /// A client plus everything it has been told.
 pub struct TestClient {
-    pub client: Client,
+    pub client: std::sync::Arc<Client>,
     events: UnboundedReceiver<ClientEvent>,
     pub layout: Option<SessionLayout>,
     pub results: HashMap<u64, OpOutcome>,
@@ -184,6 +184,18 @@ impl TestClient {
         Self::connect_with(ticket, config, options)
     }
 
+    /// An owner device that relays agents' calls between its hosts
+    /// (`ConnectOptions::cross_host`).
+    pub fn connect_cross_host(ticket: &str, key: Vec<u8>) -> Self {
+        let mut config = ClientConfig::new(key);
+        config.relay = RelayMode::Disabled;
+        let options = client_core::ConnectOptions {
+            cross_host: true,
+            ..client_core::ConnectOptions::default()
+        };
+        Self::connect_with(ticket, config, options)
+    }
+
     /// A client that shows programs' own status (`ConnectOptions::program_status`).
     pub fn connect_program_status(ticket: &str, key: Vec<u8>) -> Self {
         let mut config = ClientConfig::new(key);
@@ -234,7 +246,7 @@ impl TestClient {
         let (browser_listener, browser_events) = BrowserPushQueue::channel();
         client.set_browser_listener(browser_listener);
         Self {
-            client,
+            client: std::sync::Arc::new(client),
             events,
             layout: None,
             results: HashMap::new(),

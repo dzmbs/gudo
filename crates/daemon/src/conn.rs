@@ -273,6 +273,9 @@ async fn run(
     }
     core.askpass.register(client.id, &client.authz, client.caps);
     core.browser.register(client.id, &client.authz, client.caps);
+    core.term
+        .cross
+        .register(&core, client.id, &client.authz, client.caps);
     client.approvals_state();
     client.program_state();
     let repo_watch = client.caps.contains(Caps::REPO_STATUS);
@@ -348,6 +351,7 @@ pub(crate) fn more_daemon_features() -> proto::MoreDaemonFeatures {
         | proto::MoreDaemonFeatures::CHAT_IMAGES
         | proto::MoreDaemonFeatures::AGENT_CONTROLS
         | proto::MoreDaemonFeatures::CHAT_FILE_SEARCH
+        | proto::MoreDaemonFeatures::CROSS_HOST
         | proto::MoreDaemonFeatures::PANE_IMAGES
 }
 
@@ -2574,7 +2578,8 @@ impl Client {
         }
         self.core.mp.heard(&self.core, self.id);
         match message {
-            ClientCtl::Hello(_) | ClientCtl::CrossHost(_) => {}
+            ClientCtl::Hello(_) => {}
+            ClientCtl::CrossHost(message) => self.cross_host(message),
             ClientCtl::TerminalColors(colors) => {
                 // Only someone who may type into panes chooses what their programs are told,
                 // and only someone with the whole host or session for panes nobody used.
@@ -2920,6 +2925,72 @@ impl Client {
             name,
             owner: is_owner(&self.core, &self.authz),
             authorization: Some(&self.authz),
+        }
+    }
+
+    /// The cross-host relay protocol (`proto::cross_host`): on this host's agents' requests,
+    /// only from relaying owner devices; calls for agents elsewhere, only from owner devices.
+    fn cross_host(self: &Arc<Self>, message: proto::CrossHostMsg) {
+        use proto::CrossHostMsg;
+        let cross = &self.core.term.cross;
+        match message {
+            CrossHostMsg::Directory(entries) => cross.directory(self.id, entries),
+            CrossHostMsg::Claim(decide) => {
+                let won = cross.claim(&self.core, self.id, &self.authz, &decide);
+                self.send(ServerCtl::CrossHost(proto::CrossHostPush::Claimed {
+                    id: decide.request_id,
+                    won,
+                }));
+            }
+            CrossHostMsg::Refuse { id, refusal } => cross.refuse(self.id, id, refusal),
+            CrossHostMsg::Result { id, outcome } => cross.result(self.id, id, outcome),
+            CrossHostMsg::Call { req_id, call } => {
+                if !is_owner(&self.core, &self.authz) {
+                    self.core.mp.audit.append(
+                        AuditKind::Denied,
+                        crate::mp::AuditEntry {
+                            detail: format!(
+                                "a guest tried to relay {} from another host",
+                                call.tool
+                            ),
+                            ..self.authz.audit()
+                        },
+                    );
+                    let refusal = crate::term::TermReply::Error(crate::term::ToolError {
+                        code: crate::term::ErrorCode::Forbidden,
+                        message: "only the owner's devices relay calls from other hosts".into(),
+                        retryable: false,
+                        hint: None,
+                    });
+                    let reply = serde_json::to_string(&refusal).unwrap_or_default();
+                    return self.send(ServerCtl::CrossHost(proto::CrossHostPush::CallResult {
+                        req_id,
+                        reply,
+                    }));
+                }
+                let client = Arc::clone(self);
+                tokio::spawn(async move {
+                    let shown = client.core.attached_session(client.id);
+                    let reply = tokio::select! {
+                        reply = crate::term::cross::serve_remote(&client.core, client.actor, shown, call) => reply,
+                        _ = client.conn.closed() => return,
+                    };
+                    let reply = serde_json::to_string(&reply).unwrap_or_default();
+                    client.send(ServerCtl::CrossHost(proto::CrossHostPush::CallResult {
+                        req_id,
+                        reply,
+                    }));
+                });
+            }
+            CrossHostMsg::AgentGone {
+                host,
+                pane_id,
+                agent_key,
+            } => {
+                if is_owner(&self.core, &self.authz) {
+                    cross.remote_gone(&self.core, host, pane_id, agent_key);
+                }
+            }
         }
     }
 

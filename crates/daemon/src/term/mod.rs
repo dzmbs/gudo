@@ -8,10 +8,12 @@
 //! panes it created (or that those created), never its own; split and open tabs next to
 //! itself. Driving any other pane of its session (the user's) needs the owner's yes
 //! ([`ask`]). Nothing it opens takes focus from the user. Input is refused at a password
-//! prompt, whoever allowed it.
+//! prompt, whoever allowed it. With `host`, a call is for another host of the owner's, relayed
+//! by the owner's device ([`cross`]).
 
 mod arrange;
 pub(crate) mod ask;
+pub(crate) mod cross;
 pub(crate) mod events;
 mod output;
 mod screen;
@@ -158,6 +160,8 @@ pub(crate) struct Term {
     pub asks: ask::Asks,
     /// The `events_wait` stream.
     pub events: events::Feed,
+    /// Calls for other hosts, and calls relayed here for agents elsewhere.
+    pub cross: cross::CrossHost,
     calls: Mutex<HashMap<PaneId, usize>>,
     /// Held from counting an agent's panes to opening one, so parallel calls cannot all
     /// pass the count and overshoot the cap.
@@ -329,6 +333,7 @@ pub(crate) async fn serve(
     let context = CallContext {
         core: Arc::clone(core),
         caller,
+        remote: None,
     };
     tokio::select! {
         result = context.call(&call.term.tool, call.term.args) => match result {
@@ -364,7 +369,26 @@ impl Drop for Withdraw<'_> {
 
 struct CallContext {
     core: Arc<Core>,
+    /// The calling pane, or a remote agent's stand-in.
     caller: PaneId,
+    /// The agent on another host this call is relayed for.
+    remote: Option<cross::Remote>,
+}
+
+/// Takes `host` out of the arguments: the host a call is for, when it is not this one.
+fn take_host(value: &mut Value) -> Result<Option<String>> {
+    let Some(host) = value.as_object_mut().and_then(|args| args.remove("host")) else {
+        return Ok(None);
+    };
+    match host {
+        Value::Null => Ok(None),
+        Value::String(host) if host.trim().is_empty() => Ok(None),
+        Value::String(host) => Ok(Some(host.trim().to_owned())),
+        _ => Err(
+            ToolError::new(ErrorCode::InvalidArgs, "host is a host's name or id")
+                .hint("host_list lists them"),
+        ),
+    }
 }
 
 fn args<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T> {
@@ -936,7 +960,15 @@ async fn reachable_cwd(cwd: Option<String>) -> Option<String> {
 }
 
 impl CallContext {
-    async fn call(&self, tool: &str, value: Value) -> Result<Value> {
+    async fn call(&self, tool: &str, mut value: Value) -> Result<Value> {
+        if self.remote.is_none() {
+            if tool == "host_list" {
+                return Ok(cross::host_list(&self.core));
+            }
+            if let Some(host) = take_host(&mut value)? {
+                return cross::relay(self, tool, host, value).await;
+            }
+        }
         match tool {
             "whoami" => self.whoami(),
             "pane_list" => self.pane_list(args(value)?),
@@ -976,6 +1008,13 @@ impl CallContext {
 
     fn parse_pane(&self, target: Option<&str>) -> Result<PaneId> {
         Ok(match target.map(str::trim) {
+            None | Some("" | "self") if self.remote.is_some() => {
+                return Err(ToolError::new(
+                    ErrorCode::InvalidArgs,
+                    "name a pane: the agent has no pane on this host",
+                )
+                .hint("pane_list lists them"));
+            }
             None | Some("" | "self") => self.caller,
             Some(target) => target
                 .strip_prefix('p')
@@ -990,7 +1029,10 @@ impl CallContext {
     }
 
     fn session(&self) -> Option<SessionId> {
-        self.core.session_of_pane(self.caller)
+        match &self.remote {
+            Some(remote) => Some(remote.session),
+            None => self.core.session_of_pane(self.caller),
+        }
     }
 
     /// Whether a multiplayer guest can type into `pane` (its output is then marked).
@@ -1011,6 +1053,9 @@ impl CallContext {
     /// Whether the caller may drive `pane` without asking: it opened it (or one of its
     /// workers did), or the owner let it drive that pane until it closes.
     fn drives(&self, pane: PaneId) -> bool {
+        if let Some(remote) = &self.remote {
+            return remote.consent != proto::Consent::Reads && self.may_read(pane).is_ok();
+        }
         pane != self.caller
             && (self.core.term.owns(self.caller, pane)
                 || self.core.term.asks.granted(self.caller, pane))
@@ -1020,6 +1065,19 @@ impl CallContext {
     /// pane, another session's or at a password prompt; in the user's panes only once the
     /// owner allows exactly this action.
     async fn may_drive(&self, pane: PaneId, entry: &PaneEntry, action: DriveAction) -> Result<()> {
+        if self.remote.is_some() {
+            if !self.drives(pane) {
+                self.may_read(pane)?;
+                return Err(ToolError::new(
+                    ErrorCode::Forbidden,
+                    "only reads are covered by the earlier yes",
+                ));
+            }
+            if !matches!(action, DriveAction::Close) && entry.pane.echo().is_hidden_input() {
+                return Err(secret_prompt(pane));
+            }
+            return Ok(());
+        }
         if pane == self.caller {
             return Err(
                 ToolError::new(ErrorCode::Forbidden, "that is your own pane")
@@ -1095,6 +1153,11 @@ impl CallContext {
 
     /// The caller for display (`Claude`) and for the attention feed (`claude`).
     fn caller_names(&self) -> (String, String) {
+        if let Some(remote) = &self.remote {
+            let agent = proto::clean_prompt_text(&remote.agent.agent, 40);
+            let host = proto::clean_prompt_text(&remote.agent.host_name, 40);
+            return (format!("{agent} on {host}"), "agent".into());
+        }
         let Some(entry) = self.core.pane(self.caller) else {
             return ("A program".into(), "program".into());
         };
@@ -1243,7 +1306,13 @@ impl CallContext {
         });
         let owned = self.core.term.owns(self.caller, id);
         let mut scopes = vec!["read"];
-        if self.drives(id) {
+        // On another host every change outside the agent's own panes is the owner's to allow.
+        let driven = if self.remote.is_some() {
+            owned
+        } else {
+            self.drives(id)
+        };
+        if driven {
             scopes.extend(["input", "manage"]);
         } else if id != self.caller {
             scopes.push("ask");
@@ -1417,13 +1486,65 @@ impl CallContext {
             .map(|tab| tab.focused)
     }
 
+    /// Where a pane opens when a call names none: beside the caller, or, for a remote agent,
+    /// beside the newest pane it opened in the session. `None`: in a tab of its own.
+    fn beside(&self, of: Option<&str>) -> Result<Option<PaneId>> {
+        if of.is_some() || self.remote.is_none() {
+            let (of, _) = self.resolve(of)?;
+            self.may_read(of)?;
+            return Ok(Some(of));
+        }
+        let Some(session) = self.session() else {
+            return Ok(None);
+        };
+        let layout = lock(&self.core.layout).snapshot(session);
+        Ok(layout.and_then(|layout| {
+            layout
+                .tabs
+                .iter()
+                .flat_map(|tab| crate::layout::leaves(&tab.root))
+                .filter(|&pane| self.core.term.owns(self.caller, pane))
+                .max()
+        }))
+    }
+
+    /// The title of a tab a remote agent opens without naming one: `Claude from mac`.
+    fn tab_title(&self, asked: Option<String>) -> String {
+        match (asked, &self.remote) {
+            (Some(title), _) => title,
+            (None, Some(remote)) => format!(
+                "{} from {}",
+                proto::clean_prompt_text(&remote.agent.agent, 40),
+                proto::clean_prompt_text(&remote.agent.host_name, 40)
+            ),
+            (None, None) => String::new(),
+        }
+    }
+
+    /// Opens a pane beside `of`, or in a tab of its own.
+    fn open_beside(
+        &self,
+        of: Option<PaneId>,
+        direction: Direction,
+        launch: PaneLaunch,
+        focus: bool,
+        float: Option<FloatOpts>,
+    ) -> Result<PaneId> {
+        if let Some(of) = of {
+            return self.open(of, direction, launch, focus, float);
+        }
+        let _opening = lock(&self.core.term.opening);
+        self.may_open()?;
+        self.open_tab(self.tab_title(None), launch, focus)
+            .map(|(_, pane)| pane)
+    }
+
     async fn pane_split(&self, args: SplitArgs) -> Result<Value> {
-        let (of, _) = self.resolve(args.of.as_deref())?;
-        self.may_read(of)?;
+        let of = self.beside(args.of.as_deref())?;
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
         let cwd = reachable_cwd(args.cwd).await;
         let (pane, effects) = self.arranged(UserFocus::asked(args.focus), || {
-            self.open(
+            self.open_beside(
                 of,
                 args.direction,
                 Self::launch(args.command, args.agent, cwd),
@@ -1515,9 +1636,10 @@ impl CallContext {
                     "a floating window has no tab title",
                 ));
             }
+            let of = self.beside(None)?;
             let (pane, effects) = self.arranged(UserFocus::asked(args.focus), || {
-                self.open(
-                    self.caller,
+                self.open_beside(
+                    of,
                     Direction::Right,
                     Self::launch(args.command, None, cwd),
                     args.focus,
@@ -1534,7 +1656,7 @@ impl CallContext {
             let _opening = lock(&self.core.term.opening);
             self.may_open()?;
             let launch = Self::launch(args.command, None, cwd);
-            self.open_tab(args.title.unwrap_or_default(), launch, args.focus)
+            self.open_tab(self.tab_title(args.title), launch, args.focus)
         })?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
         Ok(json!({ "tab": tab_ref(tab), "pane": self.pane_info(pane, &entry), "effects": effects }))
@@ -1733,7 +1855,10 @@ impl CallContext {
                 let launch = PaneLaunch::Shell {
                     cwd: reachable_cwd(args.cwd.clone()).await,
                 };
-                let pane = self.split(self.caller, Direction::Down, launch, false)?;
+                let pane = match self.beside(None)? {
+                    Some(of) => self.split(of, Direction::Down, launch, false)?,
+                    None => self.open_beside(None, Direction::Down, launch, false, None)?,
+                };
                 (pane, self.core.pane(pane).ok_or_else(closed)?)
             }
         };
@@ -2122,15 +2247,14 @@ impl CallContext {
     }
 
     async fn agent_spawn(&self, args: SpawnArgs) -> Result<Value> {
-        let (of, _) = self.resolve(args.of.as_deref())?;
-        self.may_read(of)?;
+        let of = self.beside(args.of.as_deref())?;
         let kind = match args.kind {
             AgentName::Claude => AgentKind::Claude,
             AgentName::Codex => AgentKind::Codex,
         };
         let launch = Self::launch(None, Some(args.kind), reachable_cwd(args.cwd).await);
         let float = float_opts(args.float, args.frame, args.close_when_done)?;
-        let pane = self.open(of, args.direction, launch, false, float)?;
+        let pane = self.open_beside(of, args.direction, launch, false, float)?;
         let entry = self.core.pane(pane).ok_or_else(closed)?;
         let Some(prompt) = args.prompt.filter(|prompt| !prompt.trim().is_empty()) else {
             return Ok(json!({ "agent": self.agent_info(pane, &entry) }));

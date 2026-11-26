@@ -344,6 +344,11 @@ impl Daemon {
         self.core.identity.daemon_id()
     }
 
+    /// Agents on other hosts with calls relayed here whose panes are still open there.
+    pub fn remote_agents(&self) -> usize {
+        self.core.term.cross.remote_agents()
+    }
+
     /// The UDP sockets the endpoint is bound to.
     pub fn bound_sockets(&self) -> Vec<SocketAddr> {
         self.endpoint.bound_sockets()

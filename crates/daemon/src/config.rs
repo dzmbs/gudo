@@ -153,6 +153,8 @@ pub struct Config {
     pub screen_save_delay: Duration,
     /// How long an agent's request to drive one of the user's panes waits for the owner.
     pub drive_ask_wait: Duration,
+    /// Requests agents here may send for one other host per minute (`term::cross`).
+    pub cross_host_requests_per_minute: u32,
     /// Panes all the agents of one session may have opened at once.
     pub agent_panes_per_session: usize,
     /// The agent hook shim; next to the current executable when `None`.
@@ -419,6 +421,7 @@ impl Config {
             persist_max_delay: Duration::from_secs(5),
             screen_save_delay: Duration::from_secs(5),
             drive_ask_wait: Duration::from_secs(120),
+            cross_host_requests_per_minute: crate::term::cross::CROSS_HOST_REQUESTS_PER_MINUTE,
             agent_panes_per_session: crate::term::AGENT_PANES_PER_SESSION,
             hook_bin: None,
             hook_shim: None,

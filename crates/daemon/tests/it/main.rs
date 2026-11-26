@@ -14,6 +14,7 @@ mod browser;
 mod chat_files;
 mod codex;
 mod cold_restart;
+mod cross_host;
 mod devices;
 mod drive;
 mod e2e;
