@@ -58,7 +58,8 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
     /// never offers a guest connection password prompts.
     ///
     /// A guest (someone else's host) never gets `browser`: that host's programs and agents
-    /// would open pages and drive this device's browser.
+    /// would open pages and drive this device's browser. Nor `crossHost`: someone else's host
+    /// never asks this device to act on the owner's other hosts.
     public func connectOptions(askpass: Bool, guest: Bool = false) -> ConnectOptions {
         let relay = customRelay
         let token = authToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,6 +69,7 @@ nonisolated public struct RelaySettings: Codable, Equatable, Sendable {
             relayAuthToken: relay != nil && !token.isEmpty ? token : nil,
             askpass: askpass,
             browser: askpass && !guest,
+            crossHost: askpass && !guest,
             programStatus: askpass,
             clipboard: askpass)
     }
