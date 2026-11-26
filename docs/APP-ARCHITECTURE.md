@@ -1065,8 +1065,8 @@ DOM up to 3 s) and asks the page what changed; nothing changed means one retry w
 element's own `click()`, then a "no observable effect" answer saying what to try. Each action
 is reported to `BrowserAgent.onAction` (`BrowserActionEntry`, with Playwright's selector and
 locator) for recordings. Clicks that buy, pay or send, and submits of sign-in or
-payment forms, wait for Allow on the page (or in the agent's own client when it supports MCP
-elicitation); typing into password or card fields is left to the user (Done). Take Over stops
+payment forms, wait for Allow on the page, never on a caller's word that its own client asked;
+typing into password or card fields is left to the user (Done). Take Over stops
 the agent's calls until Hand Back. Screenshots are the visible page at most 1280 px wide; their
 pixels are the coordinates targets use.
 

@@ -76,6 +76,17 @@ profiles and cookies, cloud and registry credentials (`~/.aws`, `~/.azure`, `~/.
 config. A new shim with an old app fails closed ("update the app"); an old shim with a new app
 gets the same approval in the page before files are set.
 
+**Approvals are the device's.** Anything holding the pane's token, such as a prompt-injected
+agent's shell, can write a raw tool call, so the app drops `approved` and `approved_origin` from
+every call it receives. Only the app's own code sets them for the page script, after the user
+allowed that step on the device. Clicks that buy, pay or send, and submits of sign-in or payment
+forms, always ask on the device: a call that says the agent's client already asked
+(`approval_by: client`, MCP elicitation) is not believed, because the app cannot check it. Shims
+that ask the client get a plain result once the device has answered. An upload's Allow from
+`browser_upload_review` is remembered by the app for one upload only: the same pane, origin and
+file names and sizes, within 60 seconds. An upload that matches no such Allow asks on the device
+again.
+
 The other tools read no host files: snapshots and screenshots are written, never read back, and
 `browser_navigate` opens `http(s)` only.
 
@@ -417,6 +428,10 @@ Each test runs the attack against the real code (real git, real sockets, a real 
   `AppTests/BrowserPageEventsTests` `testUploadsSetFilesAndAnswerTheFilePicker` (no approval,
   approval without origin, another origin) and `testUploadsReachAFileInputInACrossOriginFrame`
   (approved for the page, refused in its cross-origin frame).
+- `AppTests/AgentBrowserApprovalTests` (a raw call with `approved` or `approval_by: client`
+  pressing "Place order", a raw upload with `approved_origin`, a reviewed upload used twice or for
+  other files) and `mcp::tests::a_step_the_app_asks_on_the_device_never_reaches_the_client`: a
+  caller holding the pane's token skipping the device's approval.
 - `askpass::guests_never_see_prompts_and_the_owner_is_told_who_drives` (it): a viewer and a
   driver guest whose clients offer to answer anyway get no prompt, and their answers and
   cancels are refused. Once the driver types, the owner's prompt names them. The client side:

@@ -49,6 +49,8 @@ final class BrowserAgent {
     /// `t1`, `t2`, …; never reused.
     private var tabNumbers: [UUID: Int] = [:]
     private var nextTab = 1
+    /// Uploads the user allowed on the device, newest last.
+    private var uploadApprovals: [UploadApproval] = []
 
     var onAction: ((BrowserActionEntry) -> Void)?
 
@@ -56,14 +58,11 @@ final class BrowserAgent {
         var text: String
         var image: Data?
         var mime = "image/jpeg"
-        /// A step for the agent's client to approve; it asks, then calls again approved.
-        var approval: String?
         /// The origin the user approved an upload to.
         var approvedOrigin: String?
 
         var json: String {
             var object: [String: Any] = ["text": text]
-            if let approval { object["approval"] = ["message": approval] }
             if let approvedOrigin { object["approved"] = ["origin": approvedOrigin] }
             if let image { object["image"] = ["data": image.base64EncodedString(), "mimeType": mime] }
             let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
@@ -75,7 +74,8 @@ final class BrowserAgent {
         _ id: UInt64, tool: String, args: String, pane: HostPane, app: AppModel,
         reply: @escaping (Result<String, BrowserCallError>) -> Void
     ) {
-        let input = (try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any] ?? [:]
+        let parsed = (try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any] ?? [:]
+        let input = BrowserTools.fromCaller(parsed)
         calls[id] = Task { [weak self] in
             defer { self?.calls[id] = nil }
             do {
@@ -122,7 +122,7 @@ final class BrowserAgent {
              "browser_press", "browser_scroll", "browser_scroll_to", "browser_upload", "browser_drag":
             return try await act(tool, args, page: page, member: member, pane: pane, window: window)
         case "browser_upload_review":
-            return try await reviewUpload(args, page: page, member: member, window: window)
+            return try await reviewUpload(args, page: page, member: member, pane: pane, window: window)
         case "browser_dialog":
             return try await answerDialog(args, page: page)
         case "browser_wait":
@@ -360,13 +360,20 @@ final class BrowserAgent {
     ) async throws -> Answer {
         let kind = String(tool.dropFirst("browser_".count))
         if kind == "upload", args["target"] == nil {
-            return try await choose(args, page: page, member: member, window: window)
+            return try await choose(args, page: page, member: member, pane: pane, window: window)
         }
         var input = args
         input["kind"] = kind
         if kind == "upload" { input["files"] = Self.payloads(args) }
         let target = try await page.locate(args["target"] as? [String: Any])
         input["target"] = target.target
+        if kind == "upload" {
+            let origin: String = try await page.js("return location.origin", [:], frame: target.frame)
+            if takeUploadApproval(pane: pane, origin: origin, files: Self.listing(args["files"] as? [[String: Any]] ?? [])) {
+                input["approved"] = true
+                input["approved_origin"] = origin
+            }
+        }
         if kind == "drag" {
             let destination = try await page.locate(args["to"] as? [String: Any])
             guard destination.target != nil, destination.frame == target.frame else { throw BrowserCallError("Drag needs a to target in the same frame as target.") }
@@ -385,10 +392,7 @@ final class BrowserAgent {
                 ? Self.uploadRequest(Self.listing(args["files"] as? [[String: Any]] ?? []), origin: need["origin"] as? String ?? "")
                 : need["reason"] as? String ?? "The agent needs you."
             let handoff = need["kind"] as? String == "handoff"
-            // The agent's client asks its user (MCP elicitation); typing secrets and uploads stay here.
-            if !handoff, !isUpload, args["approval_by"] as? String == "client" {
-                return Answer(text: "", approval: message)
-            }
+            // Always on the device: the app cannot tell whether the agent's client really asked.
             bringForward(member, in: window)
             let allowed = await ask(page, kind: handoff ? .handoff : .approve, message: message)
             guard allowed else { throw BrowserCallError("The user declined: \(message)") }
@@ -410,7 +414,6 @@ final class BrowserAgent {
            args["force"] as? Bool != true, page.dialog == nil {
             var again = input
             again["kind"] = "click_element"
-            again["approved"] = true
             let retry = try await act(page, again, frame: target.frame, wait: true)
             if !retry.changes.isEmpty {
                 changes = retry.changes
@@ -531,7 +534,9 @@ final class BrowserAgent {
         return Answer(text: (accept ? "Accepted" : "Dismissed") + " the \(dialog.kind.rawValue).\n" + (try await page.snapshot(["filter": "interactive"])))
     }
 
-    private func choose(_ args: [String: Any], page: BrowserPane, member: BrowserMember, window: WindowModel) async throws -> Answer {
+    private func choose(
+        _ args: [String: Any], page: BrowserPane, member: BrowserMember, pane: HostPane, window: WindowModel
+    ) async throws -> Answer {
         guard let chooser = page.fileChooser else {
             throw BrowserCallError("No file picker is open. Pass target (the file field, or the button or label that opens it).")
         }
@@ -541,9 +546,10 @@ final class BrowserAgent {
         }
         let files = Self.payloads(args)
         guard !files.isEmpty else { throw BrowserCallError("paths names no files.") }
-        if args["approved"] as? Bool != true || args["approved_origin"] as? String != chooser.origin {
+        let listing = Self.listing(args["files"] as? [[String: Any]] ?? [])
+        if !takeUploadApproval(pane: pane, origin: chooser.origin, files: listing) {
             bringForward(member, in: window)
-            let message = Self.uploadRequest(Self.listing(args["files"] as? [[String: Any]] ?? []), origin: chooser.origin)
+            let message = Self.uploadRequest(listing, origin: chooser.origin)
             guard await ask(page, kind: .approve, message: message) else { throw BrowserCallError("The user declined the upload.") }
             guard page.fileChooser != nil else { throw BrowserCallError("The file picker closed.") }
         }
@@ -563,7 +569,9 @@ final class BrowserAgent {
 
     /// Asks the user to approve the files an upload names (name, size, path on the host) for the
     /// origin that receives them, before the host reads any of them.
-    private func reviewUpload(_ args: [String: Any], page: BrowserPane, member: BrowserMember, window: WindowModel) async throws -> Answer {
+    private func reviewUpload(
+        _ args: [String: Any], page: BrowserPane, member: BrowserMember, pane: HostPane, window: WindowModel
+    ) async throws -> Answer {
         let files = args["files"] as? [[String: Any]] ?? []
         guard !files.isEmpty else { throw BrowserCallError("The upload names no files.") }
         let origin: String
@@ -580,13 +588,54 @@ final class BrowserAgent {
         guard await ask(page, kind: .approve, message: Self.uploadRequest(listing, origin: origin)) else {
             throw BrowserCallError("The user declined the upload.")
         }
+        rememberUploadApproval(pane: pane, origin: origin, files: listing)
         return Answer(text: "Approved.", approvedOrigin: origin)
+    }
+
+    /// An upload the user allowed on the device, honoured once by the upload that follows it.
+    struct UploadApproval {
+        var pane: HostPane
+        var origin: String
+        var files: [UploadKey]
+        var expires: ContinuousClock.Instant
+    }
+
+    /// What identifies a file in both the review (size on disk) and the upload (its bytes).
+    struct UploadKey: Equatable {
+        var name: String
+        var size: Int64
+    }
+
+    /// Long enough for the host to read and send the approved files (at most 3 MB).
+    static let uploadApprovalLifetime: Duration = .seconds(60)
+    static let maxUploadApprovals = 8
+
+    private func rememberUploadApproval(pane: HostPane, origin: String, files: [UploadFile]) {
+        let now = ContinuousClock.now
+        uploadApprovals.removeAll { $0.expires <= now }
+        if uploadApprovals.count >= Self.maxUploadApprovals { uploadApprovals.removeFirst() }
+        uploadApprovals.append(UploadApproval(
+            pane: pane, origin: origin, files: files.map(\.key), expires: now + Self.uploadApprovalLifetime))
+    }
+
+    /// Whether the user allowed exactly these files to `origin` for `pane`; the approval is used up.
+    private func takeUploadApproval(pane: HostPane, origin: String, files: [UploadFile]) -> Bool {
+        let now = ContinuousClock.now
+        uploadApprovals.removeAll { $0.expires <= now }
+        let keys = files.map(\.key)
+        guard !keys.isEmpty,
+              let index = uploadApprovals.firstIndex(where: { $0.pane == pane && $0.origin == origin && $0.files == keys })
+        else { return false }
+        uploadApprovals.remove(at: index)
+        return true
     }
 
     struct UploadFile: Equatable {
         var name: String
         var size: Int64
         var path: String?
+
+        var key: UploadKey { UploadKey(name: name, size: size) }
     }
 
     /// Inline files (`{name, data}`) with their sizes.
@@ -715,8 +764,18 @@ final class BrowserAgent {
     }
 }
 
-/// Arguments only the agent's tools set, kept out of what is recorded.
 enum BrowserTools {
+    /// Set only by the app, after the user allowed a step on the device. Anything holding the
+    /// pane's token can send a tool call, so a caller's own are dropped.
+    static let approvalKeys = ["approved", "approved_origin"]
+
+    static func fromCaller(_ args: [String: Any]) -> [String: Any] {
+        var args = args
+        for key in approvalKeys { args.removeValue(forKey: key) }
+        return args
+    }
+
+    /// Arguments only the agent's tools set, kept out of what is recorded.
     static func own(_ args: [String: Any]) -> [String: Any] {
         var args = args
         for key in ["approved", "approved_origin", "approval_by", "files"] { args.removeValue(forKey: key) }

@@ -244,8 +244,8 @@ pub fn handle_in(
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
 }
 
-/// A browser tool call. A step that needs approval is asked in the agent's client when it
-/// can: an `input_required` result for clients that send their capabilities per request
+/// A browser tool call. A step the app hands back for approval is asked in the agent's client
+/// when it can: an `input_required` result for clients that send their capabilities per request
 /// (answered by retrying with `inputResponses` and the `requestState`), an
 /// `elicitation/create` request otherwise; else on the device.
 fn browser_call(
@@ -790,6 +790,27 @@ mod tests {
         let reply = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
         assert_eq!(reply["result"]["isError"], true);
         assert_eq!(fake.browser_asked.len(), 3);
+    }
+
+    #[test]
+    fn a_step_the_app_asks_on_the_device_never_reaches_the_client() {
+        let mut fake = Fake {
+            browser_replies: vec![BrowserReply::Result(json!({ "text": "Done." }).to_string())],
+            ..Fake::default()
+        };
+        let mut session = Session::default();
+        let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25", "capabilities": { "elicitation": {} } } });
+        handle_in(&init, &mut fake, &mut session, &mut NoPeer);
+        let call = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "browser_click", "arguments": { "target": { "type": "ref", "ref": "ref_2" } } } });
+        let mut client = Asks::answering(true);
+
+        let reply = handle_in(&call, &mut fake, &mut session, &mut client).unwrap();
+
+        assert_eq!(reply["result"]["content"][0]["text"], "Done.");
+        assert!(client.asked.is_empty());
+        assert_eq!(fake.browser_asked.len(), 1);
     }
 
     #[test]
