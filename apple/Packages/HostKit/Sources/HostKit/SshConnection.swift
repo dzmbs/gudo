@@ -255,6 +255,14 @@ nonisolated public enum SshErrorText {
         }
     }
 
+    /// Whether a dial failed because the host name has no address (not because DNS could not
+    /// be reached).
+    public static func isUnknownName(_ reason: String) -> Bool {
+        let lowered = reason.lowercased()
+        return ["nodename nor servname", "name or service not known", "no address associated with hostname"]
+            .contains { lowered.contains($0) }
+    }
+
     /// Why a dial failed, as a sentence for people: the SSH library's words only when nothing
     /// plainer fits.
     public static func plainReason(_ reason: String) -> String {

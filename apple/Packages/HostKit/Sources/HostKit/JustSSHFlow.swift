@@ -333,7 +333,7 @@ public final class JustSSHFlow {
             let elapsed = try await hosts.testSSH(try endpoint(), password: typedPassword, passphrase: typedPassphrase)
             test = .succeeded(elapsed)
         } catch {
-            test = .failed(SshErrorText.describe(error))
+            test = .failed(describe(error))
         }
     }
 
@@ -367,8 +367,21 @@ public final class JustSSHFlow {
             }
             step = .connected(id)
         } catch {
-            step = .failed(SshErrorText.describe(error))
+            step = .failed(describe(error))
         }
+    }
+
+    /// A typed name that is not an ssh_config alias and does not resolve reads as a host that
+    /// can't be found, not as the resolver's words.
+    private func describe(_ error: Error) -> String {
+        let text = switch error {
+        case JustSSHError.unreachable(_, let reason, _): reason
+        default: SshErrorText.describe(error)
+        }
+        guard alias == nil, let host = typedHost, SshErrorText.isUnknownName(text) else {
+            return SshErrorText.describe(error)
+        }
+        return JustSSHError.unknownHost(host, offersAliases: inventory.isDesktop).localizedDescription
     }
 
     /// After a failed Connect: whether the host can be saved anyway (`keepHost`).
@@ -478,6 +491,9 @@ public enum JustSSHError: Error, Equatable, LocalizedError {
     case remote(String)
     /// The first dial did not reach the host (`tailscale`: it is on a tailnet).
     case unreachable(host: String, reason: String, tailscale: Bool)
+    /// The host is not an address, does not resolve, and is no ssh_config alias
+    /// (`offersAliases`: this device reads `~/.ssh/config`).
+    case unknownHost(String, offersAliases: Bool)
 
     public var errorDescription: String? {
         switch self {
@@ -487,6 +503,10 @@ public enum JustSSHError: Error, Equatable, LocalizedError {
         case .remote(let stderr): "The host refused: \(stderr)"
         // The screen adds the Tailscale hint (with its Open button) for tailnet hosts.
         case .unreachable(let host, let reason, _): "Couldn't connect to \(host). \(SshErrorText.plainReason(reason)) Check the address and that the host is on and accepts SSH, then try again."
+        case .unknownHost(let host, let offersAliases):
+            offersAliases
+                ? "Can't find “\(host)”. Enter the server's IP address or domain, or a Host alias from ~/.ssh/config."
+                : "Can't find “\(host)”. Enter the server's IP address or domain."
         }
     }
 }

@@ -21,7 +21,7 @@ final class AddHostTests: XCTestCase {
         window?.close()
         window = nil
         let hosts = AppModel.shared.hosts
-        for id in pairedHosts + hosts.records.filter({ $0.name.hasPrefix("add-host-") || $0.ssh?.host == "127.0.0.1" }).map(\.id) {
+        for id in pairedHosts + hosts.records.filter({ $0.name.hasPrefix("add-host-") || $0.ssh?.host == "127.0.0.1" || $0.ssh?.host == "ops.invalid" }).map(\.id) {
             hosts.remove(id)
         }
         for daemon in daemons { daemon.stop() }
@@ -116,6 +116,18 @@ final class AddHostTests: XCTestCase {
         try await editWindow.click("ssh-save")
         try await editWindow.until("Save closes the sheet") { !editPresenter.isPresented }
         XCTAssertEqual(groups.group(kept.id)?.name, "add-host-web", "renamed in Edit Host")
+    }
+
+    func testAHostThatCantBeFoundSaysWhatToEnter() async throws {
+        let (window, _) = try await presentAddHost()
+        try await window.enter("dev@ops.invalid", into: "pairing-destination")
+        try await window.until("Connect is on") { window.isEnabled("pairing-confirm") }
+        try await window.click("pairing-confirm")
+        _ = try await window.waitForElement("pairing-error", timeout: .seconds(30))
+        XCTAssertTrue(
+            window.says("Can't find “ops.invalid”. Enter the server's IP address or domain, or a Host alias from ~/.ssh/config."),
+            window.texts().joined(separator: " | "))
+        XCTAssertFalse(window.says("nodename"), "not the resolver's words")
     }
 
     // MARK: Ticket

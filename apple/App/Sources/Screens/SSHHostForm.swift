@@ -39,22 +39,28 @@ struct SSHHostFormSections: View {
 
     @ViewBuilder private var addressSection: some View {
         Section {
-            TextField("Address", text: $flow.destination, prompt: Text(addressPrompt))
-                .labelsHidden()
-                .textFieldStyle(.plain)
-                .font(DS.Font.literal)
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
-                .submitLabel(.next)
-                .focused($focus, equals: .address)
-                .onSubmit {
-                    flow.tidyDestination()
-                    focus = flow.user.isEmpty ? .user : nil
-                }
-                .accessibilityIdentifier("pairing-destination")
+            LabeledContent {
+                TextField("Host or IP", text: $flow.destination, prompt: Text(addressPrompt))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+                    // The placeholder in the body font, so it fits beside the label.
+                    .font(flow.destination.isEmpty ? nil : DS.Font.literal)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.URL)
+                    #endif
+                    .submitLabel(.next)
+                    .focused($focus, equals: .address)
+                    .onSubmit {
+                        flow.tidyDestination()
+                        focus = flow.user.isEmpty ? .user : nil
+                    }
+                    .accessibilityIdentifier("pairing-destination")
+            } label: {
+                Text("Host or IP")
+            }
             if focus == .address {
                 ForEach(flow.suggestions()) { suggestion in
                     SuggestionRow(suggestion: suggestion) {
@@ -104,7 +110,7 @@ struct SSHHostFormSections: View {
     }
 
     private var addressPrompt: String {
-        flow.inventory.configHosts.isEmpty ? "Host, user@host:port or ssh command" : "Host, ssh_config alias or ssh command"
+        flow.inventory.isDesktop ? "203.0.113.10 or example.com or an ~/.ssh/config alias" : "203.0.113.10 or example.com"
     }
 
     private var addressFooter: String {

@@ -12,7 +12,7 @@ private struct Desk {
     let plainKey: GeneratedSshKey
     let lockedKey: GeneratedSshKey
 
-    init(config: String = Desk.config, agentHoldsLocked: Bool = false, agentKeys extra: [SshPublicKeyInfo] = []) throws {
+    init(config: String = Desk.config, agentHoldsLocked: Bool = false, agentKeys extra: [SshPublicKeyInfo] = [], isDesktop: Bool = true) throws {
         let home = temporaryDirectory()
         let ssh = home.appending(path: ".ssh")
         try FileManager.default.createDirectory(at: ssh, withIntermediateDirectories: true)
@@ -33,7 +33,7 @@ private struct Desk {
             agentKeys: { agent },
             knownHosts: { knownSshHostNames(text: "build.example.com ssh-ed25519 AAAA\n[git.example.com]:2222 ssh-ed25519 AAAA\n|1|x|y ssh-rsa AAAA\n") },
             localUser: "vani",
-            isDesktop: true)
+            isDesktop: isDesktop)
         model = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: temporaryDirectory()), configuration: configuration)
         sshDirectory = ssh
         plainKey = plain
@@ -312,6 +312,26 @@ private struct Desk {
         moved.destination = "127.0.0.1"
         await moved.connect()
         #expect(desk.model.record(saved.id)?.name == "ops", "a name the user gave stays")
+    }
+
+    @Test func aHostThatCantBeFoundSaysWhatToEnter() async throws {
+        let desk = try Desk()
+        let flow = JustSSHFlow(hosts: desk.model)
+        flow.destination = "ops.invalid"
+        flow.auth = .password
+        flow.password = "pw"
+        await flow.runTest()
+        #expect(flow.test == .failed("Can't find “ops.invalid”. Enter the server's IP address or domain, or a Host alias from ~/.ssh/config."))
+        await flow.connect()
+        #expect(flow.step == .failed("Can't find “ops.invalid”. Enter the server's IP address or domain, or a Host alias from ~/.ssh/config."))
+
+        let phone = try Desk(isDesktop: false)
+        let phoneFlow = JustSSHFlow(hosts: phone.model)
+        phoneFlow.destination = "ops.invalid"
+        phoneFlow.auth = .password
+        phoneFlow.password = "pw"
+        await phoneFlow.runTest()
+        #expect(phoneFlow.test == .failed("Can't find “ops.invalid”. Enter the server's IP address or domain."), "no ssh_config to name")
     }
 
     @Test func dialFailuresReadAsPlainWords() {
