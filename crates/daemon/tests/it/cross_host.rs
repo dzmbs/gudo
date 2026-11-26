@@ -626,6 +626,31 @@ async fn the_owner_alone_is_notified_with_the_host_name_cleaned() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_device_unpaired_while_connected_is_sent_nothing_and_cannot_claim() {
+    let mut hosts = Hosts::start(Duration::from_secs(2)).await;
+    hosts.relay.set_pair(HOST_A, HOST_B, true);
+    let device = hosts.on_a.client.me().unwrap().actor.device;
+    let device_hex: String = device.0.iter().map(|byte| format!("{byte:02x}")).collect();
+    daemon::unpair_device(hosts._dir_a.path(), &device_hex).unwrap();
+
+    let alone = refused(
+        hosts
+            .agent
+            .call("pane_list", json!({ "host": "ops" }))
+            .await,
+    );
+    hosts.no_card().await;
+    assert_eq!(
+        alone.message,
+        format!(
+            "No {} device is connected to approve this.",
+            brand::PRODUCT_NAME
+        )
+    );
+    hosts.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn guests_never_get_requests_and_are_never_targets() {
     let mut hosts = Hosts::start(Duration::from_secs(20)).await;
     hosts.relay.set_pair(HOST_A, HOST_B, true);

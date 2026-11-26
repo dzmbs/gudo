@@ -17,8 +17,8 @@ use std::sync::Mutex;
 
 use proto::{
     Actor, AuditKind, Consent, CrossHostPush, CrossHostRefusal, CrossHostRequest, CrossHostVerb,
-    DaemonId, Decide, HostEntry, OptionId, PairState, PaneId, RemoteAgent, RemoteCall, RequestId,
-    ServerCtl, SessionId,
+    DaemonId, Decide, DeviceId, HostEntry, OptionId, PairState, PaneId, RemoteAgent, RemoteCall,
+    RequestId, ServerCtl, SessionId,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -96,6 +96,12 @@ struct Rates {
     all: VecDeque<Instant>,
 }
 
+/// A connected owner device that relays, and the host list it sent.
+struct Device {
+    device: DeviceId,
+    directory: Option<Vec<HostEntry>>,
+}
+
 /// Where the host an agent named stands with the connected devices.
 enum Lookup {
     /// A device lists it.
@@ -110,7 +116,7 @@ enum Lookup {
 #[derive(Default)]
 pub(crate) struct CrossHost {
     /// Owner connections that announced `Caps::CROSS_HOST`, with the host list each sent.
-    devices: Mutex<HashMap<ConnId, Option<Vec<HostEntry>>>>,
+    devices: Mutex<HashMap<ConnId, Device>>,
     open: Mutex<HashMap<RequestId, Open>>,
     /// Each asking pane's key, for as long as its pane and agent runtime last.
     agents: Mutex<HashMap<PaneId, AskingAgent>>,
@@ -131,7 +137,13 @@ impl CrossHost {
         if !caps.contains(proto::Caps::CROSS_HOST) || !authz.is_owner_device(core) {
             return;
         }
-        lock(&self.devices).insert(conn, None);
+        lock(&self.devices).insert(
+            conn,
+            Device {
+                device: authz.actor.device,
+                directory: None,
+            },
+        );
         let mut open = lock(&self.open);
         for request in open.values_mut().filter(|open| open.claimed_by.is_none()) {
             request.sent_to.insert(conn);
@@ -156,6 +168,12 @@ impl CrossHost {
         }
     }
 
+    /// Forgets devices unpaired since they connected: until the connection is closed, they
+    /// must not be sent a request or listed from.
+    fn drop_unpaired(&self, core: &Core) {
+        lock(&self.devices).retain(|_, device| core.identity.is_owner_device(device.device));
+    }
+
     fn is_device(&self, conn: ConnId) -> bool {
         lock(&self.devices).contains_key(&conn)
     }
@@ -163,8 +181,8 @@ impl CrossHost {
     /// A device's list of its other hosts.
     pub fn directory(&self, conn: ConnId, mut entries: Vec<HostEntry>) {
         entries.truncate(MAX_DIRECTORY);
-        if let Some(directory) = lock(&self.devices).get_mut(&conn) {
-            *directory = Some(entries);
+        if let Some(device) = lock(&self.devices).get_mut(&conn) {
+            device.directory = Some(entries);
         }
     }
 
@@ -225,8 +243,8 @@ impl CrossHost {
     fn look_up(&self, host: &str) -> Lookup {
         let devices = lock(&self.devices);
         let mut unsure = false;
-        for directory in devices.values() {
-            let Some(entries) = directory else {
+        for device in devices.values() {
+            let Some(entries) = &device.directory else {
                 unsure = true;
                 continue;
             };
@@ -298,6 +316,7 @@ impl CrossHost {
         summary: String,
         progress: mpsc::Sender<Progress>,
     ) -> Option<usize> {
+        self.drop_unpaired(core);
         let devices: Vec<ConnId> = lock(&self.devices).keys().copied().collect();
         let mut open = lock(&self.open);
         if open
@@ -399,7 +418,7 @@ impl CrossHost {
             );
             false
         };
-        if !self.is_device(conn) || decide.actor != authz.actor {
+        if !self.is_device(conn) || decide.actor != authz.actor || !authz.is_owner_device(core) {
             return refuse(format!(
                 "a claim of cross-host request {} from a connection that may not",
                 decide.request_id
@@ -483,7 +502,11 @@ impl CrossHost {
             return None;
         }
         let mut merged: Vec<HostEntry> = Vec::new();
-        for entry in devices.values().flatten().flatten() {
+        for entry in devices
+            .values()
+            .filter_map(|device| device.directory.as_ref())
+            .flatten()
+        {
             match merged.iter_mut().find(|known| known.id == entry.id) {
                 Some(known) if rank(entry.state) > rank(known.state) => *known = entry.clone(),
                 Some(_) => {}
@@ -588,6 +611,7 @@ fn no_device() -> ToolError {
 
 /// `host_list`.
 pub(super) fn host_list(core: &Core) -> Value {
+    core.term.cross.drop_unpaired(core);
     let Some(hosts) = core.term.cross.hosts() else {
         return json!({ "hosts": [], "note": no_device().message });
     };
@@ -651,6 +675,7 @@ pub(super) async fn relay(
         .hint("host_list shows the hosts"));
     }
     let cross = &core.term.cross;
+    cross.drop_unpaired(core);
     if let Lookup::Unknown = cross.look_up(&host) {
         return Err(ToolError::new(
             ErrorCode::NotFound,
