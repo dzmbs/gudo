@@ -157,6 +157,34 @@ fn messages_thinking_and_tools_become_the_rows_chat_shows() {
 }
 
 #[test]
+fn reasoning_a_chat_completions_model_records_before_its_tool_call_is_thinking() {
+    let fixture = Fixture::new();
+    fixture.user("Why is the share rate down?");
+    fixture.message(json!({
+        "role": "assistant", "api": "openai-completions", "provider": "zai", "model": "glm-5.3",
+        "durationMs": 14066, "stopReason": "toolUse", "thinkingLevel": "high",
+        "content": [
+            {"type": "thinking", "thinking": "The rate fell after the restart.\n\nCheck the pool log first.",
+             "thinkingSignature": "reasoning_content"},
+            {"type": "toolCall", "id": "call_0a1b2c3d4e5f60718293a4b5c6d7e8f9", "name": "bash",
+             "arguments": {"command": "tail -n 50 pool.log"}},
+        ],
+        "timestamp": 1_794_166_802_000_u64,
+    }));
+    let shaped = shaped(&fixture);
+    let bodies = bodies(&shaped);
+    assert_eq!(bodies.len(), 3, "{bodies:?}");
+    assert_eq!(
+        bodies[1],
+        &TimelineBody::Thinking {
+            text: Some("The rate fell after the restart.\n\nCheck the pool log first.".into()),
+            duration_ms: Some(14066)
+        }
+    );
+    assert_eq!(tool_of(bodies[2]).title, "tail -n 50 pool.log");
+}
+
+#[test]
 fn compaction_errors_interruptions_and_model_changes_are_notices() {
     let fixture = Fixture::new();
     fixture.user("one");
