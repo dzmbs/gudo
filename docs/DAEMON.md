@@ -3017,25 +3017,32 @@ the owner's decisions are in `docs/security/proposals/cross-host-agents.md`.
   `name`, `id`, `state` (`enabled`, `off`, `offline`, `guest`, `no_helper`, `old_helper`) and a
   `note` saying what to do, or an empty list with a note when no device is connected.
 - **On A.** A call with `host` becomes a `CrossHostRequest` (the tool, its arguments without
-  `host`, the asking pane, a random `agent_key` for the pane's life, the guest driving it, if
-  any) pushed as `ServerCtl::CrossHost(Request)` to every connection of a paired owner device
-  that announced `Caps::CROSS_HOST`, and to devices that connect while it waits. Guests never get
-  one, whatever their caps. One request at a time per asking pane (`agent_blocked`, retryable);
-  at most `cross_host_requests_per_minute` (60) per target host name, all agents together. A
+  `host`, the asking pane, a random `agent_key` for the pane and its agent runtime, the guest
+  driving it, if any) pushed as `ServerCtl::CrossHost(Request)` to every connection of a paired owner device
+  that announced `Caps::CROSS_HOST`, and to devices that connect while it waits; a device
+  unpaired since it connected is sent nothing. Guests never get one, whatever their caps. A host
+  over 255 bytes is refused, and so is one no connected device lists once every device sent its
+  list, both before they count. One request at a time per asking pane (`agent_blocked`,
+  retryable); at most `cross_host_requests_per_minute` (60) per asking pane and four times that
+  for all agents together, in at most 256 per-pane windows (the quietest goes first). A
   device refuses (`CrossHostMsg::Refuse`, a `CrossHostRefusal` A words for the agent:
   "ops isn't enabled for agents on this Mac. Turn it on in Gudo › Hosts › ops.") or claims it
   with a signed `Decide` (`CrossHostMsg::Claim`, options `Allow once` 0, `Allow all for this
   agent` 1, `Deny` 2, signed for A's daemon id). The first valid claim wins
   (`CrossHostPush::Claimed{won}`); the others are told `Closed`. A claim needs the connection's
-  own actor, an owner device that was sent the request, and a good signature; anything else is
+  own actor, a paired owner device that was sent the request, and a good signature; anything else is
   audited `Denied`. Every request is a `CrossHost` audit record and every claim an `Approval`
   record with the signed bytes. After an allow, the winner's `CrossHostMsg::Result` (B's reply,
   or why it failed) answers the call; Deny refuses it. Unclaimed after `drive_ask_wait` (120 s),
   or at once when every device refused, the call fails; with no device ever sent it, "No Gudo
   device is connected to approve this." (retryable). While no device is connected, or none
   claimed it within 3 s, the owner gets an attention item and push (`AgentBlocked`, no Approve
-  button: a relayed call is answered in the app). The asking pane closing sends
-  `CrossHostPush::AgentGone{pane, agent_key}`: every yes for that agent ends.
+  button: a relayed call is answered in the app), for the owner alone: guests never list,
+  count or receive it. Its title names the host as the agent gave it, cleaned like prompt text
+  and cut to 64 characters. The asking pane closing, or an agent runtime starting or ending in it
+  (a Claude Code or Codex launched in a shell, an agent exiting to its shell), sends
+  `CrossHostPush::AgentGone{pane, agent_key}`: every yes for that agent ends, and the pane's next
+  request carries a new key.
 - **On the device** (`client_core::CrossHostRelay`, one per app). It knows every host: owner hosts
   with their connection, guests, plain SSH hosts and paired hosts it is not connected to now.
   For a request it refuses unknown names, A itself, guests (never targets), SSH-only hosts
@@ -3045,7 +3052,9 @@ the owner's decisions are in `docs/security/proposals/cross-host-agents.md`.
   all": everything; after "Allow once": reads); otherwise the app shows a card with the action
   in words from the request's own arguments (`proto::describe_cross_host`, never A's wording).
   On an allow it claims, runs `CrossHostMsg::Call` on B over its own connection and returns the
-  reply. Turning a pair off ends its standing yeses at once.
+  reply. Turning a pair off ends its standing yeses and refuses its open cards at once; an Allow
+  is judged again when it is given, so a card whose pair, target or connection went away is
+  refused, not run.
 - **On B.** A `Call` from an owner device (anyone else: refused and audited) runs as a
   terminal-tool call of a stand-in caller for `(A, pane, agent_key)`, in the session the device
   shows (else the most recent), with the `Consent` it carries: `Once` (that call), `Agent`
@@ -3059,8 +3068,10 @@ the owner's decisions are in `docs/security/proposals/cross-host-agents.md`.
 - **Tests.** `tests/it/cross_host.rs` (two daemons, one owner device relaying: allow once runs
   exactly the shown call and then covers reads, deny, allow all until the pane closes, the
   password prompt on B, revoke, no device connected then one arriving and the notification,
-  guests never sent a request and never targets, one at a time and the rate limit, the audit on
-  both hosts, panes the remote agent opens, tools that stay home and `host_list`);
+  guests never sent a request and never targets, one at a time and the rate limit, over-long and
+  unknown hosts, a new agent runtime ending a yes, turning a pair off with a card open, the
+  owner-only notice, an unpaired device, the audit on both hosts, panes the remote agent opens,
+  tools that stay home and `host_list`);
   `client_core::cross_host::tests`; goldens `proto/tests/golden_cross_host.rs`.
 
 ## 10. Known gaps / follow-ups

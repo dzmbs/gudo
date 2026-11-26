@@ -47,8 +47,10 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   session's. Ownership survives a restart (`layout.json`) and is dropped with the pane, so an id
   cannot leave a stale claim behind.
 - **The user's panes need the owner's yes, for one exact action.** A request carries the exact
-  text, keys, command line or prompt, shown with every control, line-break and bidi character
-  made visible. The owner's signed answer releases only the waiting call, which does exactly
+  text, keys, command line or prompt, shown with every control, line-break and bidi character,
+  separator, space other than U+0020, filler and blank made visible, and long runs of spaces as
+  `<N spaces>`. A card that cannot show the whole action in its lines keeps Allow off until the
+  owner opened it and its last line was on screen. The owner's signed answer releases only the waiting call, which does exactly
   that; a replayed answer, a second device, or a different action finds nothing to approve.
   "For this pane" is the one wider answer, named as such, never what Approve picks on old apps,
   and it ends when either pane closes or the daemon restarts.
@@ -82,8 +84,12 @@ directory (it holds `hook.token` and can do anything the user can anyway).
   connected. On the target, the call runs for a stand-in of the remote agent: panes it opens are
   its own, a password prompt is refused, it cannot reach a third host, and the device's yes is
   the only authority (`Reads` covers reads alone). Both hosts audit it, the target with
-  `on_behalf_of`. A yes for "this agent" ends when its pane closes or the owner turns the pair
-  off.
+  `on_behalf_of`. A yes for "this agent" ends when its pane closes, when an agent starts or ends
+  in that pane, or when the owner turns the pair off (which also refuses its open cards; an
+  Allow is checked against the pair again before it runs). Requests are bounded per asking
+  agent and for all agents, and a host name over 255 bytes or one no device lists is refused
+  first. The notice for a request goes to the owner alone, with the host name cleaned. A device
+  unpaired while connected is sent nothing and cannot claim.
 - **Event stream.** Agents see only their own session's events; `gudo events` sees what its
   connection's grant shows. Neither leaks another session's panes, commands or exit codes.
   A missing pane session never becomes daemon-wide scope; only pane-free loss notices may be global.
@@ -94,7 +100,7 @@ directory (it holds `hook.token` and can do anything the user can anyway).
 ## Residual risk
 
 - **Allow all on another host.** "Allow all for this agent" hands the agent that host, the
-  user's own panes included, until its pane closes; what it does there is not shown first. A
+  user's own panes included, until its pane closes or another agent runtime takes the pane; what it does there is not shown first. A
   compromised asking host can present any request as from an agent that holds such a yes (it
   names the agent); turning the pair off ends it at once. Data read on the other host goes to
   the agent and its model provider.

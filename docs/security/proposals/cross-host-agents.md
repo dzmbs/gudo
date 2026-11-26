@@ -143,15 +143,17 @@ fan-out across hosts; everything audited on both hosts.
    to the owner as drive asks do; a device that connects meanwhile gets it.
 3. **Looser approvals, the owner's choice.** With a pair on, an agent's first request to B asks
    once: "Allow once", "Allow all for this agent" (reads and input, run, open and close on B
-   until that agent's pane on A closes) or "Deny". Reads need at least that one yes per agent
+   until that agent's pane on A closes, or an agent starts or ends in it) or "Deny". Reads need at least that one yes per agent
    and host. Kept: off by default per directed pair (A to B apart from B to A); the yes for an
-   agent ends with its pane; one open request per agent pane and a per-host rate limit (60 a
-   minute); every action audited on both hosts (A: the request and the device's signed claim;
+   agent ends with its pane or its agent runtime; one open request per agent pane and a rate
+   limit per asking agent (60 a minute, 240 for all agents together, a host name of at most 255
+   bytes that a connected device lists, checked before counting); every action audited on both hosts (A: the request and the device's signed claim;
    B: the call under the owner device, `on_behalf_of=<A>/p<pane>`); guests never receive or
    answer a request and a host joined as a guest is never a target; password prompts on B
    refused; no `events_wait` across hosts; panes a remote agent opens on B are its own. Turning
    a pair off in the app (Settings › Agents › the host, or the host's menu in Hosts) ends every
-   standing yes for it at once.
+   standing yes for it and refuses its open cards at once; an Allow given later is judged again
+   and refused.
 4. **Any owner device relays** (Mac, iPhone, iPad); the first to claim performs it, the others
    drop it.
 5. **Tool surface.** The terminal tools take `host` (a name as shown in the app, or its id);
@@ -172,7 +174,14 @@ As built, a few choices the decisions left open:
   does not ask a second time for the user's panes there. Under "Allow all" nothing on B is
   asked. Agents running on B itself still ask before driving panes a remote agent opened.
 - **The device words the action** from the call's arguments (`proto::describe_cross_host`), never
-  from text A sends, so a compromised A cannot show one action and request another.
+  from text A sends, so a compromised A cannot show one action and request another. Separators,
+  odd spaces, blanks and long space runs show as escapes, and a card too short for the action
+  keeps its allows off until the whole of it was shown (Show All), rather than refusing long
+  actions as the lock screen does: long commands are real, and the card has room to scroll.
+- **Notices are the owner's.** The attention item and push for a waiting request go to the
+  owner's devices alone, its title naming the host cleaned and cut to 64 characters.
+- **Unpaired devices.** A device unpaired while still connected is dropped from the relaying
+  devices before the next request and refused if it claims, before its connection is closed.
 - **What A can still do.** A names the asking agent; a compromised A can present a request as
   from an agent that holds "Allow all". Its reach is still only what that yes covers, on hosts
   the owner turned on for A, while a device is connected; turning the pair off ends it.

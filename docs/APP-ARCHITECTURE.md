@@ -1815,8 +1815,9 @@ shows the requests.
   in `UserDefaults` (`crossHost.pairs`); `requests` and `allows` come from the relay.
 - **Card.** `CrossHostCardView` in `AgentToastStack`, above the agents' cards, so it keeps clear of
   composers and banners as they do: the agent, both hosts, the action as the core words it from
-  the call's arguments, and Deny, Allow All (this agent on that host until its pane closes) and
-  Allow Once. It stays until answered here or elsewhere, or the request lapses; with no window
+  the call's arguments (`ActionLiteral`), and Deny, Allow All (this agent on that host until its
+  pane closes) and Allow Once. An action cut at the card's lines shows Show All, and both allows
+  stay off until its last line has been on screen; the agents' own approval cards do the same. It stays until answered here or elsewhere, or the request lapses; with no window
   on screen the host's push says it waits.
 - **Switches.** Settings › Agents › Agents on Other Hosts lists the owner's hosts; a host's page
   (`SettingsPage.hostReach`, also from its menu in Hosts) has one switch per other host ("Agents
