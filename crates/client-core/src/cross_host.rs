@@ -672,21 +672,52 @@ impl CrossHostRelay {
     }
 
     /// Turns "agents on `from` may reach `to`" on or off. Off also ends every standing yes for
-    /// the pair, at once.
+    /// the pair and refuses its open cards, at once.
     pub fn set_pair(&self, from: &str, to: &str, enabled: bool) {
-        {
+        let withdrawn = {
             let mut book = lock(&self.inner.book);
             let pair = (from.to_owned(), to.to_owned());
             if enabled {
                 book.pairs.insert(pair);
+                Vec::new()
             } else {
                 book.pairs.remove(&pair);
+                let keys: Vec<CrossHostCardKey> = book
+                    .cards
+                    .iter()
+                    .filter(|(key, card)| key.from == from && card.to == to)
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                let host = book
+                    .host(to)
+                    .map(|host| host.name.clone())
+                    .unwrap_or_default();
+                keys.into_iter()
+                    .filter_map(|key| book.cards.remove(&key).map(|_| key))
+                    .map(|key| (key, CrossHostRefusal::NotEnabled { host: host.clone() }))
+                    .collect()
             }
+        };
+        for (key, refusal) in withdrawn {
+            self.withdraw(key, refusal);
         }
         if !enabled {
             self.end_allows(from, to);
         }
         self.send_directories();
+    }
+
+    /// Closes a card and tells its host this device will not relay it.
+    fn withdraw(&self, key: CrossHostCardKey, refusal: CrossHostRefusal) {
+        self.inner
+            .listener
+            .on_cross_host_event(CrossHostEvent::CardClosed(key.clone()));
+        if let Some(client) = self.client(&key.from) {
+            client.send_cross_host(CrossHostMsg::Refuse {
+                id: key.id,
+                refusal,
+            });
+        }
     }
 
     pub fn pair_enabled(&self, from: &str, to: &str) -> bool {
@@ -714,12 +745,30 @@ impl CrossHostRelay {
         lock(&self.inner.book).standing_list()
     }
 
-    /// The owner's answer to a card. Allow runs the call on the other host; the card closes
-    /// either way.
+    /// The owner's answer to a card. Allow runs the call on the other host, if the pair and
+    /// the host still stand as when it was shown; the card closes either way.
     pub fn answer(&self, key: &CrossHostCardKey, choice: CrossHostChoice) {
-        let Some(card) = lock(&self.inner.book).cards.remove(key) else {
-            return;
+        let (card, verdict) = {
+            let mut book = lock(&self.inner.book);
+            let Some(card) = book.cards.remove(key) else {
+                return;
+            };
+            let verdict = book.judge(&key.from, &card.request, reach);
+            (card, verdict)
         };
+        let still = match verdict {
+            Verdict::Refuse(refusal) => Err(refusal),
+            Verdict::Perform { to, .. } | Verdict::Ask { to } if to == card.to => Ok(()),
+            Verdict::Perform { .. } | Verdict::Ask { .. } => Err(CrossHostRefusal::UnknownHost {
+                host: card.request.host.clone(),
+            }),
+        };
+        if let (Err(refusal), CrossHostChoice::AllowOnce | CrossHostChoice::AllowAgent) =
+            (still, choice)
+        {
+            self.withdraw(key.clone(), refusal);
+            return;
+        }
         self.inner
             .listener
             .on_cross_host_event(CrossHostEvent::CardClosed(key.clone()));

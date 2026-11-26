@@ -466,6 +466,53 @@ async fn revoking_a_pair_ends_every_standing_allow_and_turns_it_off() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn turning_a_pair_off_withdraws_its_open_cards_and_answers_are_judged_again() {
+    let mut hosts = Hosts::start(Duration::from_secs(20)).await;
+    hosts.relay.set_pair(HOST_A, HOST_B, true);
+    let users_pane = hosts.users_pane_on_b;
+    let run = hosts.agent.spawn(
+        "pane_send",
+        json!({ "host": "ops", "pane": format!("p{}", users_pane.0), "text": "echo pair-was-off", "submit": true }),
+    );
+    let card = hosts.card().await;
+    hosts.relay.set_pair(HOST_A, HOST_B, false);
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let event = tokio::time::timeout_at(deadline, hosts.cards.recv())
+            .await
+            .expect("the card closed")
+            .expect("the relay lives");
+        if event == CrossHostEvent::CardClosed(card.key.clone()) {
+            break;
+        }
+    }
+    let off = refused(reply(run).await);
+    assert!(off.message.contains("isn't enabled"), "{off:?}");
+    hosts.relay.answer(&card.key, CrossHostChoice::AllowOnce);
+
+    // A card answered after its target went away is refused, not run.
+    hosts.relay.set_pair(HOST_A, HOST_B, true);
+    let run = hosts.agent.spawn(
+        "pane_send",
+        json!({ "host": "ops", "pane": format!("p{}", users_pane.0), "text": "echo host-was-gone", "submit": true }),
+    );
+    let card = hosts.card().await;
+    hosts.relay.remove_host(HOST_B);
+    hosts.relay.answer(&card.key, CrossHostChoice::AllowAgent);
+    let gone = refused(reply(run).await);
+    assert!(gone.message.starts_with("No host named ops"), "{gone:?}");
+    assert!(hosts.relay.standing().is_empty());
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let screen = hosts.on_b.text(users_pane);
+    assert!(
+        !screen.contains("pair-was-off") && !screen.contains("host-was-gone"),
+        "{screen}"
+    );
+    hosts.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn nothing_happens_while_no_device_is_connected() {
     let mut hosts = Hosts::start(Duration::from_secs(3)).await;
     hosts.relay.remove_host(HOST_A);
