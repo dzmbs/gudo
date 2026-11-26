@@ -147,7 +147,7 @@ impl Hosts {
         relay.add_host(RelayHost::owner(HOST_A, "mac", Arc::clone(&on_a.client)));
         relay.add_host(RelayHost::owner(HOST_B, "ops", Arc::clone(&on_b.client)));
         let agent = Caller::new(dir_a.path(), &a, agent_pane);
-        Self {
+        let hosts = Self {
             _dir_a: dir_a,
             _dir_b: dir_b,
             a,
@@ -158,7 +158,9 @@ impl Hosts {
             cards,
             agent,
             users_pane_on_b,
-        }
+        };
+        hosts.listed("ops").await;
+        hosts
     }
 
     /// The next card the device shows, skipping other events.
