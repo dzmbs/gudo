@@ -159,6 +159,11 @@ different daemon on every host, or type a command into a paired host's terminal 
 - Password fields are `SecureField`s.
 - The terminal disables autocorrect, spell checking and inline prediction, so typed passwords
   are not learned by the keyboard.
+- On the Mac, while the focused pane of the key window is at a password prompt with echo off
+  (the host's detected prompt), the app turns on Secure Keyboard Entry so other apps' keyboard
+  monitors cannot read the password, and shows the lock badge. It is turned off as soon as the
+  prompt ends, the pane loses focus or closes, or the app is no longer active. A helper that does
+  not detect prompts sends none, and the app simply never turns it on.
 
 **App Lock** (Settings › Privacy & Security on the Mac, App Lock on iPhone and iPad; off by
 default). "Require Face ID" (Touch ID, Optic ID or the passcode, named after what the device

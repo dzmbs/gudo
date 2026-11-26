@@ -666,7 +666,7 @@ struct PaneSlot: View {
                 ProcessExitedBar(exit.message, failed: exit.failed)
                     .frame(maxHeight: .infinity, alignment: .bottom)
             }
-            if notice.secureInput && focused {
+            if focused, notice.secureInput || securesKeyboard {
                 SecureInputBadge()
             }
             BellBorder(ringing: notice.bell)
@@ -709,6 +709,22 @@ struct PaneSlot: View {
         .terminalSurfaceChrome()
         // A mixed tab's panes stay with it: tabs merge into host tabs only.
         .tabDropTarget(pane: id, workspace: workspace, enabled: !namesHost)
+        #if os(macOS)
+        .secureKeyboardEntry(atPasswordPrompt: isAtPasswordPrompt)
+        #endif
+    }
+
+    /// Focused, on screen, and its terminal reads a password with echo off.
+    private var isAtPasswordPrompt: Bool {
+        isFocused && !terminalHidden && workspace.askpass?.detected[id.rawValue] != nil
+    }
+
+    private var securesKeyboard: Bool {
+        #if os(macOS)
+        isAtPasswordPrompt && SecureKeyboardEntry.shared.isEnabled
+        #else
+        false
+        #endif
     }
 
     @ViewBuilder private var content: some View {

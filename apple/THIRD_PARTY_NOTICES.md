@@ -18,6 +18,8 @@ Ported from `macos/Sources` (Swift, adapted to plain values instead of Ghostty s
 - `Packages/DesignSystem/Sources/DesignSystem/Components/KeyCaps.swift`: `KeyCap`.
 - `App/Sources/Views/SplitTreeView.swift`: the split divider (`SplitView.Divider`) and default
   `split-divider-color` / `unfocused-split-opacity` behaviour.
+- `App/Sources/Panes/SecureKeyboardEntry.swift`: `SecureInput`, the balanced, app-active-only
+  Secure Keyboard Entry behind `macos-auto-secure-input`.
 
 Config names, defaults and the default palette come from `src/config/Config.zig` and
 `src/terminal/color.zig`. The Ghostty name and icon are trademarks and are not used.
