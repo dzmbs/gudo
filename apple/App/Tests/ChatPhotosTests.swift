@@ -89,6 +89,46 @@ final class ChatPhotosTests: XCTestCase {
         XCTAssertTrue(state.photos.attachments.isEmpty)
     }
 
+    func testSeveralPhotosChosenTogetherBecomePillsInTheOrderChosen() async throws {
+        let state = try state()
+        defer { state.deactivate() }
+        let files = try (0..<3).map { _ in try file() }
+        let paths = Dictionary(uniqueKeysWithValues: files.enumerated().map { ($1.url, "/fixture/\($0).jpg") })
+        state.photos.begin(in: state)
+        state.photos.load(in: state, photos: files.enumerated().map { index, file in
+            {
+                // The first one is the slowest to prepare: order is still the order chosen.
+                if index == 0 { try await Task.sleep(for: .milliseconds(40)) }
+                return file
+            }
+        }, source: { file in try XCTUnwrap(paths[file.url]) })
+        try await wait { state.photos.phase == .idle && state.photos.attachments.count == 3 }
+        XCTAssertEqual(state.photos.references, "@/fixture/0.jpg @/fixture/1.jpg @/fixture/2.jpg")
+    }
+
+    func testThePickerOffersOnlyTheRoomLeftAndExtraPhotosAreLeftOut() async throws {
+        let state = try state()
+        defer { state.deactivate() }
+        XCTAssertEqual(state.photos.selectionLimit, ChatPhotos.attachmentLimit)
+        let files = try (0..<(ChatPhotos.attachmentLimit + 2)).map { _ in try file() }
+        state.photos.begin(in: state)
+        state.photos.load(in: state, photos: files.map { file in { file } }, source: { _ in "/fixture/photo.jpg" })
+        try await wait { state.photos.phase == .idle && state.photos.isFull }
+        XCTAssertEqual(state.photos.attachments.count, ChatPhotos.attachmentLimit)
+        XCTAssertEqual(state.photos.selectionLimit, 0)
+    }
+
+    func testImagesKeptForTheMessageStopAtTheImageLimitAndTheRestUpload() async throws {
+        let state = try state()
+        defer { state.deactivate() }
+        let pictures = try (0..<(ChatPhotos.imageLimit + 1)).map { _ in try pictureFile() }
+        state.photos.begin(in: state)
+        state.photos.load(in: state, keepsImages: true, photos: pictures.map { file in { file } }, source: { _ in "/fixture/extra.jpg" })
+        try await wait { state.photos.phase == .idle && state.photos.attachments.count == pictures.count }
+        XCTAssertEqual(state.photos.images.count, ChatPhotos.imageLimit)
+        XCTAssertEqual(state.photos.attachments.last?.reference, "@/fixture/extra.jpg")
+    }
+
     func testReferencesRefuseRelativeOversizeAndControlBearingPaths() throws {
         for path in ["relative.jpg", "/photo\nnew prompt", "/photo\u{0}", "/" + String(repeating: "a", count: 8_192)] {
             XCTAssertThrowsError(try ChatPhotos.reference(path))
@@ -116,6 +156,13 @@ final class ChatPhotosTests: XCTestCase {
         let url = directory.appending(path: "photo.jpg")
         try Data([1]).write(to: url)
         return ChatPhotoFile(url: url, bytes: 1)
+    }
+    private func pictureFile() throws -> ChatPhotoFile {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: "photo.jpg")
+        try Data([1]).write(to: url)
+        return ChatPhotoFile(url: url, bytes: 1, thumbnail: Data([2]))
     }
     private func wait(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         for _ in 0..<100 {

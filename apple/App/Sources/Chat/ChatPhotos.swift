@@ -62,36 +62,51 @@ final class ChatPhotos {
         phase = .picking
     }
 
+    /// How many more files the picker may offer: the room left before `attachmentLimit`.
+    var selectionLimit: Int { max(0, Self.attachmentLimit - attachments.count) }
+
     /// Prepares a file, then uploads it to the host for a mention, or, with `keepsImages` (an
     /// agent that takes images with a message), keeps an image on the device to send with it.
     func load(in state: PaneChatState, keepsImages: Bool = false, photo: @escaping @MainActor () async throws -> ChatPhotoFile,
               source: @escaping Source) {
-        guard phase == .picking, context == state.actionContext, !isFull else { return }
+        load(in: state, keepsImages: keepsImages, photos: [photo], source: source)
+    }
+
+    /// `load` for several files chosen together: one after another, in the order chosen, until
+    /// the pills are full.
+    func load(in state: PaneChatState, keepsImages: Bool = false, photos: [@MainActor () async throws -> ChatPhotoFile],
+              source: @escaping Source) {
+        guard phase == .picking, context == state.actionContext, !isFull, !photos.isEmpty else { return }
         let generation = generation
+        let photos = photos.prefix(selectionLimit)
         phase = .loading
         task = Task { [weak self, weak state] in
             defer { if self?.generation == generation { self?.task = nil } }
             do {
-                let file = try await photo()
-                try Task.checkCancellation()
-                guard let self, let state, self.generation == generation, self.context == state.actionContext else { return }
-                if session != state.actionContext.session { attachments.removeAll() }
-                session = state.actionContext.session
-                if keepsImages, file.thumbnail != nil, images.count < Self.imageLimit {
-                    let image = try Data(contentsOf: file.url)
-                    attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: nil, thumbnail: file.thumbnail, image: image))
-                    phase = .idle
-                    context = nil
-                    return
+                for photo in photos {
+                    guard let self, let state, self.generation == generation, self.context == state.actionContext else { return }
+                    guard !isFull else { break }
+                    phase = .loading
+                    let file = try await photo()
+                    try Task.checkCancellation()
+                    guard self.generation == generation, self.context == state.actionContext else { return }
+                    if session != state.actionContext.session { attachments.removeAll() }
+                    session = state.actionContext.session
+                    if keepsImages, file.thumbnail != nil, images.count < Self.imageLimit {
+                        let image = try Data(contentsOf: file.url)
+                        attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: nil, thumbnail: file.thumbnail, image: image))
+                        continue
+                    }
+                    pendingName = file.name
+                    phase = .uploading
+                    let path = try await source(file)
+                    try Task.checkCancellation()
+                    guard self.generation == generation, self.context == state.actionContext else { return }
+                    let reference = try Self.reference(path)
+                    attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: reference, thumbnail: file.thumbnail, image: nil))
+                    pendingName = nil
                 }
-                pendingName = file.name
-                phase = .uploading
-                let path = try await source(file)
-                try Task.checkCancellation()
-                guard self.generation == generation, self.context == state.actionContext else { return }
-                let reference = try Self.reference(path)
-                attachments.append(ChatAttachment(id: UUID(), name: file.name, reference: reference, thumbnail: file.thumbnail, image: nil))
-                pendingName = nil
+                guard let self, self.generation == generation else { return }
                 phase = .idle
                 context = nil
             } catch {

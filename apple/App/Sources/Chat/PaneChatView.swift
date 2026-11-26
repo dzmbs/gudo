@@ -38,7 +38,7 @@ struct PaneChatView<Terminal: View>: View {
     #endif
     @AppStorage(ChatPreferences.Key.sendWhileWorking) private var sendWhileWorkingSetting = ChatPreferences.SendWhileWorking.queue.rawValue
     @AppStorage(ChatPreferences.Key.collapsesTurns) private var collapsesTurns = true
-    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var selectedPhotos: [PhotosPickerItem] = []
     @State private var dismissedNote: String?
 
     private var nativePresentations: some View {
@@ -153,12 +153,13 @@ struct PaneChatView<Terminal: View>: View {
                 .frame(minWidth: DS.Size.proseReadingWidth, minHeight: Self.detailSheetHeight)
                 #endif
         }
-        .photosPicker(isPresented: $photoPickerPresented, selection: $selectedPhoto, matching: .images,
-                      preferredItemEncoding: .current)
-        .onChange(of: selectedPhoto) { _, item in
-            guard let item else { return }
-            selectedPhoto = nil
-            receivePhoto(item)
+        .photosPicker(isPresented: $photoPickerPresented, selection: $selectedPhotos,
+                      maxSelectionCount: max(1, state.photos.selectionLimit), selectionBehavior: .ordered,
+                      matching: .images, preferredItemEncoding: .current)
+        .onChange(of: selectedPhotos) { _, items in
+            guard !items.isEmpty else { return }
+            selectedPhotos = []
+            receivePhotos(items)
         }
         .fileImporter(isPresented: $fileImporterPresented, allowedContentTypes: [.item]) { result in receiveFile(result) }
         .onChange(of: fileImporterPresented) { _, presented in
@@ -174,7 +175,7 @@ struct PaneChatView<Terminal: View>: View {
             let generation = state.photos.generation
             Task {
                 await Task.yield()
-                if state.photos.generation == generation, state.photos.phase == .picking, selectedPhoto == nil {
+                if state.photos.generation == generation, state.photos.phase == .picking, selectedPhotos.isEmpty {
                     state.photos.cancel()
                 }
             }
@@ -649,12 +650,14 @@ struct PaneChatView<Terminal: View>: View {
         return true
     }
 
-    private func receivePhoto(_ item: PhotosPickerItem) {
+    private func receivePhotos(_ items: [PhotosPickerItem]) {
         let context = state.actionContext
         guard canEditDraft(context) else { state.photos.cancel(); return }
-        state.photos.load(in: state, keepsImages: keepsImages, photo: {
-            guard let file = try await item.loadTransferable(type: ChatPhotoFile.self) else { throw ChatPhotoError.invalidImage }
-            return file
+        state.photos.load(in: state, keepsImages: keepsImages, photos: items.map { item in
+            {
+                guard let file = try await item.loadTransferable(type: ChatPhotoFile.self) else { throw ChatPhotoError.invalidImage }
+                return file
+            }
         }, source: { file in try await uploadPhoto(file, context: context) })
     }
 
