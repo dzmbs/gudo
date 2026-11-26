@@ -78,6 +78,42 @@ import Testing
         return bounds
     }
 
+    @Test func aToastStackRisesAboveAComposerAndLeavesItWhenItGoes() async throws {
+        let center = ToastCenter()
+        var composer = CGRect.zero
+        var stack = CGRect.zero
+        let showsComposer = ComposerSwitch()
+        let root = ZStack(alignment: .bottom) {
+            Color.black
+            ComposerFixture(showsComposer: showsComposer) { composer = $0 }
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text("Claude Code finished")
+                .padding(DS.Space.m)
+                .frame(width: 360)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { stack = $0 }
+                .toastStack(position: .bottomLeading, bottomInset: DS.Space.l, topInset: DS.Space.l)
+        }
+        .toastHost(center)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+        try await settle(hosting)
+        #expect(!composer.isEmpty)
+        #expect(stack.maxY <= composer.minY, "the stack sits above the composer")
+        #expect(center.obstacles.count == 2, "the composer and the stack itself, for the window's banner")
+
+        showsComposer.isShown = false
+        try await settle(hosting)
+        #expect(abs(stack.maxY - (600 - DS.Space.l)) < 1, "back at its corner")
+    }
+
+    private func settle(_ hosting: NSView) async throws {
+        for _ in 0..<8 {
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(30))
+        }
+    }
+
     @Test func aDraftCardReportsItselfToTheBanners() async throws {
         let center = ToastCenter()
         var card = CGRect.zero
@@ -104,6 +140,26 @@ import Testing
             base: DS.Space.l, banner: CGSize(width: 300, height: 40), in: CGRect(x: 0, y: 0, width: 900, height: 600),
             avoiding: Array(center.obstacles.values))
         #expect(600 - inset <= card.minY, "the banner's bottom is above the card")
+    }
+}
+
+@MainActor
+@Observable
+private final class ComposerSwitch {
+    var isShown = true
+}
+
+/// A pane's composer along the bottom edge, full width, that can go away.
+private struct ComposerFixture: View {
+    let showsComposer: ComposerSwitch
+    let report: (CGRect) -> Void
+
+    var body: some View {
+        Text("Message")
+            .frame(maxWidth: .infinity, minHeight: 80)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { report($0) }
+            .toastObstacle(isActive: showsComposer.isShown)
+            .padding(.bottom, DS.Space.s)
     }
 }
 #endif

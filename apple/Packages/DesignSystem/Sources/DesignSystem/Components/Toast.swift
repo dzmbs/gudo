@@ -128,15 +128,64 @@ extension EnvironmentValues {
     }
 }
 
-/// Reports a view's frame to the window's banners so they never cover it.
+/// Reports a view's frame to the window's banners so they never cover it, while `isActive`.
 private struct ToastObstacle: ViewModifier {
+    let isActive: Bool
     @Environment(\.toastCenter) private var center
     @State private var id = UUID()
+    @State private var frame: CGRect?
 
     func body(content: Content) -> some View {
         content
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { center?.setObstacle(id, $0) }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { newFrame in
+                frame = newFrame
+                report()
+            }
+            .onChange(of: isActive) { report() }
             .onDisappear { center?.setObstacle(id, nil) }
+    }
+
+    private func report() {
+        center?.setObstacle(id, isActive ? frame : nil)
+    }
+}
+
+/// A stack of cards at the window's toast corner that rises above (or, at the top, drops below)
+/// the cards and composers it would cover, and is itself one the window's banner clears.
+private struct ToastStackPlacement: ViewModifier {
+    let position: ToastPosition
+    let bottomInset: CGFloat
+    let topInset: CGFloat
+    @Environment(\.toastCenter) private var center
+    @Environment(\.chromeAccessibility) private var accessibility
+    @State private var id = UUID()
+    @State private var host = CGRect.zero
+    @State private var size = CGSize.zero
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                size = frame.size
+                center?.setObstacle(id, frame)
+            }
+            .onDisappear { center?.setObstacle(id, nil) }
+            .padding(.horizontal, DS.Space.l)
+            .padding(position.edge == .top ? .top : .bottom, position.edge == .top ? topInset : bottomInset)
+            .offset(y: clearance)
+            .animation(accessibility.travel(DS.Motion.standard), value: clearance)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: position.alignment)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { host = $0 }
+    }
+
+    /// How far the stack moves off its inset to clear every obstacle but itself.
+    private var clearance: CGFloat {
+        let ownID = AnyHashable(id)
+        let obstacles = (center?.obstacles ?? [:]).compactMap { $0.key == ownID ? nil : $0.value }
+        guard !obstacles.isEmpty, size != .zero else { return 0 }
+        if position.edge == .top {
+            return ToastCenter.topInset(base: topInset, banner: size, in: host, avoiding: obstacles, position: position) - topInset
+        }
+        return bottomInset - ToastCenter.bottomInset(base: bottomInset, banner: size, in: host, avoiding: obstacles, position: position)
     }
 }
 
@@ -365,9 +414,17 @@ public extension View {
         modifier(ToastHost(center: center, bottomInset: bottomInset, topInset: topInset, leadingInset: leadingInset))
     }
 
-    /// Keeps the window's banners (`toastHost`) clear of this view: a card at the bottom of a
-    /// pane that a banner rising from the window's bottom would otherwise cover.
-    func toastObstacle() -> some View {
-        modifier(ToastObstacle())
+    /// Keeps the window's banners (`toastHost`, `toastStack`) clear of this view while
+    /// `isActive`: a card or composer at the bottom of a pane that a banner rising from the
+    /// window's bottom would otherwise cover.
+    func toastObstacle(isActive: Bool = true) -> some View {
+        modifier(ToastObstacle(isActive: isActive))
+    }
+
+    /// Places a stack of cards at `position`, `bottomInset` over the bottom safe area or
+    /// `topInset` under the top one, clear of every `toastObstacle`; the window's banner in turn
+    /// clears the stack.
+    func toastStack(position: ToastPosition, bottomInset: CGFloat, topInset: CGFloat) -> some View {
+        modifier(ToastStackPlacement(position: position, bottomInset: bottomInset, topInset: topInset))
     }
 }
