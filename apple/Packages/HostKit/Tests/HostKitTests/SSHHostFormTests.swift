@@ -334,6 +334,27 @@ private struct Desk {
         #expect(phoneFlow.test == .failed("Can't find “ops.invalid”. Enter the server's IP address or domain."), "no ssh_config to name")
     }
 
+    @Test func theChosenKeysPublicHalfIsAtHand() async throws {
+        let desk = try Desk(agentKeys: [try parseSshPublicKey(line: try generateSshKey(keyType: .ed25519, comment: "agent", passphrase: nil).publicKey)])
+        await desk.model.sshInventory.refresh()
+        let flow = JustSSHFlow(hosts: desk.model)
+        func words(_ line: String?) -> [Substring] { line.map { Array($0.split(separator: " ").prefix(2)) } ?? [] }
+
+        flow.auth = .password
+        #expect(flow.selectedPublicKey == nil)
+        flow.auth = .agent
+        #expect(flow.selectedPublicKey == nil, "any agent key: no one key to install")
+        flow.auth = .keyFile(path: desk.sshDirectory.appending(path: "id_ed25519").path)
+        #expect(words(flow.selectedPublicKey) == words(desk.plainKey.publicKey))
+        let agentKey = try #require(desk.model.sshInventory.agentKeys.first)
+        flow.auth = .agentKey(fingerprint: agentKey.fingerprint)
+        #expect(words(flow.selectedPublicKey) == words(agentKey.publicKey))
+        let appKey = try await desk.model.keys.generate(label: "laptop", type: .ed25519, passphrase: nil)
+        flow.auth = .key(id: appKey.id)
+        #expect(flow.selectedPublicKey == appKey.publicKey)
+        #expect(SSHKey.authorizeCommand(publicKey: appKey.publicKey) == appKey.authorizeCommand)
+    }
+
     @Test func dialFailuresReadAsPlainWords() {
         #expect(SshErrorText.plainReason("ssh: Channel send error") == "The connection closed before signing in.")
         #expect(SshErrorText.plainReason("connecting to 10.0.0.1:22: Connection refused (os error 61)") == "Nothing answered on the SSH port.")

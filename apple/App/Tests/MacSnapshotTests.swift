@@ -451,6 +451,34 @@ final class MacSnapshotTests: XCTestCase {
         }
     }
 
+    /// Add Host empty, and Edit Host for an SSH host named apart from its address, signing in
+    /// with a saved key: the key's public half to copy is in the Sign In section. On hosts of
+    /// their own, with no ssh_config, keys or agent from this Mac.
+    func testSSHHostForm() async throws {
+        guard wanted("sshHostForm") else { return }
+        let model = WindowModel(app: .shared)
+        var configuration = HostsModel.Configuration()
+        configuration.relay = .disabled
+        configuration.sshInventory = SSHInventory.Source(localUser: "me", isDesktop: true)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "ssh-form-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let hosts = HostsModel(secrets: MemorySecretStore(), repository: HostRepository(directory: directory), configuration: configuration)
+        let key = try await hosts.keys.generate(label: "laptop", type: .ed25519, passphrase: nil)
+        let record = try hosts.saveSSH(SSHEndpoint(user: "root", host: "203.0.113.10", identity: .key(id: key.id)), name: "ops")
+        let sheets: [(String, AnyView)] = [
+            ("sshHostForm-add", AnyView(PairingSheet(directory: model.hosts, live: hosts, initialMode: .ssh))),
+            ("sshHostForm-saved-key", AnyView(EditSSHHostSheet(hosts: hosts, record: record))),
+        ]
+        for (name, sheet) in sheets {
+            let window = makeWindow(ThemedRoot {
+                Color.clear.sheet(isPresented: .constant(true)) { sheet.environment(model).environment(model.app) }
+            }, size: CGSize(width: 1180, height: 760))
+            await pump(1.5)
+            try capture(try XCTUnwrap(window.attachedSheet), name)
+            window.close()
+        }
+    }
+
     /// A long sidebar scrolled part way: the header of the project under the top edge pinned
     /// there, then pushed up by the end of its rows.
     func testPinnedProjectHeader() async throws {

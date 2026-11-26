@@ -295,6 +295,17 @@ public final class JustSSHFlow {
         return (try? Data(contentsOf: URL(fileURLWithPath: path))).map { privateKeyIsEncrypted(pem: $0) } ?? false
     }
 
+    /// The chosen key's `authorized_keys` line, to put on the server; nil for a password or
+    /// any agent key.
+    public var selectedPublicKey: String? {
+        switch auth {
+        case .password, .agent: nil
+        case .key(let id): hosts.keys.key(id)?.publicKey
+        case .keyFile(let path): inventory.localKey(at: path)?.info.publicKey
+        case .agentKey(let fingerprint): inventory.agentKeys.first { $0.fingerprint == fingerprint }?.publicKey
+        }
+    }
+
     // MARK: Result
 
     /// The endpoint the form describes, or why it is incomplete.

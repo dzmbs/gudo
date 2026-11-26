@@ -311,6 +311,17 @@ private struct SSHSignInSection: View {
                         .textSelection(.enabled)
                 }
             }
+            if let publicKey = flow.selectedPublicKey, flow.newKey?.publicKey != publicKey {
+                HStack(spacing: DS.Space.m) {
+                    Button("Copy Public Key", systemImage: "doc.on.doc") { copy(publicKey) }
+                        .accessibilityIdentifier("ssh-copy-public-key")
+                    Button("Copy Install Command", systemImage: "terminal") {
+                        copy(SSHKey.authorizeCommand(publicKey: publicKey))
+                    }
+                    .accessibilityIdentifier("ssh-copy-install-command")
+                }
+                .buttonStyle(.borderless)
+            }
             switch flow.auth {
             case .password:
                 SecureField("Password", text: $flow.password)

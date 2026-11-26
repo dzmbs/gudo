@@ -49,13 +49,22 @@ nonisolated public struct SSHKey: Codable, Identifiable, Hashable, Sendable {
 
     /// The public key with no `'`, which no key has, so it stays one single-quoted shell word.
     private var quotableKey: String {
+        Self.quotable(publicKey)
+    }
+
+    private static func quotable(_ publicKey: String) -> String {
         publicKey.replacingOccurrences(of: "'", with: "")
     }
 
     /// Appends the key to `~/.ssh/authorized_keys` on a host (what `ssh-copy-id` does), safe
     /// to paste into a shell there.
     public var authorizeCommand: String {
-        let line = quotableKey
+        Self.authorizeCommand(publicKey: publicKey)
+    }
+
+    /// `authorizeCommand` for any public key line (a key file's, an agent's).
+    public static func authorizeCommand(publicKey: String) -> String {
+        let line = quotable(publicKey)
         return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qxF '\(line)' ~/.ssh/authorized_keys 2>/dev/null || echo '\(line)' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
     }
 
