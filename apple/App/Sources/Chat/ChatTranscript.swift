@@ -598,6 +598,7 @@ final class ChatTranscriptController: NSViewController, NSCollectionViewDataSour
         let removed = Set(update.removed.lazy.map { IndexPath(item: $0, section: 0) })
         let inserted = Set(update.inserted.lazy.map { IndexPath(item: $0, section: 0) })
         NSAnimationContext.runAnimationGroup { context in
+            // motion-lint-allow: a zero duration turns AppKit's batch animation off; rows land in place.
             context.duration = 0
             context.allowsImplicitAnimation = false
             collection.performBatchUpdates {
