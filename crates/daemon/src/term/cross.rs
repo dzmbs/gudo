@@ -28,8 +28,13 @@ use super::{CallContext, ErrorCode, Result, TermReply, ToolError};
 use crate::core::{ConnId, Core, lock};
 use crate::mp::{AuditEntry, Authz};
 
-/// Requests agents on this host may send for one other host per minute, all agents together.
+/// Requests one agent here may send to other hosts per minute.
 pub(crate) const CROSS_HOST_REQUESTS_PER_MINUTE: u32 = 60;
+/// All agents here together may send this many times what one may.
+const ALL_AGENTS_SHARE: u32 = 4;
+/// The longest host name or id an agent may give, in bytes: far above any name the app shows
+/// or a daemon id in hex.
+const MAX_HOST_LEN: usize = 255;
 /// How long a claimed request may take on the other host: the longest wait a tool allows
 /// (240 s), and some room to reach it.
 const RESULT_WAIT: Duration = Duration::from_secs(300);
@@ -37,7 +42,7 @@ const RESULT_WAIT: Duration = Duration::from_secs(300);
 const NOTICE_DELAY: Duration = Duration::from_secs(3);
 /// Remote agents with calls relayed to this host at once.
 const MAX_REMOTE_AGENTS: usize = 64;
-/// Hosts kept in the per-host rate windows.
+/// Asking panes kept in the rate windows; past it the one quiet longest goes.
 const MAX_RATE_WINDOWS: usize = 256;
 /// Updates one waiting call can have queued.
 const PROGRESS_QUEUE: usize = 8;
@@ -73,15 +78,32 @@ struct RemoteKey {
     agent_key: u64,
 }
 
+/// Requests in the last minute: each asking pane's, and all of them.
+#[derive(Default)]
+struct Rates {
+    by_pane: HashMap<PaneId, VecDeque<Instant>>,
+    all: VecDeque<Instant>,
+}
+
+/// Where the host an agent named stands with the connected devices.
+enum Lookup {
+    /// A device lists it.
+    Listed,
+    /// No device lists it, but one has not sent its list yet.
+    Unsure,
+    /// Every device sent its list, and none has it.
+    Unknown,
+}
+
 /// Relaying devices, open requests, agents' keys, rate windows, and remote agents' stand-ins.
 #[derive(Default)]
 pub(crate) struct CrossHost {
     /// Owner connections that announced `Caps::CROSS_HOST`, with the host list each sent.
-    devices: Mutex<HashMap<ConnId, Vec<HostEntry>>>,
+    devices: Mutex<HashMap<ConnId, Option<Vec<HostEntry>>>>,
     open: Mutex<HashMap<RequestId, Open>>,
     /// Each asking pane's key, for as long as it is open.
     agents: Mutex<HashMap<PaneId, u64>>,
-    rates: Mutex<HashMap<String, VecDeque<Instant>>>,
+    rates: Mutex<Rates>,
     remote: Mutex<HashMap<RemoteKey, PaneId>>,
     stand_ins: Mutex<HashMap<PaneId, RemoteAgent>>,
     next_stand_in: std::sync::atomic::AtomicU64,
@@ -98,7 +120,7 @@ impl CrossHost {
         if !caps.contains(proto::Caps::CROSS_HOST) || !authz.is_owner_device(core) {
             return;
         }
-        lock(&self.devices).insert(conn, Vec::new());
+        lock(&self.devices).insert(conn, None);
         let mut open = lock(&self.open);
         for request in open.values_mut().filter(|open| open.claimed_by.is_none()) {
             request.sent_to.insert(conn);
@@ -131,7 +153,7 @@ impl CrossHost {
     pub fn directory(&self, conn: ConnId, mut entries: Vec<HostEntry>) {
         entries.truncate(MAX_DIRECTORY);
         if let Some(directory) = lock(&self.devices).get_mut(&conn) {
-            *directory = entries;
+            *directory = Some(entries);
         }
     }
 
@@ -157,35 +179,71 @@ impl CrossHost {
         })
     }
 
-    /// Counts a request for `host`; refused past `per_minute` in the last minute.
-    fn admit(&self, host: &str, per_minute: u32) -> Result<()> {
-        let now = Instant::now();
-        let mut rates = lock(&self.rates);
-        if rates.len() >= MAX_RATE_WINDOWS && !rates.contains_key(host) {
-            rates.retain(|_, window| {
-                window
-                    .back()
-                    .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(60))
-            });
+    /// Whether a connected device lists `host` (trimmed) by name or id, as a device matches it.
+    fn look_up(&self, host: &str) -> Lookup {
+        let devices = lock(&self.devices);
+        let mut unsure = false;
+        for directory in devices.values() {
+            let Some(entries) = directory else {
+                unsure = true;
+                continue;
+            };
+            if entries.iter().any(|entry| {
+                entry.name.eq_ignore_ascii_case(host) || entry.id.eq_ignore_ascii_case(host)
+            }) {
+                return Lookup::Listed;
+            }
         }
-        let window = rates.entry(host.to_ascii_lowercase()).or_default();
-        while window
-            .front()
-            .is_some_and(|first| now.duration_since(*first) >= Duration::from_secs(60))
-        {
+        if unsure || devices.is_empty() {
+            Lookup::Unsure
+        } else {
+            Lookup::Unknown
+        }
+    }
+
+    /// Counts a request from `pane`; refused past `per_minute` for it in the last minute, or
+    /// past `ALL_AGENTS_SHARE` times that for every agent here.
+    fn admit(&self, pane: PaneId, per_minute: u32) -> Result<()> {
+        let now = Instant::now();
+        let expired = |at: &Instant| now.duration_since(*at) >= Duration::from_secs(60);
+        let too_many = || ToolError {
+            retryable: true,
+            ..ToolError::new(
+                ErrorCode::Failed,
+                "too many requests for other hosts this minute",
+            )
+            .hint("wait a moment, then try again")
+        };
+        let mut rates = lock(&self.rates);
+        let Rates { by_pane, all } = &mut *rates;
+        while all.front().is_some_and(expired) {
+            all.pop_front();
+        }
+        if all.len() >= (per_minute * ALL_AGENTS_SHARE) as usize {
+            return Err(too_many());
+        }
+        if by_pane.len() >= MAX_RATE_WINDOWS && !by_pane.contains_key(&pane) {
+            by_pane.retain(|_, window| window.back().is_some_and(|last| !expired(last)));
+            if by_pane.len() >= MAX_RATE_WINDOWS {
+                let quietest = by_pane
+                    .iter()
+                    .min_by_key(|(_, window)| window.back().copied())
+                    .map(|(pane, _)| *pane);
+                if let Some(quietest) = quietest {
+                    by_pane.remove(&quietest);
+                }
+            }
+        }
+        let window = by_pane.entry(pane).or_default();
+        while window.front().is_some_and(expired) {
             window.pop_front();
         }
         if window.len() >= per_minute as usize {
-            return Err(ToolError {
-                retryable: true,
-                ..ToolError::new(
-                    ErrorCode::Failed,
-                    format!("too many requests for {host} this minute"),
-                )
-                .hint("wait a moment, then try again")
-            });
+            return Err(too_many());
         }
         window.push_back(now);
+        all.push_back(now);
+        debug_assert!(by_pane.len() <= MAX_RATE_WINDOWS);
         Ok(())
     }
 
@@ -383,7 +441,7 @@ impl CrossHost {
             return None;
         }
         let mut merged: Vec<HostEntry> = Vec::new();
-        for entry in devices.values().flatten() {
+        for entry in devices.values().flatten().flatten() {
             match merged.iter_mut().find(|known| known.id == entry.id) {
                 Some(known) if rank(entry.state) > rank(known.state) => *known = entry.clone(),
                 Some(_) => {}
@@ -542,8 +600,26 @@ pub(super) async fn relay(
         )
         .hint("call it without host"));
     };
+    let host = host.trim().to_owned();
+    if host.is_empty() || host.len() > MAX_HOST_LEN {
+        return Err(ToolError::new(
+            ErrorCode::InvalidArgs,
+            format!("host must be a name or id of at most {MAX_HOST_LEN} bytes"),
+        )
+        .hint("host_list shows the hosts"));
+    }
     let cross = &core.term.cross;
-    cross.admit(&host, core.cfg.cross_host_requests_per_minute)?;
+    if let Lookup::Unknown = cross.look_up(&host) {
+        return Err(ToolError::new(
+            ErrorCode::NotFound,
+            format!(
+                "No host named {host} is paired with the {} devices connected here.",
+                brand::PRODUCT_NAME
+            ),
+        )
+        .hint("host_list shows the hosts"));
+    }
+    cross.admit(caller, core.cfg.cross_host_requests_per_minute)?;
     let wait = core.cfg.drive_ask_wait;
     let (agent, kind) = context.caller_names();
     let args_text = args.to_string();

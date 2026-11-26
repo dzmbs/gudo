@@ -191,6 +191,22 @@ impl Hosts {
         }
     }
 
+    /// Waits until agents on A can list `name` (the device's host list reached A).
+    async fn listed(&self, name: &str) {
+        let deadline = tokio::time::Instant::now() + TIMEOUT;
+        loop {
+            let listed = ok(self.agent.call("host_list", json!({})).await);
+            if listed["hosts"]
+                .as_array()
+                .is_some_and(|hosts| hosts.iter().any(|host| host["name"] == name))
+            {
+                return;
+            }
+            assert!(tokio::time::Instant::now() < deadline, "{listed}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     async fn shutdown(self) {
         drop(self.relay);
         drop(self.on_a);
@@ -512,6 +528,7 @@ async fn guests_never_get_requests_and_are_never_targets() {
         .relay
         .add_host(RelayHost::guest("their-host", "theirs"));
     hosts.relay.set_pair(HOST_A, "their-host", true);
+    hosts.listed("theirs").await;
     let theirs = refused(
         hosts
             .agent
@@ -522,6 +539,7 @@ async fn guests_never_get_requests_and_are_never_targets() {
 
     // Nor is a host the app reaches over plain SSH alone.
     hosts.relay.add_host(RelayHost::ssh_only("pi-host", "pi"));
+    hosts.listed("pi").await;
     let plain = refused(hosts.agent.call("pane_list", json!({ "host": "pi" })).await);
     assert_eq!(plain.message, "Install the helper on pi to reach it.");
     drop(guest);
@@ -529,7 +547,7 @@ async fn guests_never_get_requests_and_are_never_targets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn one_request_at_a_time_per_agent_and_a_rate_limit_per_host() {
+async fn one_request_at_a_time_per_agent_and_a_rate_limit_per_agent() {
     let mut hosts = Hosts::start_with(Duration::from_secs(20), |config| {
         config.cross_host_requests_per_minute = 3;
     })
@@ -559,6 +577,78 @@ async fn one_request_at_a_time_per_agent_and_a_rate_limit_per_host() {
     );
     assert!(limited.retryable);
     assert!(limited.message.contains("too many"), "{limited:?}");
+    hosts.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn over_long_and_unknown_hosts_are_refused_uncounted_and_each_agent_has_its_own_limit() {
+    let mut hosts = Hosts::start_with(Duration::from_secs(20), |config| {
+        config.cross_host_requests_per_minute = 2;
+    })
+    .await;
+    hosts.relay.set_pair(HOST_A, HOST_B, true);
+    hosts.listed("ops").await;
+
+    for unique in 0..4 {
+        let flood = refused(
+            hosts
+                .agent
+                .call(
+                    "pane_list",
+                    json!({ "host": format!("{unique}{}", "h".repeat(64 * 1024)) }),
+                )
+                .await,
+        );
+        assert_eq!(flood.code, TermErrorCode::InvalidArgs, "{flood:?}");
+        let unknown = refused(
+            hosts
+                .agent
+                .call("pane_list", json!({ "host": format!("nowhere-{unique}") }))
+                .await,
+        );
+        assert!(
+            unknown.message.starts_with("No host named nowhere-"),
+            "{unknown:?}"
+        );
+    }
+    hosts.no_card().await;
+
+    // Neither counted: the agent still has its two this minute.
+    for _ in 0..2 {
+        let read = hosts.agent.spawn("pane_list", json!({ "host": "OPS" }));
+        let card = hosts.card().await;
+        hosts.relay.answer(&card.key, CrossHostChoice::Deny);
+        refused(reply(read).await);
+    }
+    let limited = refused(
+        hosts
+            .agent
+            .call("pane_list", json!({ "host": "ops" }))
+            .await,
+    );
+    assert!(limited.message.contains("too many"), "{limited:?}");
+
+    // Another agent's requests are its own to count.
+    let user_on_a = hosts.on_a.focused();
+    let OpOutcome::PaneCreated { pane_id: other } = hosts
+        .on_a
+        .op(LayoutOp::Split {
+            pane_id: user_on_a,
+            axis: Axis::Vertical,
+            launch: PaneLaunch::Shell { cwd: None },
+        })
+        .await
+    else {
+        panic!("split")
+    };
+    let other_agent = Caller {
+        pane: other,
+        ..hosts.agent.clone()
+    };
+    let read = other_agent.spawn("pane_list", json!({ "host": "ops" }));
+    let card = hosts.card().await;
+    hosts.relay.answer(&card.key, CrossHostChoice::AllowOnce);
+    ok(reply(read).await);
     hosts.shutdown().await;
 }
 
