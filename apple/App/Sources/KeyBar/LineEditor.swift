@@ -362,9 +362,9 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
         decisionStrip.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let options = prompt?.options ?? []
         for (index, option) in options.prefix(4).enumerated() {
-            let button = UIButton(configuration: style.button(.init(title: option.label, symbol: nil, active: index == 0)))
-            button.accessibilityIdentifier = "keybar-decision-\(index)"
-            button.addAction(UIAction { [weak self] _ in self?.decide(prompt!, index: index) }, for: .touchUpInside)
+            guard let prompt else { break }
+            let button = Self.decisionButton(title: option.label, index: index, style: style)
+            button.addAction(UIAction { [weak self] _ in self?.decide(prompt, index: index) }, for: .touchUpInside)
             decisionStrip.addArrangedSubview(button)
         }
         let show = !options.isEmpty
@@ -372,6 +372,19 @@ final class LineEditorController: NSObject, UITextFieldDelegate {
             decisionStrip.isHidden = !show
             onLayoutChange?()
         }
+    }
+
+    /// One option of the strip: its label on one line in the key font, cut at the tail, and
+    /// heard in full.
+    static func decisionButton(title: String, index: Int, style: KeyBarStyle) -> UIButton {
+        var configuration = style.button(.init(title: title, symbol: nil, active: index == 0))
+        configuration.titleLineBreakMode = .byTruncatingTail
+        let button = UIButton(configuration: configuration)
+        button.titleLabel?.numberOfLines = 1
+        button.titleLabel?.adjustsFontForContentSizeCategory = false
+        button.accessibilityLabel = title
+        button.accessibilityIdentifier = "keybar-decision-\(index)"
+        return button
     }
 
     private func decide(_ prompt: BlockedPrompt, index: Int) {

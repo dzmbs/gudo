@@ -22,6 +22,7 @@ public enum KeyBarLook {
         configuration.background.cornerRadius = isPad ? 10 : 8
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
         configuration.baseForegroundColor = active ? .white : .label // style-exempt: the label on the system's prominent glass
+        configuration.titleLineBreakMode = .byTruncatingTail
         if let symbol {
             configuration.image = UIImage(
                 systemName: symbol,
