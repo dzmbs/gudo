@@ -229,6 +229,8 @@ pub enum HostLink {
     Guest,
     /// Reached over plain SSH, with no helper.
     SshOnly,
+    /// Paired as owner, but this device has no connection to it now.
+    Unreached,
 }
 
 /// A host of this device, as the relay knows it.
@@ -266,10 +268,18 @@ impl RelayHost {
         }
     }
 
+    pub fn unreached(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            link: HostLink::Unreached,
+        }
+    }
+
     fn client(&self) -> Option<&Arc<Client>> {
         match &self.link {
             HostLink::Owner(client) => Some(client),
-            HostLink::Guest | HostLink::SshOnly => None,
+            HostLink::Guest | HostLink::SshOnly | HostLink::Unreached => None,
         }
     }
 
@@ -277,7 +287,7 @@ impl RelayHost {
     fn listed_id(&self) -> String {
         match &self.link {
             HostLink::Owner(client) => hex(&client.daemon_id().0),
-            HostLink::Guest | HostLink::SshOnly => self.id.clone(),
+            HostLink::Guest | HostLink::SshOnly | HostLink::Unreached => self.id.clone(),
         }
     }
 
@@ -490,7 +500,7 @@ impl Book {
         match &target.link {
             HostLink::Guest => return Verdict::Refuse(CrossHostRefusal::Guest { host }),
             HostLink::SshOnly => return Verdict::Refuse(CrossHostRefusal::NoHelper { host }),
-            HostLink::Owner(_) => {}
+            HostLink::Owner(_) | HostLink::Unreached => {}
         }
         if !self.pairs.contains(&(from.to_owned(), target.id.clone())) {
             return Verdict::Refuse(CrossHostRefusal::NotEnabled { host });
@@ -999,6 +1009,27 @@ mod tests {
         assert_eq!(
             refusal(""),
             CrossHostRefusal::UnknownHost { host: "".into() }
+        );
+    }
+
+    #[test]
+    fn a_host_the_device_cannot_reach_is_offline_once_turned_on() {
+        let mut book = book();
+        book.hosts.push(RelayHost::unreached("ops", "ops"));
+        let judged = |book: &Book| book.judge("mac", &request("ops", "pane_list"), reach);
+        assert_eq!(
+            judged(&book),
+            Verdict::Refuse(CrossHostRefusal::NotEnabled { host: "ops".into() })
+        );
+        book.pairs.insert(("mac".into(), "ops".into()));
+        assert_eq!(
+            judged(&book),
+            Verdict::Refuse(CrossHostRefusal::Offline { host: "ops".into() })
+        );
+        let listed = book.directory("mac", reach);
+        assert_eq!(
+            listed.last().map(|entry| entry.state),
+            Some(PairState::Offline)
         );
     }
 

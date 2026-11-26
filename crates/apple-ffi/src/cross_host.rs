@@ -188,6 +188,12 @@ impl CrossHostRelay {
             .add_host(client_core::RelayHost::ssh_only(id, name));
     }
 
+    /// A host paired as owner that this device is not connected to now.
+    pub fn add_unreached_host(&self, id: String, name: String) {
+        self.inner
+            .add_host(client_core::RelayHost::unreached(id, name));
+    }
+
     pub fn remove_host(&self, id: String) {
         self.inner.remove_host(&id);
     }
