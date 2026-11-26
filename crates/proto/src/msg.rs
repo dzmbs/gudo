@@ -263,6 +263,11 @@ pub enum ClientCtl {
     /// [`MoreDaemonFeatures::RUN_AGAIN`](crate::MoreDaemonFeatures::RUN_AGAIN). Owner devices
     /// only; not answered otherwise.
     WatchRunAgain,
+    /// Relays agents' calls between this device's hosts (see [`crate::cross_host`]): host
+    /// lists and answers to the daemon's requests, and calls for agents elsewhere. Owner
+    /// devices only, to daemons with
+    /// [`MoreDaemonFeatures::CROSS_HOST`](crate::MoreDaemonFeatures::CROSS_HOST).
+    CrossHost(crate::cross_host::CrossHostMsg),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -678,6 +683,9 @@ pub enum ServerCtl {
     /// [`WorkspaceRequest::AgentControlsWatch`](crate::WorkspaceRequest::AgentControlsWatch)
     /// for it.
     AgentControls(crate::AgentControls),
+    /// Agents' calls for other hosts, and answers to calls this device relayed here, to owner
+    /// devices with [`Caps::CROSS_HOST`] (see [`crate::cross_host`]).
+    CrossHost(crate::cross_host::CrossHostPush),
 }
 
 /// A command that was running in a pane when the daemon stopped (a reboot, a crash). The

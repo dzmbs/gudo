@@ -622,6 +622,8 @@ pub enum AuditKind {
     Policy,
     /// An approval request was claimed or released.
     Claim,
+    /// An agent asked to reach another host, or a device performed a call here for one.
+    CrossHost,
 }
 
 impl From<proto::AuditKind> for AuditKind {
@@ -642,6 +644,7 @@ impl From<proto::AuditKind> for AuditKind {
             K::KnockAnswered => Self::KnockAnswered,
             K::Policy => Self::Policy,
             K::Claim => Self::Claim,
+            K::CrossHost => Self::CrossHost,
         }
     }
 }

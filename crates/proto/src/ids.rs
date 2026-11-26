@@ -366,6 +366,10 @@ bitset! {
         PANE_SIZING = 29;
         /// Wants `ServerCtl::MoreDaemonFeatures` before `Welcome`.
         MORE_DAEMON_FEATURES = 30;
+        /// On an owner device, relays agents' calls to the device's other hosts: wants
+        /// `ServerCtl::CrossHost` requests and answers with `ClientCtl::CrossHost` (see
+        /// `proto::cross_host`).
+        CROSS_HOST = 31;
     }
 }
 
@@ -481,5 +485,9 @@ bitset! {
         CHAT_FILE_SEARCH = 7;
         /// Answers `WorkspaceRequest::PasteImage`.
         PANE_IMAGES = 8;
+        /// Asks owner devices with `Caps::CROSS_HOST` to relay its agents' calls to other
+        /// hosts, and runs `CrossHostMsg::Call`s owner devices relay to it (see
+        /// `proto::cross_host`).
+        CROSS_HOST = 9;
     }
 }

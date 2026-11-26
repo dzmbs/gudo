@@ -576,6 +576,9 @@ pub enum AuditKind {
     /// An approval request was claimed or released, or an approval was held for a second
     /// person.
     Claim,
+    /// An agent asked to reach another host, or a device performed such a call here on
+    /// behalf of an agent elsewhere.
+    CrossHost,
 }
 
 /// A decided approval, as the audit log keeps it.

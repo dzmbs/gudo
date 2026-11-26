@@ -67,6 +67,9 @@
 //! - Asking the owner before an agent drives one of the user's panes: an ordinary approval
 //!   request answered with [`ClientCtl::Decide`], plus [`ApprovalPush::Drive`] for clients with
 //!   [`Caps::DRIVE_ASKS`]; see [`drive`].
+//! - Agents reaching other hosts: [`ServerCtl::CrossHost`] pushes to owner devices with
+//!   [`Caps::CROSS_HOST`], which relay them to the other host and answer with
+//!   [`ClientCtl::CrossHost`]; see [`cross_host`].
 //! - Agent accounts (several Claude Code / Codex sign-ins per host) are pushed as
 //!   [`ServerCtl::Accounts`] to owner clients with [`Caps::ACCOUNTS`]; see [`account`].
 //! - Chat's agent controls (model, permission mode, effort, questions and plans):
@@ -98,6 +101,7 @@ pub mod artifact;
 pub mod askpass;
 pub mod assist;
 pub mod browser;
+pub mod cross_host;
 pub mod drive;
 pub mod float;
 pub mod frame;
@@ -125,6 +129,7 @@ pub use artifact::*;
 pub use askpass::*;
 pub use assist::*;
 pub use browser::*;
+pub use cross_host::*;
 pub use drive::*;
 pub use float::*;
 pub use frame::{FrameDecoder, FrameError, MAX_FRAME_LEN, WIRE_VERSION};

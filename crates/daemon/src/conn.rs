@@ -2574,7 +2574,7 @@ impl Client {
         }
         self.core.mp.heard(&self.core, self.id);
         match message {
-            ClientCtl::Hello(_) => {}
+            ClientCtl::Hello(_) | ClientCtl::CrossHost(_) => {}
             ClientCtl::TerminalColors(colors) => {
                 // Only someone who may type into panes chooses what their programs are told,
                 // and only someone with the whole host or session for panes nobody used.

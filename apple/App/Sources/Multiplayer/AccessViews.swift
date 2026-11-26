@@ -333,6 +333,7 @@ private struct AuditRow: View {
         case .knockAnswered: return record.detail.hasPrefix("admitted") ? "Let someone in" : record.detail.hasSuffix("stopped waiting") ? "Stopped waiting" : "Turned someone away"
         case .policy: return "Approval rules changed"
         case .claim: return "\(actorName) \(record.detail.contains(" released ") ? "released" : "claimed") a request"
+        case .crossHost: return "An agent reached another host"
         }
     }
 
@@ -372,6 +373,7 @@ private struct AuditRow: View {
         case .knockAnswered: record.detail.hasPrefix("admitted") ? "door.left.hand.open" : "door.left.hand.closed"
         case .policy: "checkmark.shield"
         case .claim: "hand.point.up.left"
+        case .crossHost: "arrow.left.arrow.right"
         }
     }
 

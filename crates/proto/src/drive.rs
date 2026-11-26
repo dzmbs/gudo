@@ -144,7 +144,7 @@ impl DriveAction {
 }
 
 /// `text` with every character that could hide or reorder what is shown made visible.
-fn visible(text: &str) -> String {
+pub(crate) fn visible(text: &str) -> String {
     let mut shown = String::with_capacity(text.len());
     for ch in text.chars() {
         match ch {
