@@ -34,6 +34,7 @@ mod askpass;
 mod assist;
 mod browser;
 mod conn;
+mod cross_host;
 pub use conn::{PROBE_DEADLINE, PROBE_SLOW_DEADLINE};
 mod chat_send;
 pub mod knock;
@@ -74,6 +75,11 @@ pub use artifacts::{ArtifactEventQueue, ArtifactListener, ArtifactUpdate};
 pub use askpass::{AskpassEvent, AskpassEventQueue, AskpassListener};
 pub use assist::{AssistEvent, AssistEventQueue, AssistListener};
 pub use browser::{BrowserListener, BrowserPushQueue};
+pub use cross_host::{
+    CrossHostCard, CrossHostCardKey, CrossHostChoice, CrossHostEvent, CrossHostEventQueue,
+    CrossHostListener, CrossHostPushListener, CrossHostPushQueue, CrossHostRelay, HostLink,
+    RelayHost, StandingAllow, StandingScope,
+};
 pub use drawing;
 pub use grants::{self, GrantSpec};
 pub use mp::{MultiplayerEvent, MultiplayerEventQueue, MultiplayerListener, now_millis};
@@ -165,6 +171,9 @@ pub struct ConnectOptions {
     /// Open URLs programs in a pane ask for and run agents' browser tools: announce
     /// `Caps::BROWSER` (see [`BrowserListener`]).
     pub browser: bool,
+    /// Relay agents' calls between this device's hosts: announce `Caps::CROSS_HOST` (owner
+    /// devices only; see [`CrossHostRelay`]).
+    pub cross_host: bool,
     /// Show what any program in a pane reports about itself: announce
     /// `Caps::PROGRAM_STATUS`, so the daemon sends [`ClientEvent::ProgramStatus`].
     pub program_status: bool,
@@ -197,6 +206,7 @@ impl std::fmt::Debug for ConnectOptions {
             )
             .field("askpass", &self.askpass)
             .field("browser", &self.browser)
+            .field("cross_host", &self.cross_host)
             .field("program_status", &self.program_status)
             .field("clipboard", &self.clipboard)
             .field("this_computer", &self.this_computer)
@@ -528,6 +538,8 @@ pub(crate) struct Inner {
     pub askpass: askpass::AskpassState,
     /// Where browser pushes go.
     pub browser: browser::BrowserState,
+    /// Agents' requests for other hosts, claims and relayed calls in flight.
+    pub(crate) cross_host: cross_host::CrossHostState,
     /// Approval extras in flight, open requests' extras, auto-approve rules.
     pub approvals: approvals::ApprovalState,
     /// Each pane's last program report.
@@ -634,6 +646,9 @@ impl Inner {
             ClientCtl::Assist { req_id, .. } => self.assist.awaits(*req_id),
             ClientCtl::Askpass { req_id, .. } => self.askpass.awaits(*req_id),
             ClientCtl::Approval { req_id, .. } => self.approvals.awaits(*req_id),
+            ClientCtl::CrossHost(proto::CrossHostMsg::Call { req_id, .. }) => {
+                self.cross_host.awaits(*req_id)
+            }
             _ => true,
         }
     }
@@ -845,6 +860,7 @@ impl Client {
             assist: assist::AssistState::default(),
             askpass: askpass::AskpassState::default(),
             browser: browser::BrowserState::default(),
+            cross_host: cross_host::CrossHostState::default(),
             approvals: approvals::ApprovalState::default(),
             programs: Mutex::new(HashMap::new()),
             daemon_info: Mutex::new(None),

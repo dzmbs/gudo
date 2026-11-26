@@ -547,6 +547,7 @@ async fn serve(inner: &Arc<Inner>, live: Live) -> Ended {
     inner.assist.fail_pending();
     inner.askpass.fail_pending();
     inner.approvals.fail_pending();
+    inner.cross_host.fail_pending();
     forget_programs(inner);
     inner.emit(ClientEvent::Disconnected { reason });
     if *lock(&inner.paused) {
@@ -732,6 +733,11 @@ async fn handshake(
             } else {
                 Caps::EMPTY
             }
+            | if crate::cross_host::announces(&inner.options, crate::mp::is_guest(inner)) {
+                Caps::CROSS_HOST
+            } else {
+                Caps::EMPTY
+            }
             | if inner.options.program_status {
                 Caps::PROGRAM_STATUS
             } else {
@@ -869,9 +875,11 @@ fn requests_needing_features(
         .iter()
         .map(|(&pane_id, &activity)| ClientCtl::PaneActivity { pane_id, activity });
     let colors = wanted.colors.clone().map(ClientCtl::TerminalColors);
+    let directory = inner.cross_host.directory();
     activities
         .chain(colors)
         .chain([ClientCtl::WatchRunAgain])
+        .chain(directory)
         .filter(|request| control_supported(request, features, more_features))
         .collect()
 }
@@ -1095,6 +1103,7 @@ fn control_supported(
         } => features.contains(proto::DaemonFeatures::POWER_SETTINGS),
         ClientCtl::TerminalColors(_) => features.contains(proto::DaemonFeatures::TERMINAL_COLORS),
         ClientCtl::WatchRunAgain => more_features.contains(proto::MoreDaemonFeatures::RUN_AGAIN),
+        ClientCtl::CrossHost(_) => more_features.contains(proto::MoreDaemonFeatures::CROSS_HOST),
         ClientCtl::PaneActivity { .. }
         | ClientCtl::ClaimSize { .. }
         | ClientCtl::SetSizePolicy {
@@ -1258,6 +1267,11 @@ async fn read_ctl(inner: Arc<Inner>, mut ctl_rx: RecvStream) -> String {
             continue;
         };
         let Some(msg) = inner.approvals.dispatch(msg) else {
+            continue;
+        };
+        let cross_host = crate::cross_host::announces(&inner.options, crate::mp::is_guest(&inner))
+            || inner.options.extra_caps.contains(Caps::CROSS_HOST);
+        let Some(msg) = inner.cross_host.dispatch(msg, cross_host) else {
             continue;
         };
         let event = match msg {
