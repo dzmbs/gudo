@@ -12,6 +12,12 @@ struct AgentToastStack: View {
         let compact = model.widthBucket == .compact
         let fromTop = position.edge == .top
         VStack(alignment: position.horizontalAlignment, spacing: DS.Space.s) {
+            if !model.isPresentation {
+                ForEach(model.app.crossHost.requests) { request in
+                    CrossHostCardView(request: request) { request, choice in model.app.crossHost.answer(request, choice) }
+                        .motionTransition(.toast(from: position.stackEdge))
+                }
+            }
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
                 AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1, edge: position.edge)
                     .motionTransition(.toast(from: position.stackEdge))
@@ -26,6 +32,7 @@ struct AgentToastStack: View {
             + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0),
             topInset: PaneHeader.height + DS.Space.l)
         .animation(DS.Motion.micro, value: toasts.cards.map(\.id))
+        .animation(DS.Motion.micro, value: model.app.crossHost.requests.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-toasts")
     }

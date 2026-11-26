@@ -22,6 +22,8 @@ final class AppModel {
     static var isLaunching: Bool { ContinuousClock.now - launchedAt < .seconds(8) }
 
     let hosts: HostsModel
+    /// Agents' calls from one host to another, relayed by this device once the owner allows.
+    let crossHost = CrossHostSession()
     /// Shown by the window when a pairing / connection started outside it fails (deep link).
     var lastError: String?
     /// This device's tabs (the Mac's shells; empty on iPhone and iPad unless a test or fixture
@@ -106,6 +108,10 @@ final class AppModel {
         #if os(iOS) && FILES_PROVIDER_YES
         if isolated == nil { FilesLocations.start(hosts) }
         #endif
+        if !LaunchOptions.mock, LaunchOptions.screen == nil {
+            crossHost.start()
+            crossHost.follow(hosts)
+        }
     }
 
     /// A window's workspace for a target: this window's view of the host (its own selection,

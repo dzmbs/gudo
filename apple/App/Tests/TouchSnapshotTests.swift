@@ -91,6 +91,55 @@ final class TouchSnapshotTests: XCTestCase {
         try capture(window, "agent-toasts")
     }
 
+    /// An agent on one host asking to act on another, above Chat's composer.
+    func testCrossHostCard() async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Dracula")
+        arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        let session = AppModel.shared.crossHost
+        session.apply(.card(CrossHostFixtures.card))
+        defer { session.apply(.closed(from: "studio", requestId: CrossHostFixtures.card.requestId)) }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = UIHostingController(rootView: ThemedRoot {
+            HostedComposer()
+                .background(DS.Palette.base)
+                .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+                .toastHost(model.toasts)
+        })
+        window.isHidden = false
+        defer { window.isHidden = true; model.close() }
+        await pump(1)
+        try capture(window, "cross-host-card")
+    }
+
+    /// A host's page: which other hosts' agents may reach it, and what is allowed now.
+    func testCrossHostSwitches() async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Dracula")
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        let session = AppModel.shared.crossHost
+        session.setEnabled(true, from: "studio", to: "ops")
+        session.apply(.standing([CrossHostFixtures.allow]))
+        defer {
+            session.setEnabled(false, from: "studio", to: "ops")
+            session.apply(.standing([]))
+        }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = UIHostingController(rootView: ThemedRoot {
+            NavigationStack { HostReachView(hostId: "ops") }
+        })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        await pump(1)
+        try capture(window, "cross-host-switches")
+    }
+
     /// A finished agent's card over a pane's Chat: above the composer, which Chat hosts in its
     /// own UIKit controller, with its close button.
     func testAgentNotificationOverChat() async throws {

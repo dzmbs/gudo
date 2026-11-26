@@ -197,6 +197,7 @@ struct HostsView: View {
         if live != nil, PairDeviceTarget.owns(host.id) {
             Button("Pair a Device…", systemImage: "qrcode") { model.pairDevice(hostId: host.id) }
             Button("Devices…", systemImage: "laptopcomputer.and.iphone") { SettingsLink.shared.open(.hostDevices(host.id)) }
+            Button("Agents from Other Hosts…", systemImage: "arrow.left.arrow.right") { SettingsLink.shared.open(.hostReach(host.id)) }
         }
         if host.isTailscale, TailscaleApp.isInstalled {
             Button("Open Tailscale", systemImage: "arrow.up.forward.app", action: TailscaleApp.open)

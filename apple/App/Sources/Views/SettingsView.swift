@@ -227,6 +227,7 @@ struct SettingsView: View {
             NotificationsSection().chromeRows()
             AccountsSettingsSection().chromeRows()
             AgentToolsSection().chromeRows()
+            CrossHostSettingsSection().chromeRows()
             ChatSettingsSection().chromeRows()
             AgentPowerSettings().chromeRows()
             GitSettingsSection().chromeRows()
@@ -262,7 +263,7 @@ struct SettingsView: View {
         case .browser: BrowserSettingsSection(); ReplaySettingsSection()
         case .notifications: NotificationsSection()
         case .privacy: AppLockSection(); PasswordsSection(); SSHKeysSettingsSection()
-        case .agents: AccountsSettingsSection(); AgentToolsSection(); ChatSettingsSection(); AgentPowerSettings()
+        case .agents: AccountsSettingsSection(); AgentToolsSection(); CrossHostSettingsSection(); ChatSettingsSection(); AgentPowerSettings()
         case .git: GitSettingsSection()
         case .network: NetworkSettingsSection()
         case .devices: DevicesSettingsSection()
@@ -280,6 +281,8 @@ enum SettingsPage: Hashable {
     case hostDevices(String)
     /// A host's agent accounts.
     case hostAccounts(String)
+    /// Which other hosts' agents may reach a host.
+    case hostReach(String)
 
     #if os(macOS)
     /// The pane it is pushed over.
@@ -290,7 +293,7 @@ enum SettingsPage: Hashable {
         case .acknowledgements: .about
         case .sshKeys: .privacy
         case .hostDevices: .devices
-        case .hostAccounts: .agents
+        case .hostAccounts, .hostReach: .agents
         }
     }
     #endif
@@ -400,6 +403,7 @@ private struct SettingsPageView: View {
             case .sshKeys: SSHKeysView(hosts: AppModel.shared.hosts)
             case .hostDevices(let id): HostDevicesView(hostId: id)
             case .hostAccounts(let id): HostAccountsView(hostId: id)
+            case .hostReach(let id): HostReachView(hostId: id)
             }
         }
         #if os(macOS)

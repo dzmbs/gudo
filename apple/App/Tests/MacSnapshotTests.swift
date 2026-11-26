@@ -1116,6 +1116,30 @@ final class MacSnapshotTests: XCTestCase {
 
     /// Agent accounts: Settings › Agents with the hosts, one host's accounts, and a pane under
     /// the Work account (its header names it; Work is at its limit, so the suggestion shows).
+    /// An agent on one host asking to act on another, and the switches on the host's page.
+    func testCrossHost() async throws {
+        let session = AppModel.shared.crossHost
+        session.apply(.card(CrossHostFixtures.card))
+        defer { session.apply(.closed(from: "studio", requestId: CrossHostFixtures.card.requestId)) }
+        if wanted("cross-host-card") {
+            let model = WindowModel(app: .shared)
+            let window = makeWindow(ThemedRoot {
+                Rectangle().fill(DS.Palette.base)
+                    .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+            }, size: CGSize(width: 1000, height: 650))
+            defer { window.close(); model.close() }
+            await pump(0.5)
+            try capture(window, "cross-host-card")
+        }
+        session.setEnabled(true, from: "studio", to: "ops")
+        session.apply(.standing([CrossHostFixtures.allow]))
+        defer {
+            session.setEnabled(false, from: "studio", to: "ops")
+            session.apply(.standing([]))
+        }
+        try await settings("settings-cross-host", SettingsNavigation(pane: .agents, path: [.hostReach("ops")]))
+    }
+
     func testAccounts() async throws {
         try await settings("settings-agents", SettingsNavigation(pane: .agents))
         try await settings("settings-accounts", SettingsNavigation(pane: .agents, path: [.hostAccounts("studio")]))
