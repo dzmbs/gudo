@@ -1,5 +1,6 @@
 import DesignSystem
 import Foundation
+import SwiftUI
 import XCTest
 @testable import App
 
@@ -81,6 +82,33 @@ final class AgentToastsTests: XCTestCase {
         XCTAssertTrue(toasts.cards.isEmpty)
     }
 
+    func testAHoldThatIsNeverReleasedStillEnds() {
+        let toasts = AgentToasts()
+        let start = Date(timeIntervalSince1970: 1000)
+        toasts.update([item("a", .working)], isShown: { _ in false }, now: start)
+        toasts.update([item("a", .done)], isShown: { _ in false }, now: start)
+        // A touch the system cancels never reports its end.
+        toasts.hold(true, now: start + 1)
+        toasts.expire(now: start + 1 + AgentToasts.maximumHold - 1)
+        XCTAssertEqual(toasts.cards.count, 1, "held up to the bound")
+        toasts.expire(now: start + 1 + AgentToasts.maximumHold + AgentToasts.lifetime)
+        XCTAssertTrue(toasts.cards.isEmpty, "a stuck hold gives up and the card leaves")
+        XCTAssertFalse(toasts.isHeld)
+    }
+
+    func testASwipeSidewaysOrTowardTheEdgeDismissesAndASmallDragSettlesBack() {
+        let small = CGSize(width: 12, height: 6)
+        XCTAssertFalse(AgentToasts.swipeDismisses(translation: small, predicted: small, edge: .bottom))
+        XCTAssertTrue(AgentToasts.swipeDismisses(translation: CGSize(width: -90, height: 4), predicted: CGSize(width: -90, height: 4), edge: .bottom))
+        XCTAssertTrue(AgentToasts.swipeDismisses(translation: CGSize(width: 90, height: 0), predicted: CGSize(width: 90, height: 0), edge: .bottom))
+        XCTAssertTrue(AgentToasts.swipeDismisses(translation: CGSize(width: 0, height: 70), predicted: CGSize(width: 0, height: 70), edge: .bottom))
+        XCTAssertFalse(AgentToasts.swipeDismisses(translation: CGSize(width: 0, height: -70), predicted: CGSize(width: 0, height: -70), edge: .bottom),
+                       "away from the edge it sits on is not a dismissal")
+        XCTAssertTrue(AgentToasts.swipeDismisses(translation: CGSize(width: 0, height: -70), predicted: CGSize(width: 0, height: -70), edge: .top))
+        XCTAssertTrue(AgentToasts.swipeDismisses(translation: CGSize(width: 0, height: 20), predicted: CGSize(width: 0, height: 240), edge: .bottom),
+                      "a quick flick counts by where it was headed")
+    }
+
     func testAMessageArrivingAfterCompletionUpdatesTheCardWithoutExtendingItsLifetime() {
         let toasts = AgentToasts()
         var agent = item("late", .working)
@@ -153,6 +181,17 @@ enum AgentToastTestFixtures {
         finished.state = .done
         finished.summary = "[✓] Added retry handling | Tests pass\nDetailed output"
         toasts.update([waiting, finished], isShown: { _ in false })
+        toasts.hold(true)
+    }
+
+    /// One agent on another computer finishing, with a long reply.
+    static func seedFinished(_ toasts: AgentToasts) {
+        var finished = AgentItem(id: "finished", agent: .claude, hostName: "studio", sessionTitle: "pool", state: .working,
+                                 since: .now, prompt: "check the miners", hostId: "host", paneId: 2)
+        toasts.update([finished], isShown: { _ in false })
+        finished.state = .done
+        finished.summary = "At 09:12 UTC two of the new outside miners started reporting stale shares again"
+        toasts.update([finished], isShown: { _ in false })
         toasts.hold(true)
     }
 }

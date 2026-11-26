@@ -261,6 +261,7 @@ struct PaneChatView<Terminal: View>: View {
         .padding(.horizontal, DS.Space.m).padding(.top, DS.Space.xs).padding(.bottom, DS.Space.s)
         .frame(maxWidth: ChatReadingColumn.maximumWidth).frame(maxWidth: .infinity)
         .foregroundStyle(DS.Palette.text)
+        .toastObstacle(isActive: state.presentation == .chat)
     }
 
     /// One rounded box: pills for attachments, the field, and under it the row with attach,

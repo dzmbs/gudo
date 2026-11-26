@@ -91,6 +91,30 @@ final class TouchSnapshotTests: XCTestCase {
         try capture(window, "agent-toasts")
     }
 
+    /// A finished agent's card over a pane's Chat: above the composer, which Chat hosts in its
+    /// own UIKit controller, with its close button.
+    func testAgentNotificationOverChat() async throws {
+        var arguments = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+        arguments[TerminalPreferences.Key.theme] = environment["SNAPSHOT_THEME"] ?? (mode == "light" ? "Apple System Colors Light" : "Dracula")
+        arguments[TerminalPreferences.Key.windowTheme] = TerminalPreferences.WindowTheme.auto.rawValue
+        UserDefaults.standard.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let model = WindowModel(app: .shared)
+        AgentToastTestFixtures.seedFinished(model.agentToasts)
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.screen.bounds
+        window.rootViewController = UIHostingController(rootView: ThemedRoot {
+            HostedComposer()
+                .background(DS.Palette.base)
+                .overlay(alignment: .bottomLeading) { AgentToastStack().environment(model) }
+                .toastHost(model.toasts)
+        })
+        window.isHidden = false
+        defer { window.isHidden = true; model.close() }
+        await pump(1)
+        try capture(window, "agent-toast-over-chat")
+    }
+
     func testFileViewer() async throws {
         let theme = mode == "light" ? "Apple System Colors Light" : "Ghostty Default"
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -400,6 +424,31 @@ final class TouchSnapshotTests: XCTestCase {
         folds.toggle(repo: repo, host: group.id)
         window.isHidden = true
         model.close()
+    }
+}
+/// A stand-in for Chat's composer, hosted in its own controller as the transcript hosts it.
+private struct HostedComposer: UIViewControllerRepresentable {
+    @Environment(\.self) private var environment
+
+    func makeUIViewController(context: Context) -> UIHostingController<AnyView> {
+        UIHostingController(rootView: AnyView(EmptyView()))
+    }
+
+    func updateUIViewController(_ controller: UIHostingController<AnyView>, context: Context) {
+        controller.view.backgroundColor = .clear
+        controller.rootView = AnyView(
+            VStack {
+                Spacer()
+                Text("Message")
+                    .foregroundStyle(DS.Palette.textSecondary)
+                    .padding(DS.Space.m)
+                    .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+                    .surface(.tile, in: RoundedRectangle.rounded(DS.Radius.card), fill: DS.Palette.raised)
+                    .padding(.horizontal, DS.Space.m)
+                    .padding(.bottom, 64)
+                    .toastObstacle()
+            }
+            .environment(\.self, environment))
     }
 }
 #endif

@@ -23,6 +23,10 @@ final class AgentToasts {
 
     static let lifetime: TimeInterval = 8
     static let maxShown = 3
+    /// A touch the system cancels never reports its end; past this a hold lets the cards go.
+    static let maximumHold: TimeInterval = 30
+    /// How far a card travels, or would travel at its release speed, before a swipe sends it away.
+    static let swipeDistance: CGFloat = 56
 
     private(set) var cards: [Card] = []
     private(set) var isHeld = false
@@ -136,7 +140,7 @@ final class AgentToasts {
         isHeld = held
         if held {
             heldSince = now
-            expiry?.cancel()
+            scheduleExpiry()
         } else {
             let paused = now.timeIntervalSince(heldSince ?? now)
             // Half a second of grace after the pointer leaves.
@@ -147,13 +151,33 @@ final class AgentToasts {
     }
 
     func expire(now: Date = .now) {
+        if isHeld, let heldSince, now.timeIntervalSince(heldSince) >= Self.maximumHold {
+            hold(false, now: heldSince + Self.maximumHold)
+        }
         guard !isHeld else { return }
         cards.removeAll { $0.expires <= now }
     }
 
+    /// A drag that dismisses a card: sideways either way, or toward the edge the stack sits on,
+    /// judged by where the finger was headed at release as well as where it is.
+    static func swipeDismisses(translation: CGSize, predicted: CGSize, edge: Edge) -> Bool {
+        let towardEdge: (CGSize) -> CGFloat = { offset in edge == .top ? -offset.height : offset.height }
+        let reach = { (offset: CGSize) in max(abs(offset.width), towardEdge(offset)) }
+        return reach(translation) >= swipeDistance || reach(predicted) >= swipeDistance * 2
+    }
+
     private func scheduleExpiry() {
         expiry?.cancel()
-        guard !isHeld, let next = cards.map(\.expires).min() else { return }
+        if isHeld, let heldSince {
+            let release = heldSince + Self.maximumHold
+            expiry = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, release.timeIntervalSinceNow)))
+                guard !Task.isCancelled, let self else { return }
+                withAnimation(DS.Motion.standard) { self.expire(now: release) }
+            }
+            return
+        }
+        guard let next = cards.map(\.expires).min() else { return }
         expiry = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow)))
             guard !Task.isCancelled, let self else { return }

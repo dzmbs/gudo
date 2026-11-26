@@ -5,6 +5,7 @@ import SwiftUI
 struct AgentToastStack: View {
     var position = ToastPosition.standard
     @Environment(WindowModel.self) private var model
+    @GestureState private var isTouching = false
 
     var body: some View {
         let toasts = model.agentToasts
@@ -12,20 +13,18 @@ struct AgentToastStack: View {
         let fromTop = position.edge == .top
         VStack(alignment: position.horizontalAlignment, spacing: DS.Space.s) {
             ForEach(Array(toasts.cards.enumerated()), id: \.element.id) { index, card in
-                AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1)
+                AgentToastCard(card: card, isNewest: index == toasts.cards.count - 1, edge: position.edge)
                     .motionTransition(.toast(from: position.stackEdge))
             }
         }
         .frame(maxWidth: compact ? .infinity : 380)
-        .toastObstacle()
-        .padding(.horizontal, DS.Space.l)
-        .padding(fromTop ? .top : .bottom, fromTop ? PaneHeader.height + DS.Space.l : PortOfferBanner.bottomInset(model)
-            + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0))
         .onHover { toasts.hold($0) }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in toasts.hold(true) }
-                .onEnded { _ in toasts.hold(false) })
+        // Gesture state resets when the system cancels the touch, so a hold always ends.
+        .simultaneousGesture(DragGesture(minimumDistance: 0).updating($isTouching) { _, touching, _ in touching = true })
+        .onChange(of: isTouching) { _, touching in toasts.hold(touching) }
+        .toastStack(position: position, bottomInset: fromTop ? DS.Space.l : PortOfferBanner.bottomInset(model)
+            + (model.ports.offer != nil && !model.editorHasKeys ? PortOfferBanner.height + DS.Space.s : 0),
+            topInset: PaneHeader.height + DS.Space.l)
         .animation(DS.Motion.micro, value: toasts.cards.map(\.id))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-toasts")
@@ -35,8 +34,14 @@ struct AgentToastStack: View {
 private struct AgentToastCard: View {
     let card: AgentToasts.Card
     let isNewest: Bool
+    /// The edge the stack sits on, which a swipe may send the card toward.
+    let edge: Edge
     @Environment(WindowModel.self) private var model
+    @Environment(\.chromeAccessibility) private var accessibility
     @State private var isHovered = false
+    @State private var dragOffset = CGSize.zero
+    @GestureState private var isDragging = false
+    @State private var isDismissing = false
 
     private var item: AgentItem { card.item }
 
@@ -54,27 +59,74 @@ private struct AgentToastCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .floatingPanel(cornerRadius: DS.Radius.panel)
         .overlay(alignment: .topTrailing) {
-            if isHovered {
-                Button("Dismiss", systemImage: "xmark") {
-                    withAnimation(DS.Motion.standard) { model.agentToasts.dismiss(card.id) }
-                }
-                .help("Dismiss")
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(DS.Palette.textSecondary)
-                .frame(width: 20, height: 20)
-                .background(DS.Palette.raised, in: .circle)
-                .hairlineBorder(Circle(), style: DS.Palette.hairline)
-                .offset(x: 6, y: -6)
-                .motionTransition(.pill())
-                .accessibilityIdentifier("agent-toast-dismiss")
+            if showsDismiss {
+                dismissButton
+                    .offset(x: 6, y: -6)
+                    .motionTransition(.pill())
             }
         }
         .onHover { hovering in withAnimation(DS.Motion.standard) { isHovered = hovering } }
         .chromeContent()
+        .offset(swipeOffset)
+        .opacity(1 - min(0.6, max(abs(swipeOffset.width), abs(swipeOffset.height)) / 240))
+        .simultaneousGesture(swipe)
+        // A drag the system cancels never ends; the card settles back all the same.
+        .onChange(of: isDragging) { _, dragging in
+            if !dragging, !isDismissing, dragOffset != .zero { withAnimation(accessibility.travel(DS.Motion.standard)) { dragOffset = .zero } }
+        }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: "Dismiss") { dismiss() }
         .accessibilityIdentifier("agent-toast-\(item.id)")
+    }
+
+    /// Always on a touch screen, where nothing hovers; on the Mac with the pointer over the card.
+    private var showsDismiss: Bool {
+        #if os(iOS)
+        true
+        #else
+        isHovered
+        #endif
+    }
+
+    private static let dismissDisc: CGFloat = 20
+
+    private var dismissButton: some View {
+        Button("Dismiss", systemImage: "xmark") { dismiss() }
+            .help("Dismiss")
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .font(.caption2.weight(.bold))
+            .foregroundStyle(DS.Palette.textSecondary)
+            .frame(width: Self.dismissDisc, height: Self.dismissDisc)
+            .background(DS.Palette.raised, in: .circle)
+            .hairlineBorder(Circle(), style: DS.Palette.hairline)
+            .contentShape(.rect.inset(by: -(DS.Size.touchTarget - Self.dismissDisc) / 2))
+            .accessibilityLabel("Dismiss \(headline)")
+            .accessibilityIdentifier("agent-toast-dismiss")
+    }
+
+    /// The card follows the finger sideways, and toward its edge but not away from it.
+    private var swipeOffset: CGSize {
+        let vertical = edge == .top ? min(0, dragOffset.height) : max(0, dragOffset.height)
+        return CGSize(width: dragOffset.width, height: vertical)
+    }
+
+    private var swipe: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .updating($isDragging) { _, dragging, _ in dragging = true }
+            .onChanged { value in dragOffset = value.translation }
+            .onEnded { value in
+                if AgentToasts.swipeDismisses(translation: value.translation, predicted: value.predictedEndTranslation, edge: edge) {
+                    dismiss()
+                } else {
+                    withAnimation(accessibility.travel(DS.Motion.standard)) { dragOffset = .zero }
+                }
+            }
+    }
+
+    private func dismiss() {
+        isDismissing = true
+        withAnimation(accessibility.travel(DS.Motion.standard)) { model.agentToasts.dismiss(card.id) }
     }
 
     private var mark: some View {
