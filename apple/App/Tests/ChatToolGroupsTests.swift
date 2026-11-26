@@ -108,6 +108,23 @@ final class ChatToolGroupsTests: XCTestCase {
         XCTAssertEqual(diffs.map(\.item), ["a", "b"])
     }
 
+    func testThinkingAfterTheLastCallOfTheTimelineStaysVisible() throws {
+        let rows = try [tool("a", kind: "Shell"), thinking("t1"), tool("b", kind: "Read"), thinking("t2")]
+        let folded = ChatToolGroups.fold(rows, expanded: [])
+        XCTAssertEqual(folded.count, 2, "the calls fold, the agent's latest thinking stays")
+        guard case .toolGroup(let group) = folded[0].content else { return XCTFail("Missing group") }
+        XCTAssertEqual(group.tools.map(\.id), ["a", "b"])
+        XCTAssertEqual(folded[1].id.item, "t2")
+
+        let answered = try rows + [reply("after")]
+        XCTAssertEqual(ChatToolGroups.fold(answered, expanded: []).map(\.id.item).dropFirst(), ["after"],
+                       "once the reply comes, the thinking before it folds with the calls")
+    }
+
+    private func thinking(_ id: String) throws -> ChatRow {
+        try row(item(id, body: ["Thinking": ["text": "Checking the share counts against the pool log.", "duration_ms": NSNull()]]))
+    }
+
     private func reply(_ id: String) throws -> ChatRow {
         try row(item(id, body: ["Assistant": ["text": "text", "streaming": false]]))
     }

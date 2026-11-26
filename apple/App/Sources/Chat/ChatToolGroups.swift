@@ -18,13 +18,18 @@ nonisolated enum ChatToolGroups {
         var folded: [ChatRow] = []
         folded.reserveCapacity(rows.count)
         var run: [ChatRow] = []
-        func flush() {
+        /// At the end of the timeline, thinking after the run's last call is what the agent is
+        /// doing now: it stays visible like a running call.
+        func flush(endsTimeline: Bool = false) {
             defer { run.removeAll(keepingCapacity: true) }
             let tools = run.compactMap(tool)
             guard tools.count > 1, let first = run.first else { folded.append(contentsOf: run); return }
             let identifier = ChatRowID(item: marker + first.id.item, part: 0)
             let isExpanded = expanded.contains(identifier)
-            let live = run.filter { tool($0)?.status == .known(.running) }
+            let lastTool = run.lastIndex { tool($0) != nil } ?? run.endIndex
+            let live = run.indices.filter { index in
+                tool(run[index])?.status == .known(.running) || (endsTimeline && index > lastTool)
+            }.map { run[$0] }
             let finished = run.compactMap { row -> TimelineItem? in
                 guard case .item(let item) = row.content, case .tool(let tool) = item.body,
                       isExpanded || tool.status != .known(.running) else { return nil }
@@ -44,7 +49,7 @@ nonisolated enum ChatToolGroups {
         for row in rows {
             if joinsRun(row) { run.append(row) } else { flush(); folded.append(row) }
         }
-        flush()
+        flush(endsTimeline: true)
         return folded
     }
 
