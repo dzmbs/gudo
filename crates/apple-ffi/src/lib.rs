@@ -24,6 +24,7 @@ mod assist;
 mod browser;
 mod bytes;
 mod client;
+mod cross_host;
 mod editor;
 mod extras;
 mod mp;
@@ -74,6 +75,9 @@ pub use bytes::Bytes;
 pub use client::{
     ClientConfig, ClientError, ClientEvent, ClientEventListener, ClientStats, ConnectOptions,
     DaemonClient, PaneBytesBench, RelayMode, bench_pane_bytes, generate_device_key,
+};
+pub use cross_host::{
+    CrossHostCard, CrossHostChoice, CrossHostListener, CrossHostRelay, CrossHostVerb, StandingAllow,
 };
 pub use editor::{
     EditorSession, VsCodeSshHost, microsoft_privacy_url, vscode_license_url, vscode_remote_ssh_uri,

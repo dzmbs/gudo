@@ -576,6 +576,9 @@ pub struct ConnectOptions {
     /// (`BrowserListener`).
     #[uniffi(default = false)]
     pub browser: bool,
+    /// Relay agents' calls between this device's hosts (`CrossHostRelay`). Owner hosts only.
+    #[uniffi(default = false)]
+    pub cross_host: bool,
     /// Show what any program in a pane reports about itself (`ClientEvent::ProgramStatus`).
     #[uniffi(default = false)]
     pub program_status: bool,
@@ -611,6 +614,7 @@ impl From<ConnectOptions> for client_core::ConnectOptions {
             relay_auth_token: connect_options.relay_auth_token.filter(|t| !t.is_empty()),
             askpass: connect_options.askpass,
             browser: connect_options.browser,
+            cross_host: connect_options.cross_host,
             program_status: connect_options.program_status,
             clipboard: connect_options.clipboard,
             this_computer: connect_options.this_computer,
@@ -1115,6 +1119,7 @@ mod tests {
             relay_auth_token: Some("secret".into()),
             askpass: true,
             browser: true,
+            cross_host: true,
             program_status: true,
             clipboard: true,
             this_computer: true,
