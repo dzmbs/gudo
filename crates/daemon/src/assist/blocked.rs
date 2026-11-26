@@ -42,7 +42,13 @@ fn clean(line: &str) -> &str {
         .trim()
 }
 
-/// The last numbered menu (`1.` … `n.`, at least two options) on `screen`.
+/// A run of numbered lines is a menu only when one row carries the selection marker: agents
+/// always mark the row the cursor is on, while numbered lists in their replies never do.
+fn is_menu(options: &[(String, bool)]) -> bool {
+    options.len() >= 2 && options.iter().any(|(_, selected)| *selected)
+}
+
+/// The last numbered menu (`1.` … `n.`, at least two options, one marked selected) on `screen`.
 pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
     // (label, selected) per option.
     let mut best: Vec<(String, bool)> = Vec::new();
@@ -52,7 +58,7 @@ pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
         if let Some(captures) = ITEM.captures(line) {
             let number: usize = captures["n"].parse().unwrap_or(0);
             if number == 1 {
-                if current.len() >= 2 {
+                if is_menu(&current) {
                     best = std::mem::take(&mut current);
                 }
                 current.clear();
@@ -77,12 +83,12 @@ pub(crate) fn parse_menu(screen: &str) -> Vec<MenuOption> {
             last.0.push_str(line);
             continue;
         }
-        if current.len() >= 2 {
+        if is_menu(&current) {
             best = std::mem::take(&mut current);
         }
         current.clear();
     }
-    if current.len() >= 2 {
+    if is_menu(&current) {
         best = current;
     }
     best.into_iter()
@@ -183,6 +189,20 @@ Allow command?
         assert_eq!(menu[1].keys, b"a");
         assert_eq!(menu[2].keys, b"\x1b");
         assert_eq!(menu[2].label, "No, and tell Codex what to do differently");
+    }
+
+    #[test]
+    fn a_numbered_list_in_a_reply_is_not_a_menu() {
+        let screen = "\
+● The Mac won't replace Gudo while it's open. Quit it first.
+
+  1. Quit Gudo with ⌘Q.
+  2. In the Gudo.dmg window, drag Gudo to Applications and choose Replace.
+  3. Open Gudo again. Your tabs come back, then click Update Helper.
+
+────────────────────────────────────────
+❯ \n";
+        assert!(parse_menu(screen).is_empty(), "{:?}", parse_menu(screen));
     }
 
     #[test]
