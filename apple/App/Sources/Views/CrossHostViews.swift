@@ -10,21 +10,14 @@ struct CrossHostCardView: View {
     let request: CrossHostRequestInfo
     var answer: (CrossHostRequestInfo, CrossHostChoice) -> Void
     @State private var isHovered = false
+    @State private var isActionShown = false
 
     var body: some View {
         HStack(alignment: .top, spacing: DS.Space.m) {
             mark
             VStack(alignment: .leading, spacing: DS.Space.xs) {
                 header
-                Text(verbatim: request.action)
-                    .font(DS.Font.literalSmall)
-                    .lineLimit(3)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
-                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline)
-                    .accessibilityLabel("Action: \(request.action)")
+                ActionLiteral(request.action, lineLimit: 3, isShownWhole: $isActionShown)
                 ForEach(notes, id: \.self) { note in
                     Text(note)
                         .font(.footnote)
@@ -88,17 +81,21 @@ struct CrossHostCardView: View {
                 .accessibilityIdentifier("cross-host-deny")
             Button("Allow All") { decide(.allowAgent) }
                 .buttonStyle(.glass)
-                .help("Allow everything this agent asks on \(request.toName) until its pane closes")
+                .disabled(!isActionShown)
+                .help(isActionShown ? "Allow everything this agent asks on \(request.toName) until its pane closes" : Self.showAllFirst)
                 .accessibilityLabel("Allow all for this agent on \(request.toName)")
                 .accessibilityIdentifier("cross-host-allow-all")
             Button("Allow Once") { decide(.allowOnce) }
                 .buttonStyle(.primaryGlass)
+                .disabled(!isActionShown)
                 .keyboardShortcut(isHovered ? .defaultAction : nil)
-                .help("Allow this one action (↩)")
+                .help(isActionShown ? "Allow this one action (↩)" : Self.showAllFirst)
                 .accessibilityIdentifier("cross-host-allow-once")
         }
         .controlSize(.small)
     }
+
+    static let showAllFirst = "Show the whole action first"
 
     private func decide(_ choice: CrossHostChoice) {
         withAnimation(DS.Motion.standard) { answer(request, choice) }

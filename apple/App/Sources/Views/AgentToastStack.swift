@@ -49,6 +49,7 @@ private struct AgentToastCard: View {
     @State private var dragOffset = CGSize.zero
     @GestureState private var isDragging = false
     @State private var isDismissing = false
+    @State private var isDetailShown = false
 
     private var item: AgentItem { card.item }
 
@@ -183,15 +184,7 @@ private struct AgentToastCard: View {
     private var detail: AnyView? {
         switch item.request {
         case .permission(_, let detail)?:
-            AnyView(
-                Text(verbatim: detail)
-                    .font(DS.Font.literalSmall)
-                    .lineLimit(2)
-                    .padding(.horizontal, DS.Space.s)
-                    .padding(.vertical, DS.Space.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(DS.Palette.raised, in: .rect(cornerRadius: DS.Radius.field, style: .continuous))
-                    .hairlineBorder(RoundedRectangle.rounded(DS.Radius.field), style: DS.Palette.hairline))
+            AnyView(ActionLiteral(detail, lineLimit: 2, isShownWhole: $isDetailShown))
         case .question?:
             AgentToasts.summary(for: item).map { line in
                 AnyView(Text(verbatim: line).font(DS.Font.rowSubtitle).lineLimit(1))
@@ -224,19 +217,22 @@ private struct AgentToastCard: View {
                 if model.agents.canApproveAlways(item.id) {
                     Button("Always") { approveAlways() }
                         .buttonStyle(.glass)
-                        .help("Approve, and don't ask again about this tool")
+                        .disabled(!isDetailShown)
+                        .help(isDetailShown ? "Approve, and don't ask again about this tool" : CrossHostCardView.showAllFirst)
                         .accessibilityIdentifier("agent-toast-always-\(item.id)")
                 }
                 if item.drive {
                     Button("This Pane") { allowForPane() }
                         .buttonStyle(.glass)
-                        .help("Allow for this pane until it closes")
+                        .disabled(!isDetailShown)
+                        .help(isDetailShown ? "Allow for this pane until it closes" : CrossHostCardView.showAllFirst)
                         .accessibilityIdentifier("agent-toast-allow-pane-\(item.id)")
                 }
                 Button(item.drive ? "Allow Once" : "Approve") { decide(allow: true) }
                     .buttonStyle(.primaryGlass)
+                    .disabled(!isDetailShown)
                     .keyboardShortcut(isHovered ? .defaultAction : nil)
-                    .help(item.drive ? "Allow this one action (↩)" : "Approve (↩)")
+                    .help(isDetailShown ? (item.drive ? "Allow this one action (↩)" : "Approve (↩)") : CrossHostCardView.showAllFirst)
                     .accessibilityIdentifier("agent-toast-approve-\(item.id)")
             } else {
                 Button("Open") { open() }
