@@ -66,6 +66,20 @@ const INHERITED_TERMINAL_VARS: &[&str] = &[
     "VSCODE_INJECTION",
 ];
 
+/// Variables a coding agent gives its tool processes. A daemon started from inside an agent must
+/// not hand that agent's session or messaging token to every pane, and an agent typed in a pane
+/// must not think it runs inside another one.
+const INHERITED_AGENT_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SSE_PORT",
+    "CODEX_THREAD_ID",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+];
+
 /// The XTVERSION reply and terminfo name of every pane's terminal.
 pub(crate) fn identity() -> Identity {
     Identity {
@@ -91,7 +105,7 @@ pub(crate) fn pane_env() -> [(&'static str, String); 5] {
 
 /// Gives `command` the pane terminal environment, without what it inherited from another one.
 pub(crate) fn apply_pane_env(command: &mut Command) {
-    for key in INHERITED_TERMINAL_VARS {
+    for key in INHERITED_TERMINAL_VARS.iter().chain(INHERITED_AGENT_VARS) {
         command.env_remove(key);
     }
     for (key, value) in pane_env() {
@@ -208,6 +222,23 @@ mod tests {
         apply_pane_env(&mut command);
         let environment: HashMap<_, _> = command.get_envs().collect();
         for variable in ["NO_COLOR", "FORCE_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
+            assert_eq!(
+                environment.get(std::ffi::OsStr::new(variable)),
+                Some(&None),
+                "{variable}"
+            );
+        }
+    }
+
+    #[test]
+    fn panes_do_not_inherit_the_identity_of_an_agent_the_daemon_was_started_from() {
+        let mut command = Command::new("shell");
+        for variable in INHERITED_AGENT_VARS {
+            command.env(variable, "parent");
+        }
+        apply_pane_env(&mut command);
+        let environment: HashMap<_, _> = command.get_envs().collect();
+        for variable in INHERITED_AGENT_VARS {
             assert_eq!(
                 environment.get(std::ffi::OsStr::new(variable)),
                 Some(&None),
