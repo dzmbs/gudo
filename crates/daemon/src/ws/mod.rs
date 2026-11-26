@@ -39,7 +39,7 @@ use proto::{
 };
 use tokio::sync::mpsc;
 
-pub(crate) use attention::{Attention, NewItem, Viewer};
+pub(crate) use attention::{Attention, Audience, NewItem, Viewer};
 pub(crate) use files::{serve_download, serve_upload};
 pub use paths::Policy;
 pub(crate) use watch::Watch;
@@ -745,6 +745,7 @@ pub(crate) fn command_unseen(core: &Core, mark: &CommandMark) {
         title: format!("{command} {status}"),
         body,
         viewers: core.pane_viewers(mark.pane_id),
+        audience: Audience::PaneViewers,
     });
     core.emit(Event::Attention(update));
 }
@@ -837,6 +838,7 @@ pub(crate) fn agent_notice(core: &Core, pane: PaneId, agent: AgentKind, notice: 
         title,
         body: body.chars().take(500).collect(),
         viewers: core.pane_viewers(pane),
+        audience: Audience::PaneViewers,
     });
     core.emit(Event::Attention(update));
 }
@@ -850,6 +852,44 @@ pub(crate) fn drive_notice(
     title: String,
     body: String,
 ) {
+    blocked_notice(
+        core,
+        pane,
+        agent,
+        request_id,
+        title,
+        body,
+        Audience::PaneViewers,
+    );
+}
+
+/// An agent asks to reach another host (`term::cross`): an item for the owner alone, who alone
+/// may answer it.
+pub(crate) fn cross_host_notice(
+    core: &Core,
+    pane: PaneId,
+    agent: String,
+    request_id: proto::RequestId,
+    title: String,
+    body: String,
+) {
+    blocked_notice(core, pane, agent, request_id, title, body, Audience::Owner);
+}
+
+fn blocked_notice(
+    core: &Core,
+    pane: PaneId,
+    agent: String,
+    request_id: proto::RequestId,
+    title: String,
+    body: String,
+    audience: Audience,
+) {
+    let viewers = core
+        .pane_viewers(pane)
+        .into_iter()
+        .filter(|viewer| audience == Audience::PaneViewers || *viewer == Viewer::Owner)
+        .collect();
     let update = core.ws.attention.add(NewItem {
         pane_id: pane,
         session_id: lock(&core.layout).session_of_pane(pane),
@@ -859,7 +899,8 @@ pub(crate) fn drive_notice(
         },
         title,
         body,
-        viewers: core.pane_viewers(pane),
+        viewers,
+        audience,
     });
     core.emit(Event::Attention(update));
 }

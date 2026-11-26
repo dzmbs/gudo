@@ -1201,8 +1201,9 @@ impl Client {
                 ports: self.scoped_ports(self.core.ws.ports.current()),
             }),
             Event::Attention(proto::AttentionUpdate::Added { item, .. }) => {
-                if self.pane_allowed(item.pane_id) {
-                    let attention = &self.core.ws.attention;
+                let attention = &self.core.ws.attention;
+                if self.pane_allowed(item.pane_id) && attention.visible_to(self.ws.viewer, item.id)
+                {
                     self.send(ServerCtl::Attention(proto::AttentionUpdate::Added {
                         item: attention.as_seen_by(self.ws.viewer, &item),
                         unseen: attention.unseen_by(self.ws.viewer, |pane| self.pane_allowed(pane)),
@@ -1214,9 +1215,10 @@ impl Client {
             {
                 let attention = &self.core.ws.attention;
                 ids.retain(|&id| {
-                    attention
-                        .pane_of(id)
-                        .is_some_and(|pane| self.pane_allowed(pane))
+                    attention.visible_to(self.ws.viewer, id)
+                        && attention
+                            .pane_of(id)
+                            .is_some_and(|pane| self.pane_allowed(pane))
                 });
                 if !ids.is_empty() {
                     self.send(ServerCtl::Attention(proto::AttentionUpdate::Seen {

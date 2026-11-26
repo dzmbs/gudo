@@ -26,15 +26,29 @@ pub(crate) enum Viewer {
     Guest(PrincipalId),
 }
 
+/// Who may see an item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Audience {
+    /// Everyone whose scope holds its pane.
+    PaneViewers,
+    /// The owner's devices alone (a request only the owner may answer).
+    Owner,
+}
+
 /// An item with the owner's "seen" in `item` and every guest's beside it.
 struct Entry {
     item: AttentionItem,
+    audience: Audience,
     resolved: bool,
     guests_viewing: HashSet<PrincipalId>,
     guests_seen: HashSet<PrincipalId>,
 }
 
 impl Entry {
+    fn is_for(&self, viewer: Viewer) -> bool {
+        self.audience == Audience::PaneViewers || viewer == Viewer::Owner
+    }
+
     fn seen_by(&self, viewer: Viewer) -> bool {
         match viewer {
             Viewer::Owner => self.item.seen,
@@ -75,7 +89,9 @@ impl Inner {
     fn unseen_by(&self, viewer: Viewer, visible: impl Fn(PaneId) -> bool) -> u32 {
         self.entries
             .iter()
-            .filter(|entry| visible(entry.item.pane_id) && !entry.seen_by(viewer))
+            .filter(|entry| {
+                entry.is_for(viewer) && visible(entry.item.pane_id) && !entry.seen_by(viewer)
+            })
             .count() as u32
     }
 }
@@ -94,6 +110,7 @@ pub(crate) struct NewItem {
     pub body: String,
     /// Who shows the pane as it happens (it starts seen for them).
     pub viewers: Vec<Viewer>,
+    pub audience: Audience,
 }
 
 impl Attention {
@@ -106,8 +123,10 @@ impl Attention {
             .viewers
             .iter()
             .filter_map(|viewer| match viewer {
-                Viewer::Guest(principal) => Some(*principal),
-                Viewer::Owner => None,
+                Viewer::Guest(principal) if new.audience == Audience::PaneViewers => {
+                    Some(*principal)
+                }
+                Viewer::Guest(_) | Viewer::Owner => None,
             })
             .collect();
         let item = AttentionItem {
@@ -123,6 +142,7 @@ impl Attention {
         };
         inner.entries.push_back(Entry {
             item: item.clone(),
+            audience: new.audience,
             resolved: false,
             guests_seen: guests_viewing.clone(),
             guests_viewing,
@@ -143,6 +163,7 @@ impl Attention {
             items: inner
                 .entries
                 .iter()
+                .filter(|entry| entry.is_for(viewer))
                 .map(|entry| entry.as_seen_by(viewer))
                 .collect(),
             unseen: inner.unseen_by(viewer, |_| true),
@@ -158,6 +179,11 @@ impl Attention {
     pub fn as_seen_by(&self, viewer: Viewer, item: &AttentionItem) -> AttentionItem {
         self.find(item.id, |entry| entry.as_seen_by(viewer))
             .unwrap_or_else(|| item.clone())
+    }
+
+    /// Whether `viewer` may see item `id` (its scope aside).
+    pub fn visible_to(&self, viewer: Viewer, id: u64) -> bool {
+        self.find(id, |entry| entry.is_for(viewer)).unwrap_or(false)
     }
 
     pub fn pane_of(&self, id: u64) -> Option<PaneId> {
@@ -211,7 +237,11 @@ impl Attention {
             let matches = which.ids.contains(&item.id)
                 || which.up_to.is_some_and(|up_to| item.id <= up_to)
                 || which.pane_id == Some(item.pane_id);
-            if matches && visible.contains(&item.pane_id) && entry.mark_seen_by(viewer) {
+            if matches
+                && entry.is_for(viewer)
+                && visible.contains(&item.pane_id)
+                && entry.mark_seen_by(viewer)
+            {
                 ids.push(entry.item.id);
             }
         }
@@ -248,6 +278,7 @@ mod tests {
             title: "t".into(),
             body: String::new(),
             viewers,
+            audience: Audience::PaneViewers,
         }
     }
 
@@ -334,5 +365,37 @@ mod tests {
         attention.resolve_blocked(PaneId(1));
         assert_eq!(attention.list_for(guest).unseen, 0);
         assert_eq!(attention.list_for(Viewer::Owner).unseen, 0);
+    }
+
+    #[test]
+    fn an_item_for_the_owner_alone_never_reaches_a_guest() {
+        let attention = Attention::default();
+        let guest = Viewer::Guest(PrincipalId([1; 16]));
+        let blocked = AttentionKind::AgentBlocked {
+            agent: "claude".into(),
+            request_id: None,
+        };
+        let AttentionUpdate::Added { item: owners, .. } = attention.add(NewItem {
+            audience: Audience::Owner,
+            ..item(1, blocked.clone(), vec![guest])
+        }) else {
+            panic!()
+        };
+        attention.add(item(1, blocked, vec![]));
+        assert!(attention.visible_to(Viewer::Owner, owners.id));
+        assert!(!attention.visible_to(guest, owners.id));
+        assert_eq!(attention.list_for(Viewer::Owner).items.len(), 2);
+        assert_eq!(attention.list_for(guest).items.len(), 1);
+        assert_eq!(attention.list_for(guest).unseen, 1);
+        assert_eq!(attention.unseen_by(guest, |_| true), 1);
+        let everything = AttentionSeen {
+            ids: vec![],
+            up_to: Some(u64::MAX),
+            pane_id: None,
+        };
+        assert_eq!(
+            attention.mark(guest, &everything, |_| true),
+            vec![owners.id + 1]
+        );
     }
 }

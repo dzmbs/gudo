@@ -45,6 +45,9 @@ const NOTICE_DELAY: Duration = Duration::from_secs(3);
 const MAX_REMOTE_AGENTS: usize = 64;
 /// Asking panes kept in the rate windows; past it the one quiet longest goes.
 const MAX_RATE_WINDOWS: usize = 256;
+/// Characters of the host's name, as the agent gave it, that notifications and the audit
+/// log show.
+const HOST_LABEL_CHARS: usize = 64;
 /// Updates one waiting call can have queued.
 const PROGRESS_QUEUE: usize = 8;
 /// Entries one device's host list may hold.
@@ -675,7 +678,8 @@ pub(super) async fn relay(
         expires_at: proto::UnixMillis(crate::identity::now_millis() + wait.as_millis() as u64),
     };
     let id = request.id;
-    let summary = format!("{agent} asked to {action} on {host}");
+    let host_label = proto::clean_prompt_text(&host, HOST_LABEL_CHARS);
+    let summary = format!("{agent} asked to {action} on {host_label}");
     let (progress, mut updates) = mpsc::channel(PROGRESS_QUEUE);
     let Some(devices) = cross.open(core, request, summary.clone(), progress) else {
         return Err(ToolError {
@@ -698,12 +702,12 @@ pub(super) async fn relay(
     );
     tracing::info!(%caller, ?verb, devices, "asking the owner's devices to reach another host");
     let notify = || {
-        crate::ws::drive_notice(
+        crate::ws::cross_host_notice(
             core,
             caller,
             kind.clone(),
             id,
-            format!("{agent} wants to reach {host}"),
+            format!("{agent} wants to reach {host_label}"),
             action.clone(),
         );
     };

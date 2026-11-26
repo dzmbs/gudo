@@ -568,6 +568,64 @@ async fn nothing_happens_while_no_device_is_connected() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_owner_alone_is_notified_with_the_host_name_cleaned() {
+    let hosts = Hosts::start(Duration::from_secs(2)).await;
+    let mut spec = GrantSpec::new(Roles::VIEWER, Scope::Daemon);
+    spec.label = "bob".into();
+    spec.expires = Some(UnixMillis(now_millis().0 + 3_600_000));
+    let invite = hosts
+        .on_a
+        .client
+        .create_invite(spec, "alice".into())
+        .await
+        .unwrap();
+    let mut guest = TestClient::join_options(&invite.to_string(), ConnectOptions::default());
+    guest.client.attach(None);
+    guest
+        .until("the guest is in", |client| client.layout.is_some())
+        .await;
+    hosts.relay.remove_host(HOST_A);
+    hosts.on_a.client.suspend();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let host = format!("ops\u{202e}\u{2028}{}", "x".repeat(200));
+    refused(hosts.agent.call("pane_list", json!({ "host": host })).await);
+    hosts.on_a.client.reconnect();
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let item = loop {
+        if let Ok(feed) = hosts.on_a.client.attention_list().await
+            && let Some(item) = feed
+                .items
+                .into_iter()
+                .find(|item| item.title.contains("wants to reach"))
+        {
+            break item;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the owner was notified"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert!(
+        item.title
+            .ends_with(&format!("wants to reach ops {}…", "x".repeat(60))),
+        "{}",
+        item.title
+    );
+    let theirs = guest.client.attention_list().await.unwrap();
+    assert!(
+        !theirs
+            .items
+            .iter()
+            .any(|item| item.title.contains("wants to reach")),
+        "{theirs:#?}"
+    );
+    drop(guest);
+    hosts.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn guests_never_get_requests_and_are_never_targets() {
     let mut hosts = Hosts::start(Duration::from_secs(20)).await;
     hosts.relay.set_pair(HOST_A, HOST_B, true);
