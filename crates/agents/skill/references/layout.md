@@ -19,7 +19,7 @@ Opens a pane beside (`right`) or below (`down`) a pane, yours by default: a shel
 or a coding `agent` (`claude`, `codex`). `float: true` opens it as a floating window instead.
 
 Arguments: `of`, `direction`, `cwd`, `command`, `agent`, `focus`, `float`, `frame`,
-`closeWhenDone`.
+`closeWhenDone`, `host`.
 
 ### `tab_new`
 
@@ -27,7 +27,7 @@ Opens a tab in this session without switching the user to it. `title` is the tab
 programs in it cannot change it. With `float: true` the pane opens as a floating window over your
 own tab instead.
 
-Arguments: `cwd`, `command`, `title`, `focus`, `float`, `frame`, `closeWhenDone`.
+Arguments: `cwd`, `command`, `title`, `focus`, `float`, `frame`, `closeWhenDone`, `host`.
 
 ### `pane_close`
 
@@ -37,7 +37,7 @@ is asked first. A tab's last pane in place is not closed while windows float ove
 one would drop into its place: dock or close them first, or pass `closeFloats: true` to close
 them too (only when they are all yours).
 
-Arguments: `pane` (required), `closeFloats`.
+Arguments: `pane` (required), `closeFloats`, `host`.
 
 ### `pane_float`
 

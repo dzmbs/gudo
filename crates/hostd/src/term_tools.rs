@@ -320,6 +320,32 @@ fn tools_list() -> Vec<Tool> {
             idempotent: true,
         },
         Tool {
+            name: "host_list",
+            title: "List the user's other hosts",
+            description: "List the user's other computers with this app's helper, as their device knows them, and whether agents here may reach each: enabled, off (the user has not turned it on for agents on this host), offline, guest (never reachable), no_helper or old_helper, with a note on what to do. Pass a host's name as `host` to the terminal tools to work there; the user's device asks them first.",
+            input: object(json!({}), &[]),
+            output: json!({
+                "type": "object",
+                "properties": {
+                    "hosts": { "type": "array", "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "id": { "type": "string" },
+                            "state": { "type": "string", "enum": ["enabled", "off", "offline", "guest", "no_helper", "old_helper"] },
+                            "note": { "type": ["string", "null"] },
+                        },
+                        "required": ["name", "id", "state"],
+                    } },
+                    "note": { "type": ["string", "null"], "description": "Why the list is empty." },
+                },
+                "required": ["hosts"],
+            }),
+            read_only: true,
+            destructive: false,
+            idempotent: true,
+        },
+        Tool {
             name: "cmd_run",
             title: "Run a shell command",
             description: "Run a shell command in a terminal pane the user can watch, wait for it, and get its exit code and its own output. Without a pane, opens a new pane below this one (and keeps it for later commands: pass its id as `pane`). Long-running commands: give timeoutMs and continue with pane_wait or pane_read. In a pane the user opened, the user is asked first (on their phone or Mac) and the call waits up to two minutes for their answer; refused if they say no or do not answer.",
@@ -725,16 +751,26 @@ fn tools_list() -> Vec<Tool> {
     ]
 }
 
-/// The terminal tools, as `tools/list` declares them.
+/// The terminal tools, as `tools/list` declares them. Those that may reach another host take
+/// `host`.
 pub fn tools() -> Vec<Value> {
     tools_list()
         .into_iter()
         .map(|tool| {
+            let mut input = tool.input;
+            if proto::CrossHostVerb::of(tool.name).is_some()
+                && let Some(properties) = input["properties"].as_object_mut()
+            {
+                properties.insert(
+                    "host".into(),
+                    json!({ "type": "string", "description": "Another of the user's hosts (a name or id from host_list); the user's device asks them first. Default: this host." }),
+                );
+            }
             json!({
                 "name": tool.name,
                 "title": tool.title,
                 "description": tool.description,
-                "inputSchema": tool.input,
+                "inputSchema": input,
                 "outputSchema": tool.output,
                 "annotations": {
                     "title": tool.title,
@@ -789,6 +825,9 @@ pub fn call(name: &str, args: &Value, backend: &mut dyn Backend) -> Value {
 fn summary(tool: &str, result: &Value) -> String {
     if tool == "pane_list" && result["tabs"].is_array() {
         return list_summary(result);
+    }
+    if tool == "host_list" && result["hosts"].is_array() {
+        return hosts_summary(result);
     }
     let mut head = Vec::new();
     if let Some(status) = result["status"].as_str() {
@@ -858,6 +897,32 @@ fn summary(tool: &str, result: &Value) -> String {
     }
     out.push_str(&format!("\ncursor: {cursor}"));
     out
+}
+
+/// One line per host: its name, id and state, and what to do when it cannot be reached.
+fn hosts_summary(result: &Value) -> String {
+    let hosts = result["hosts"].as_array().into_iter().flatten();
+    let lines: Vec<String> = hosts
+        .map(|host| {
+            let mut line = format!(
+                "{:?} ({}): {}",
+                host["name"].as_str().unwrap_or_default(),
+                host["id"].as_str().unwrap_or_default(),
+                host["state"].as_str().unwrap_or_default()
+            );
+            if let Some(note) = host["note"].as_str() {
+                line.push_str(&format!(". {note}"));
+            }
+            line
+        })
+        .collect();
+    if lines.is_empty() {
+        return result["note"]
+            .as_str()
+            .unwrap_or("No other hosts.")
+            .to_owned();
+    }
+    lines.join("\n")
 }
 
 /// One line per tab (title, project, focus, layout, windows), then one per pane. Titles,
@@ -1105,6 +1170,41 @@ fn longest_run(text: &str, target: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tools_that_may_reach_another_host_take_host_and_the_rest_do_not() {
+        let tools = tools();
+        let takes_host = |name: &str| {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            tool["inputSchema"]["properties"].get("host").is_some()
+        };
+        for (name, _) in proto::CROSS_HOST_TOOLS {
+            assert!(takes_host(name), "{name}");
+        }
+        for name in [
+            "whoami",
+            "events_wait",
+            "status_set",
+            "pane_float",
+            "host_list",
+        ] {
+            assert!(!takes_host(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn host_lists_read_as_one_line_per_host() {
+        let listed = json!({ "hosts": [
+            { "name": "ops", "id": "ab12", "state": "enabled", "note": null },
+            { "name": "pi", "id": "x", "state": "no_helper", "note": "Install the helper on pi to reach it." },
+        ], "note": null });
+        assert_eq!(
+            summary("host_list", &listed),
+            "\"ops\" (ab12): enabled\n\"pi\" (x): no_helper. Install the helper on pi to reach it."
+        );
+        let alone = json!({ "hosts": [], "note": "No device is connected." });
+        assert_eq!(summary("host_list", &alone), "No device is connected.");
+    }
 
     #[test]
     fn every_tool_declares_schemas_and_annotations() {

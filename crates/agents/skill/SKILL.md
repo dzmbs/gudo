@@ -34,6 +34,8 @@ The sections below cover most work. Read a reference only when the task needs it
   output or a full-screen program, typing into a pane, following events.
 - `references/layout.md` before opening floating windows or moving panes around.
 - `references/workers.md` before starting workers.
+- `references/hosts.md` when the task needs another of the user's computers (`host`,
+  `host_list`).
 - `references/browser.md` when the task involves a web page.
 - `references/drawings.md` when the user mentions a drawing, sketch or image.
 - `references/examples.md` for three complete runs: parallel workers, a review by a second

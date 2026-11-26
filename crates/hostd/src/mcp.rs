@@ -45,7 +45,10 @@ current page; pass page to act on another. A stale ref means the page \
 moved on: snapshot again. Sign-ins, passwords, payments and purchases are left to the user on \
 the device: the tool waits while they act, then answers. list_drawings and get_drawing read the \
 drawings, sketches and images the user made in this terminal session; with no id, get_drawing \
-returns the most recent.";
+returns the most recent.
+
+With host, the terminal tools work on another of the user's computers (host_list lists them), \
+once the user allows it on their device.";
 
 /// MCP protocol revisions this server speaks; the last is the default.
 const PROTOCOL_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];

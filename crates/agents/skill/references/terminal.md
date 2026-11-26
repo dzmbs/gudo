@@ -24,7 +24,7 @@ running program, the last command and its exit code, `createdByYou`, and `scopes
 `session` (the default), `tab` (your own tab) or `mine` (only panes you created); `tab: "t3"`
 lists one tab.
 
-Arguments: `scope`, `tab`.
+Arguments: `scope`, `tab`, `host`.
 
 ### `cmd_run`
 
@@ -33,7 +33,7 @@ Without `pane` it opens a pane below yours and keeps it: pass its id for later c
 pane the user opened, the user is asked first. A shell without integration reports `unknown`
 instead of an exit code.
 
-Arguments: `command` (required), `pane`, `cwd`, `timeoutMs`, `maxBytes`.
+Arguments: `command` (required), `pane`, `cwd`, `timeoutMs`, `maxBytes`, `host`.
 
 ### `pane_read`
 
@@ -42,7 +42,7 @@ one command's output (`command`: an id or `"last"`), or the visible screen of a 
 program with its cursor and highlighted items (`screen: true`). `grep` keeps matching lines,
 `context` lines around each.
 
-Arguments: `pane`, `since`, `command`, `screen`, `tail`, `grep`, `context`, `maxBytes`.
+Arguments: `pane`, `since`, `command`, `screen`, `tail`, `grep`, `context`, `maxBytes`, `host`.
 
 ### `pane_wait`
 
@@ -53,7 +53,7 @@ now) counts. With `screen: true` the regex is matched against the visible screen
 waits until it is no longer shown (a spinner, a dialog).
 
 Arguments: `pane`, `match`, `screen`, `gone`, `since`, `prompt`, `quietMs`, `exit`, `status`,
-`timeoutMs`, `maxBytes`.
+`timeoutMs`, `maxBytes`, `host`.
 
 ### `pane_send`
 
@@ -62,7 +62,7 @@ Types into a pane you created: `text` (pasted as one piece), named `keys` (`ente
 program's prompt or driving a full-screen program; to run a command use `cmd_run`. Refused at a
 password prompt.
 
-Arguments: `pane` (required), `text`, `keys`, `submit`.
+Arguments: `pane` (required), `text`, `keys`, `submit`, `host`.
 
 ### `status_set`
 

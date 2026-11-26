@@ -27,6 +27,10 @@ const TEMPLATES: &[(&str, &str)] = &[
         include_str!("../skill/references/workers.md"),
     ),
     (
+        "references/hosts.md",
+        include_str!("../skill/references/hosts.md"),
+    ),
+    (
         "references/browser.md",
         include_str!("../skill/references/browser.md"),
     ),

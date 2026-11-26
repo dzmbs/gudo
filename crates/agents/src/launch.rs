@@ -263,6 +263,7 @@ pub fn legacy_mcp_server_names() -> [&'static str; 2] {
 /// pane).
 pub const FREE_TOOLS: &[&str] = &[
     "whoami",
+    "host_list",
     "pane_list",
     "pane_read",
     "pane_wait",

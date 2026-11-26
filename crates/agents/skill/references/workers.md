@@ -26,7 +26,7 @@ that exits instead (Codex updating itself) and is not run again comes back `fail
 prompt to be typed (60 s by default); after that it stays queued.
 
 Arguments: `kind` (required), `prompt`, `cwd`, `of`, `direction`, `timeoutMs`, `float`, `frame`,
-`closeWhenDone`.
+`closeWhenDone`, `host`.
 
 ### `agent_prompt`
 
@@ -34,7 +34,7 @@ Sends a prompt to a worker you started once it is idle. `wait: true` waits for t
 and returns its answer (`status` `finished`, `blocked`, `exited` or `timeout`). Refused while the
 worker works or waits on the user.
 
-Arguments: `pane` (required), `text` (required), `wait`, `timeoutMs`.
+Arguments: `pane` (required), `text` (required), `wait`, `timeoutMs`, `host`.
 
 ### `agent_wait`
 
@@ -42,7 +42,7 @@ Waits until workers reach a state: by default until any of them is idle, done, b
 or exited; `all: true` waits for every one; `until` names the states. Returns each worker's
 state.
 
-Arguments: `panes` (required), `until`, `all`, `timeoutMs`.
+Arguments: `panes` (required), `until`, `all`, `timeoutMs`, `host`.
 
 ### `agent_result`
 
@@ -52,7 +52,7 @@ message, `messageUnavailable` says why. It still answers after the worker's pane
 `closeWhenDone` window, or `pane_close`); a worker closed mid-turn reports `cancelled` with
 `reason: pane_closed`.
 
-Arguments: `pane` (required).
+Arguments: `pane` (required), `host`.
 
 ## Also useful
 
