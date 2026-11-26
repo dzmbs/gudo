@@ -391,6 +391,39 @@ async fn allow_all_covers_the_agent_on_that_host_until_its_pane_closes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn allow_all_ends_when_an_agent_starts_or_ends_in_the_asking_pane() {
+    let mut hosts = Hosts::start(Duration::from_secs(20)).await;
+    hosts.relay.set_pair(HOST_A, HOST_B, true);
+    let first = hosts.agent.spawn("pane_list", json!({ "host": "ops" }));
+    let card = hosts.card().await;
+    hosts.relay.answer(&card.key, CrossHostChoice::AllowAgent);
+    ok(reply(first).await);
+    assert_eq!(hosts.relay.standing().len(), 1);
+
+    // Claude starts in the pane the shell asked from: the shell's yes is not Claude's.
+    let pane = hosts.agent.pane.0.to_string();
+    crate::term::claude_hook(
+        hosts.a.hook_socket(),
+        &hosts.agent.token,
+        &pane,
+        "SessionStart",
+        1,
+        crate::term::hook_payload("SessionStart", json!({ "source": "startup" })),
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    while !hosts.relay.standing().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "the allow ended");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let read = hosts.agent.spawn("pane_list", json!({ "host": "ops" }));
+    let card = hosts.card().await;
+    hosts.relay.answer(&card.key, CrossHostChoice::Deny);
+    refused(reply(read).await);
+    hosts.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn revoking_a_pair_ends_every_standing_allow_and_turns_it_off() {
     let mut hosts = Hosts::start(Duration::from_secs(20)).await;
     hosts.relay.set_pair(HOST_A, HOST_B, true);

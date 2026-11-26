@@ -211,6 +211,12 @@ fn first_request_id() -> u64 {
     (1 << 32) + u64::from_le_bytes(bytes) % ((1 << 52) - (1 << 32))
 }
 
+/// One agent runtime of a pane, apart from any before or after it in the same pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RuntimeId(u64);
+
+static NEXT_RUNTIME: AtomicU64 = AtomicU64::new(1);
+
 /// A dialog's approving and refusing options, with labels (for push notification actions).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ApprovalButtons {
@@ -236,6 +242,7 @@ pub(crate) struct AgentRuntime {
     /// The agent's process, once seen as the pane's foreground job.
     pid: Option<u32>,
     started_at: std::time::SystemTime,
+    id: RuntimeId,
 }
 
 impl AgentRuntime {
@@ -283,6 +290,7 @@ impl AgentRuntime {
             notices: Vec::new(),
             pid: None,
             started_at: std::time::SystemTime::now(),
+            id: RuntimeId(NEXT_RUNTIME.fetch_add(1, Ordering::Relaxed)),
         }
     }
 
@@ -304,6 +312,10 @@ impl AgentRuntime {
 
     pub fn session(&self) -> &SessionInfo {
         self.arbiter.session()
+    }
+
+    pub fn id(&self) -> RuntimeId {
+        self.id
     }
 
     /// When the daemon launched the agent or first saw it running.

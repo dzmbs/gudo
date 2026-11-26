@@ -3250,6 +3250,8 @@ async fn pane_task(core: Arc<Core>, entry: Arc<PaneEntry>, mut vt_events: mpsc::
                     } else {
                         end_exited_agent(&core, &entry);
                     }
+                    let runtime = lock(&entry.agent).as_ref().map(AgentRuntime::id);
+                    core.term.cross.runtime_seen(&core, id, runtime);
                 }
                 if detect_tick.is_multiple_of(2) {
                     capture_agent_session(&core, &entry, &session_lookup);
@@ -3924,6 +3926,7 @@ fn end_exited_agent(core: &Core, entry: &PaneEntry) {
     core.agent_event(id, event);
     core.note_program_ending();
     *lock(&entry.agent) = None;
+    core.term.cross.runtime_seen(core, id, None);
     crate::agent_config::agent_ended(core, entry);
     {
         let mut record = lock(&entry.record);

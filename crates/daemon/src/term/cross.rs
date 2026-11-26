@@ -25,6 +25,7 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, Instant};
 
 use super::{CallContext, ErrorCode, Result, TermReply, ToolError};
+use crate::agent::{AgentRuntime, RuntimeId};
 use crate::core::{ConnId, Core, lock};
 use crate::mp::{AuditEntry, Authz};
 
@@ -70,6 +71,13 @@ struct Open {
     progress: mpsc::Sender<Progress>,
 }
 
+/// What an asking pane is known as to the devices: a key, for the agent runtime that asked
+/// (`None`: the pane's shell or a plain program).
+struct AskingAgent {
+    key: u64,
+    runtime: Option<RuntimeId>,
+}
+
 /// The stand-in caller of one remote agent on this host.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RemoteKey {
@@ -101,8 +109,8 @@ pub(crate) struct CrossHost {
     /// Owner connections that announced `Caps::CROSS_HOST`, with the host list each sent.
     devices: Mutex<HashMap<ConnId, Option<Vec<HostEntry>>>>,
     open: Mutex<HashMap<RequestId, Open>>,
-    /// Each asking pane's key, for as long as it is open.
-    agents: Mutex<HashMap<PaneId, u64>>,
+    /// Each asking pane's key, for as long as its pane and agent runtime last.
+    agents: Mutex<HashMap<PaneId, AskingAgent>>,
     rates: Mutex<Rates>,
     remote: Mutex<HashMap<RemoteKey, PaneId>>,
     stand_ins: Mutex<HashMap<PaneId, RemoteAgent>>,
@@ -159,9 +167,29 @@ impl CrossHost {
 
     /// The asking pane closed: its key goes, and the devices end every yes they hold for it.
     pub fn agent_closed(&self, core: &Core, pane: PaneId) {
-        let Some(agent_key) = lock(&self.agents).remove(&pane) else {
+        let Some(agent) = lock(&self.agents).remove(&pane) else {
             return;
         };
+        self.tell_gone(core, pane, agent.key);
+    }
+
+    /// The pane's agent runtime is `runtime` now: if that is not the one its key was made for
+    /// (an agent started or ended there), the key goes and every yes for it ends, so nothing
+    /// run later in the pane inherits them.
+    pub fn runtime_seen(&self, core: &Core, pane: PaneId, runtime: Option<RuntimeId>) {
+        let gone = {
+            let mut agents = lock(&self.agents);
+            match agents.get(&pane) {
+                Some(agent) if agent.runtime != runtime => agents.remove(&pane),
+                _ => None,
+            }
+        };
+        if let Some(agent) = gone {
+            self.tell_gone(core, pane, agent.key);
+        }
+    }
+
+    fn tell_gone(&self, core: &Core, pane: PaneId, agent_key: u64) {
         let gone = ServerCtl::CrossHost(CrossHostPush::AgentGone {
             pane_id: pane,
             agent_key,
@@ -171,12 +199,23 @@ impl CrossHost {
         }
     }
 
-    fn agent_key(&self, pane: PaneId) -> u64 {
-        *lock(&self.agents).entry(pane).or_insert_with(|| {
-            let mut bytes = [0; 8];
-            getrandom::fill(&mut bytes).expect("the OS random source is available");
-            u64::from_le_bytes(bytes)
-        })
+    /// The key of the agent runtime asking from `pane`.
+    fn agent_key(&self, core: &Core, pane: PaneId) -> u64 {
+        let runtime = core
+            .pane(pane)
+            .and_then(|entry| lock(&entry.agent).as_ref().map(AgentRuntime::id));
+        self.runtime_seen(core, pane, runtime);
+        lock(&self.agents)
+            .entry(pane)
+            .or_insert_with(|| {
+                let mut bytes = [0; 8];
+                getrandom::fill(&mut bytes).expect("the OS random source is available");
+                AskingAgent {
+                    key: u64::from_le_bytes(bytes),
+                    runtime,
+                }
+            })
+            .key
     }
 
     /// Whether a connected device lists `host` (trimmed) by name or id, as a device matches it.
@@ -627,7 +666,7 @@ pub(super) async fn relay(
     let request = CrossHostRequest {
         id: crate::agent::next_request_id(),
         pane_id: caller,
-        agent_key: cross.agent_key(caller),
+        agent_key: cross.agent_key(core, caller),
         agent: agent.clone(),
         host: host.clone(),
         tool: tool.to_owned(),
