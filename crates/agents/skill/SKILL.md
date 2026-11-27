@@ -1,6 +1,6 @@
 ---
 name: {{SKILL}}
-description: Runs commands in {{PRODUCT}} panes the user can watch, splits panes and opens tabs, starts Claude Code or Codex as workers and collects their answers, drives the browser pane beside the terminal, and reads the user's drawings. Use when the {{ENV}}PANE_ID environment variable is set and the task needs a command the user should see, a dev server, parallel or reviewing agents, a web page, or a drawing. Not for ordinary commands your own shell tool already runs well.
+description: Runs commands in {{PRODUCT}} panes the user can watch, splits panes and opens tabs, starts Claude Code or Codex as workers and collects their answers, drives the browser pane beside the terminal, reads the user's drawings, and reaches the panes and agents on the user's other computers. Use when the {{ENV}}PANE_ID environment variable is set and the task needs a command the user should see, a dev server, parallel or reviewing agents, a web page, a drawing, or another of the user's computers. Not for ordinary commands your own shell tool already runs well.
 ---
 
 # {{PRODUCT}}
@@ -53,6 +53,14 @@ The sections below cover most work. Read a reference only when the task needs it
   is new instead of the whole pane again.
 - Full-screen programs (TUIs, pickers, tmux): `pane_read` with `screen: true`, `pane_wait` with
   `screen: true` and `match`, and drive them with `pane_send` keys such as `down`, `enter`, `esc`.
+
+## Another of the user's computers
+
+The terminal tools reach the user's other hosts too: pass `host`. `host_list` names them and
+says which are `enabled`. Then work there as here: `pane_list` with `host` finds the pane,
+`pane_read` reads it, `pane_send` or `agent_prompt` types into it, `agent_result` reads an
+agent's answer. Each call waits for the user's yes on their device. Read
+`references/hosts.md` first.
 
 ## Lay out the work
 

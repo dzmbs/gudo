@@ -299,7 +299,7 @@ fn tools_list() -> Vec<Tool> {
         Tool {
             name: "pane_list",
             title: "List terminal panes",
-            description: "List the terminal tabs and panes in this session, by tab: each tab's title, project, focused pane, split layout with sizes and floating windows; each pane's folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close the panes you created; the user's own panes only once they allow it.",
+            description: "List the terminal tabs and panes in this session, by tab: each tab's title, project, focused pane, split layout with sizes and floating windows; each pane's folder, whether a shell waits at its prompt, the running program, the last command and its exit code, and what you may do there. You may type into and close the panes you created; the user's own panes only once they allow it. With host: the session the user's device shows on that other computer.",
             input: object(
                 json!({
                     "scope": { "type": "string", "enum": ["session", "tab", "mine"], "default": "session", "description": "tab: only your own tab; mine: only panes you created." },
