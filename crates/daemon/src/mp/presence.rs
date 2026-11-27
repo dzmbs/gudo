@@ -258,15 +258,25 @@ impl Mp {
                 }
                 if connection.peer.heartbeats && connection.peer.heard.elapsed() >= self.times.gone
                 {
-                    gone.push(connection.conn.clone());
+                    gone.push((
+                        connection.conn.clone(),
+                        connection.name.clone(),
+                        connection.peer.device,
+                        connection.peer.heard.elapsed(),
+                    ));
                 }
             }
         }
         for id in changed {
             core.emit(Event::Peer(id));
         }
-        for conn in gone {
-            tracing::info!("dropping a connection silent past the presence timeout");
+        for (conn, name, device, silent) in gone {
+            tracing::info!(
+                ?name,
+                ?device,
+                silent_ms = silent.as_millis(),
+                "dropping a connection silent past the presence timeout"
+            );
             conn.close(2u32.into(), b"presence timeout");
         }
     }
