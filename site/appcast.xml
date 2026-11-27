@@ -10,6 +10,32 @@
     <description>Updates for Gudo for Mac.</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.7</title>
+      <pubDate>Fri, 27 Nov 2026 12:44:05 +0100</pubDate>
+      <sparkle:version>1920</sparkle:version>
+      <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/dzmbs/gudo/releases/tag/v0.1.7</sparkle:releaseNotesLink>
+      <description>Chat on the Mac, and Chat for every Claude Code, Codex and pi, also ones typed in a terminal
+Chat opens long sessions at the newest turn, switches panes instantly and loads history ahead
+Chat changes an agent's model, mode and effort, and answers Claude Code's questions and plans
+Codex Chat shows edits with their diffs, plans and usage; pi streams live in Chat
+Paste or drop pictures on an agent pane; they leave the device without location or other metadata
+Agents can reach your other hosts, with your yes on each request (Settings, Agents)
+Helper updates hand off in place with agents running; you are asked only when a restart is needed
+Restored Claude Code resumes the conversation it was writing
+Two Macs the same size no longer fight over a pane's size
+Browser steps that buy, pay, sign in or upload are always approved on your device
+Approval cards show the whole command before Allow works
+Secure Keyboard Entry turns on at password prompts
+Chat links that hide their address ask before they open
+Several hosts in one window, grouped in the sidebar
+SSH: Copy Public Key and Copy Install Command, and clearer host errors
+The helper's log stays small</description>
+      <enclosure url="https://github.com/dzmbs/gudo/releases/download/v0.1.7/Gudo.dmg" length="78922035" type="application/octet-stream"
+                 sparkle:edSignature="kEjMqmoTTmh5u69fk8/+SAhxWsbU5arzbX/gOfN84AXU8JTE6q8q0ywyClOqGWa6U0ercCHlIJ20oXvP1/0lAQ==" />
+    </item>
+    <item>
       <title>Version 0.1.6</title>
       <pubDate>Tue, 17 Nov 2026 20:31:55 +0100</pubDate>
       <sparkle:version>1748</sparkle:version>
