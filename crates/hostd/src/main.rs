@@ -430,7 +430,10 @@ fn run(
     // First, while this process has one thread and before it starts any program: what the
     // build this process ran before its `exec` handed over.
     let inherited = daemon::Inherited::claim();
-    if let Some(log_file) = log_file {
+    let log_file = log_file
+        .map(Path::to_path_buf)
+        .or_else(log_file::inherited_stderr_file);
+    if let Some(log_file) = &log_file {
         log_file::write_to(log_file)
             .with_context(|| format!("logging to {}", log_file.display()))?;
     }
